@@ -86,6 +86,19 @@ BEGIN
   v_ci_a := fn_build_client_info(v_a.CLIENT_NO);
   v_ci_b := fn_build_client_info(v_b.CLIENT_NO);
 
+  -- Guard the refund (credit) leg into sender A. The original post_transfer
+  -- blocks crediting a closed or credit-blocked (AML/court) wallet; the reversal
+  -- must honour the same controls so it cannot push funds into a frozen account.
+  -- Rows are already FOR UPDATE-locked above, so these reads are current; the
+  -- whole reversal is atomic, so raising here aborts cleanly for ops to handle.
+  -- (B's claw-back is a debit already covered by its inline fund guard below.)
+  IF v_a.ACCT_STATUS <> 'A' THEN
+    RAISE EXCEPTION 'ACCT_NOT_ACTIVE: refund target % status=%', v_from, v_a.ACCT_STATUS USING ERRCODE = 'P0022';
+  END IF;
+  IF v_a.CR_BLOCKED = 'Y' THEN
+    RAISE EXCEPTION 'CR_RESTRAINT_ACTIVE: refund target % is credit-blocked', v_from USING ERRCODE = 'P0029';
+  END IF;
+
   INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
   VALUES (v_rref, p_channel, 'TRANSFER_REVERSAL',
           jsonb_build_object('orig_reference', p_orig_reference, 'reason', p_reason, 'initiator', p_initiator)::text, 'PENDING')

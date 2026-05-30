@@ -87,7 +87,7 @@ func run(logger *slog.Logger) error {
 	}
 
 	// ---- adapter → usecase → http -----------------------------------------
-	walletRepo := repo.NewPgWalletRepo(pool, readPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout)
+	walletRepo := repo.NewPgWalletRepo(pool, readPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries)
 	walletSvc := usecase.NewWalletService(walletRepo, logger)
 
 	server, err := netHTTP.New(cfg.HTTP, walletSvc, logger)

@@ -142,6 +142,12 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'ACCT_NOT_FOUND: %', p_acct_no USING ERRCODE = 'P0021';
   END IF;
+  -- Topups target customer wallets only. SHARD/SETTLEMENT are internal group
+  -- sub-accounts fed by sweeps/settlement (wallet_sp_merchant.sql); reject them
+  -- so a mis-routed/hostile ACCT_NO cannot credit a hot-wallet sub-account.
+  IF v_acct.ACCT_ROLE <> 'STANDALONE' THEN
+    RAISE EXCEPTION 'ACCT_ROLE_INVALID: % is a % wallet (not STANDALONE)', p_acct_no, v_acct.ACCT_ROLE USING ERRCODE = 'P0028';
+  END IF;
   IF v_acct.ACCT_STATUS <> 'A' THEN
     RAISE EXCEPTION 'ACCT_NOT_ACTIVE: status=%', v_acct.ACCT_STATUS USING ERRCODE = 'P0022';
   END IF;
@@ -330,6 +336,16 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'FROM_ACCT_NOT_FOUND' USING ERRCODE = 'P0021'; END IF;
   SELECT * INTO v_acct_b   FROM WLT_ACCT WHERE ACCT_NO = p_to_acct_no;
   IF NOT FOUND THEN RAISE EXCEPTION 'TO_ACCT_NOT_FOUND'   USING ERRCODE = 'P0021'; END IF;
+
+  -- Customer-to-customer transfers only. SHARD/SETTLEMENT are internal group
+  -- sub-accounts (credited via MERCHWD/SWEEP, not transfer); reject either leg
+  -- so a mis-routed/hostile ACCT_NO cannot debit or credit a hot-wallet row.
+  IF v_acct_a.ACCT_ROLE <> 'STANDALONE' THEN
+    RAISE EXCEPTION 'ACCT_ROLE_INVALID: from-account % is a % wallet (not STANDALONE)', p_from_acct_no, v_acct_a.ACCT_ROLE USING ERRCODE = 'P0028';
+  END IF;
+  IF v_acct_b.ACCT_ROLE <> 'STANDALONE' THEN
+    RAISE EXCEPTION 'ACCT_ROLE_INVALID: to-account % is a % wallet (not STANDALONE)', p_to_acct_no, v_acct_b.ACCT_ROLE USING ERRCODE = 'P0028';
+  END IF;
 
   IF v_acct_a.ACCT_STATUS <> 'A' THEN
     RAISE EXCEPTION 'FROM_ACCT_NOT_ACTIVE: %', v_acct_a.ACCT_STATUS USING ERRCODE = 'P0022';

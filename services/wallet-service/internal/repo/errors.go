@@ -51,6 +51,17 @@ func mapPgError(err error) error {
 	code, detail := parseSPMessage(pgErr.Message)
 
 	switch pgErr.Code {
+	case "40001": // serialization_failure — optimistic VERSION-CAS lost a race.
+		// The SP raises VERSION_CONFLICT with this SQLSTATE; the work is safe to
+		// re-run (fresh snapshot + idempotency gate), so surface it as a
+		// RETRYABLE 409 rather than a terminal 500. withTx also retries it
+		// server-side so most never reach the client.
+		return domain.NewError(domain.CodeVersionConflict, http.StatusConflict,
+			"version conflict: "+detail, err)
+	case "40P01": // deadlock_detected — PG aborted one TX to break a cycle.
+		// Also safe to retry the whole operation; treat as a retryable conflict.
+		return domain.NewError(domain.CodeVersionConflict, http.StatusConflict,
+			"deadlock detected: "+detail, err)
 	case "55P03": // lock_not_available — lock_timeout fired
 		return domain.NewError(domain.CodeTimeout, http.StatusServiceUnavailable,
 			"lock timeout: "+detail, err)
@@ -111,8 +122,10 @@ func httpStatusFor(code string) int {
 		// Account is restrained/held → 423 Locked (error_management.md §2.1).
 		return http.StatusLocked
 	case domain.CodeInsufficientFunds,
-		domain.CodeTierLimitExceeded:
+		domain.CodeTierLimitExceeded,
+		domain.CodeAcctRoleInvalid:
 		// Schema valid, business rule fails → 422 Unprocessable Entity.
+		// (ACCT_ROLE_INVALID: caller addressed an internal SHARD/SETTLEMENT wallet.)
 		return http.StatusUnprocessableEntity
 	case domain.CodeVersionConflict,
 		domain.CodeWDAlreadyCompleted,

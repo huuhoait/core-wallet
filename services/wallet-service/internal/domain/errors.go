@@ -43,6 +43,7 @@ const (
 	CodeTranTypeInactive     = "TRAN_TYPE_INACTIVE"
 	CodeAcctNotFound         = "ACCT_NOT_FOUND"
 	CodeAcctNotActive        = "ACCT_NOT_ACTIVE"
+	CodeAcctRoleInvalid      = "ACCT_ROLE_INVALID" // posting targeted a non-STANDALONE (SHARD/SETTLEMENT) wallet
 	CodeTierInsufficient     = "TIER_INSUFFICIENT"
 	CodeAmountOutOfRange     = "AMOUNT_OUT_OF_RANGE"
 	CodeDRRestraintActive    = "DR_RESTRAINT_ACTIVE"

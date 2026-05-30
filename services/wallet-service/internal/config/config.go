@@ -45,6 +45,13 @@ type DB struct {
 	ConnectTimeout  time.Duration `env:"DB_CONNECT_TIMEOUT"  envDefault:"5s"`
 	StatementTimeout time.Duration `env:"DB_STATEMENT_TIMEOUT" envDefault:"2500ms"`
 	LockTimeout     time.Duration `env:"DB_LOCK_TIMEOUT"     envDefault:"1500ms"`
+	// TxMaxRetries is how many times a write that failed with a RETRYABLE
+	// conflict (serialization_failure 40001 / deadlock 40P01) is re-run on a
+	// fresh snapshot. Default 0 = NO retry: the conflict surfaces to the caller
+	// as a retryable 409 (unchanged behaviour). Raise to 2-3 to absorb
+	// hot-account contention server-side once the conflict rate is understood;
+	// posting SPs are idempotent, so retries cannot double-post.
+	TxMaxRetries    int           `env:"DB_TX_MAX_RETRIES"   envDefault:"0"`
 }
 
 type Otel struct {
