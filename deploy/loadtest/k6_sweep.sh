@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # =============================================================================
-# loadtest/k6_sweep.sh — sweep the k6 HTTP load test across PEAK target-TPS
+# deploy/loadtest/k6_sweep.sh — sweep the k6 HTTP load test across PEAK target-TPS
 # levels and write a side-by-side Markdown comparison (ONE COLUMN PER LEVEL)
 # to claudedocs/. Each level also reports the WLT_TRAN_HIST rows it generated.
 #
 # Usage:
-#   bash loadtest/k6_sweep.sh                       # LEVELS="100 200 300 400 500 600 700"
-#   LEVELS="100 300 500 700" bash loadtest/k6_sweep.sh
-#   BASE_URL=http://host:8099 OUT=claudedocs/k6_sweep.md bash loadtest/k6_sweep.sh
+#   bash deploy/loadtest/k6_sweep.sh                       # LEVELS="100 200 300 400 500 600 700"
+#   LEVELS="100 300 500 700" bash deploy/loadtest/k6_sweep.sh
+#   BASE_URL=http://host:8099 OUT=docs/specs/k6_sweep.md bash deploy/loadtest/k6_sweep.sh
 #
 # Requires: the Go service running on BASE_URL, the LT*/LTG* seed present, and jq.
 # Per-level run = the 90s ramp in k6_wallet.js (PEAK reached mid-run).
 # =============================================================================
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 CTN=wallet-postgres
 PW="$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)"
 BASE="${BASE_URL:-http://localhost:8099}"
 LEVELS="${LEVELS:-100 200 300 400 500 600 700}"
-OUT="${OUT:-claudedocs/k6_sweep.md}"
+OUT="${OUT:-docs/specs/k6_sweep.md}"
 TMP=/tmp/k6_sweep; mkdir -p "$TMP"
 q() { docker exec -e PGPASSWORD="$PW" "$CTN" psql -U postgres -d wallet -tAc "$1"; }
 
@@ -41,7 +41,7 @@ for p in $LEVELS; do
   else
     echo "── PEAK=$p : running ${RAMP_SEC}s ramp ..."
     s0="$(q "SELECT COALESCE(MAX(SEQ_NO),0) FROM WLT_TRAN_HIST;")"
-    SUMMARY_OUT="$sumf" k6 run -e BASE_URL="$BASE" -e PEAK="$p" loadtest/k6_wallet.js >/dev/null 2>&1 || true
+    SUMMARY_OUT="$sumf" k6 run -e BASE_URL="$BASE" -e PEAK="$p" deploy/loadtest/k6_wallet.js >/dev/null 2>&1 || true
     rows="$(q "SELECT count(*) FROM WLT_TRAN_HIST WHERE SEQ_NO > $s0")"
     if [[ ! -s "$sumf" ]]; then echo "  ! no summary for PEAK=$p — skipped"; continue; fi
   fi

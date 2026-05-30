@@ -24,3 +24,6 @@ Archive/
 # ---- Load-test scratch ------------------------------------------------------
 loadtest/*.tmp
 *.k6-summary.json
+
+# ---- DB migration dumps (generated artifacts) ----
+db/migration/

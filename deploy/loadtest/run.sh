@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# loadtest/run.sh — drive the wallet SPs at a target TPS with pgbench.
+# deploy/loadtest/run.sh — drive the wallet SPs at a target TPS with pgbench.
 #
 # Usage:
 #   ./run.sh [TPS] [DURATION_SEC] [CLIENTS]      # default 10 60 8
@@ -11,7 +11,7 @@
 # Runs INSIDE the postgres container (pgbench → local socket, no PgBouncer).
 # =============================================================================
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 CTN=wallet-postgres
 TPS="${1:-10}"
@@ -21,14 +21,14 @@ NW=10000      # must match setup.sql consumer count
 NG=20         # must match setup.sql merchant-group count
 PW="$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)"
 # Route: direct PG socket (default) OR via PgBouncer to exceed max_connections:
-#   HOST=wallet-pgbouncer PORT=5432 PROTO=simple bash loadtest/run.sh ...
+#   HOST=wallet-pgbouncer PORT=5432 PROTO=simple bash deploy/loadtest/run.sh ...
 HOST="${HOST:-}"; PORT="${PORT:-}"; PROTO="${PROTO:-prepared}"
 CONN=""; [[ -n "$HOST" ]] && CONN="-h $HOST"; [[ -n "$PORT" ]] && CONN="$CONN -p $PORT"
 
 echo "▶ copying scripts into $CTN ..."
 docker exec "$CTN" mkdir -p /tmp/lt
 for f in setup teardown topup transfer withdraw merchant_withdraw reversal; do
-  docker cp "loadtest/$f.sql" "$CTN:/tmp/lt/$f.sql"
+  docker cp "deploy/loadtest/$f.sql" "$CTN:/tmp/lt/$f.sql"
 done
 
 if [[ "${SETUP:-0}" == "1" ]]; then

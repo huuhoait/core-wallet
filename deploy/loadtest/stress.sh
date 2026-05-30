@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# loadtest/stress.sh — sweep target TPS to find the saturation point (DB/SP tier)
+# deploy/loadtest/stress.sh — sweep target TPS to find the saturation point (DB/SP tier)
 #
 # Usage:  ./stress.sh                 # levels 20 50 100 200, 15s each, 16 clients
 #         LEVELS="50 100 200 400" DUR=20 CLIENTS=32 ./stress.sh
@@ -11,20 +11,20 @@
 # climb sharply. Seeds LT* data once, tears down at the end.
 # =============================================================================
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 CTN=wallet-postgres
 DUR="${DUR:-15}"; CLIENTS="${CLIENTS:-16}"
 LEVELS="${LEVELS:-20 50 100 200}"
 NW=10000; NG=20
 PW="$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)"
 # Route via PgBouncer to exceed max_connections (transaction-mode → simple proto):
-#   HOST=wallet-pgbouncer PORT=5432 PROTO=simple CLIENTS=200 LEVELS="100 200 400" bash loadtest/stress.sh
+#   HOST=wallet-pgbouncer PORT=5432 PROTO=simple CLIENTS=200 LEVELS="100 200 400" bash deploy/loadtest/stress.sh
 HOST="${HOST:-}"; PORT="${PORT:-}"; PROTO="${PROTO:-prepared}"
 CONN=""; [[ -n "$HOST" ]] && CONN="-h $HOST"; [[ -n "$PORT" ]] && CONN="$CONN -p $PORT"
 
 docker exec "$CTN" mkdir -p /tmp/lt
 for f in setup teardown topup transfer withdraw merchant_withdraw reversal; do
-  docker cp "loadtest/$f.sql" "$CTN:/tmp/lt/$f.sql"
+  docker cp "deploy/loadtest/$f.sql" "$CTN:/tmp/lt/$f.sql"
 done
 echo "▶ seeding ..."; docker exec -e PGPASSWORD="$PW" "$CTN" psql -U postgres -d wallet -q -f /tmp/lt/setup.sql >/dev/null
 

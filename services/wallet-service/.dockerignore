@@ -1,0 +1,12 @@
+# Build context is this directory (Dockerfile COPY . .). Keep it lean.
+.git
+.gitignore
+.DS_Store
+bin/
+*.test
+*.out
+coverage.*
+.env
+.env.*
+!.env.example
+postman/

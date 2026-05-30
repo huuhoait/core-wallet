@@ -1,9 +1,0 @@
-# Keep build context small if we ever add Dockerfiles
-.git
-.DS_Store
-*.md
-!wallet_schema.sql
-Archive.zip
-.env
-.env.*
-!.env.example
