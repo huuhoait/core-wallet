@@ -8,6 +8,16 @@ condensed from the HLD changelog.
 
 ## [Unreleased]
 
+### Changed — Trim WLT_TRAN_HIST (2026-05-31)
+- Dropped `TRAN_DATE` + `EFFECT_DATE` — they always equalled `POST_DATE` (redundant);
+  ledger dating is now `POST_DATE` + `VALUE_DATE` only.
+- Dropped `CLIENT_INFO` (per-posting client snapshot, US-2.7) — write-only with no
+  reader; its sole builder `fn_build_client_info` is removed too.
+- Posting SPs (`wallet_sp*.sql`) no longer write these columns; migration
+  `db/migrations/2026-05-31_drop_tranhist_columns.sql` drops them on existing DBs.
+  Verified regression-clean: accounting 17/17, merchant 10/10, transfer-reversal 3/3,
+  reconciliation 13/13.
+
 ### Added — EOD period locking + GL-feed post (2026-05-30) — US-6.1/6.2, unblocks US-3.7
 - **Period write-freeze (full immutability).** New `WLT_PERIOD` control table (one
   row per closed business date) + `fn_period_closed_through()` high-water mark.

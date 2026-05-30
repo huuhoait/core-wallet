@@ -53,12 +53,12 @@ BEGIN
 
     -- (1) Bút toán số dư đầu kỳ trong sổ cái khách hàng — xếp đầu chuỗi (seq_no=0)
     INSERT INTO wlt_tran_hist
-      (internal_key, seq_no, tran_type, tran_date, effect_date, post_date, value_date,
+      (internal_key, seq_no, tran_type, post_date, value_date,
        tran_amt, cr_dr_maint_ind, previous_bal_amt, actual_bal_amt,
        tfr_internal_key, reference, ccy, source_module, tran_desc, created_by, updated_by)
     OVERRIDING SYSTEM VALUE
     VALUES
-      (r.internal_key, 0, 'TOPUP', v_postdate, v_postdate, v_postdate, v_postdate,
+      (r.internal_key, 0, 'TOPUP', v_postdate, v_postdate,
        v_opening, 'CR', 0, v_opening,
        v_key, 'OPENING-BAL-'||r.acct_no, r.ccy, 'WLT', 'Opening balance brought forward', 'RECON', 'RECON');
 
