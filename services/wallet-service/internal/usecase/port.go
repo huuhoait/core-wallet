@@ -53,6 +53,10 @@ type WalletRepository interface {
 	CreateClient(ctx context.Context, in domain.ClientCreateInput) (*domain.ClientResult, error)
 	UpdateClient(ctx context.Context, in domain.ClientUpdateInput) (*domain.ClientResult, error)
 
+	// Client linked-bank management (link_client_bank / set_default_client_bank).
+	LinkClientBank(ctx context.Context, in domain.BankLinkInput) (*domain.BankLinkResult, error)
+	SetDefaultClientBank(ctx context.Context, in domain.SetDefaultBankInput) (*domain.BankLinkResult, error)
+
 	// Account (wallet) lifecycle (open_account / update_account_status).
 	OpenAccount(ctx context.Context, in domain.AccountOpenInput) (*domain.AccountOpenResult, error)
 	UpdateAccountStatus(ctx context.Context, in domain.AccountStatusInput) (*domain.AccountStatusResult, error)

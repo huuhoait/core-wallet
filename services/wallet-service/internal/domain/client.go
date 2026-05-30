@@ -39,3 +39,32 @@ type ClientResult struct {
 	Status    string
 	Timestamp time.Time // created_at (create) | updated_at (update)
 }
+
+// BankLinkInput links a bank account to a client (link_client_bank SP).
+// AcctNo is plaintext in; the SP encrypts it to ACCT_NO_ENC (pgp_sym_encrypt).
+type BankLinkInput struct {
+	ClientNo       string
+	BankCode       string
+	AcctNo         string // plaintext; SP encrypts
+	BankName       string
+	AcctHolderName string
+	IsDefault      bool
+	Audit          AuditContext
+}
+
+// SetDefaultBankInput makes an existing link the client's sole default
+// (set_default_client_bank SP).
+type SetDefaultBankInput struct {
+	ClientNo string
+	LinkID   int64
+	Audit    AuditContext
+}
+
+// BankLinkResult is returned by link_client_bank / set_default_client_bank.
+type BankLinkResult struct {
+	LinkID    int64
+	ClientNo  string
+	IsDefault int16  // 0 | 1
+	Status    string
+	Timestamp time.Time // created_at (link) | updated_at (set-default)
+}

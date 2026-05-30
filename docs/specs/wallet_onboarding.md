@@ -105,6 +105,14 @@ sequenceDiagram
 | 3. eKYC | `POST /v1/onboard/ekyc` | `FM_CLIENT_IDENTIFIERS`, UPDATE `FM_CLIENT` (A), UPDATE `WLT_CLIENT_KYC` (T2, A) | T2 active |
 | 4. (Tier 3) Bank linkage | `POST /v1/onboard/link-bank` | `FM_CLIENT_BANKS`, UPDATE `WLT_CLIENT_KYC` (T3) | T3 active |
 
+> **Implemented today (client API, outside the onboarding flow):** linking a bank
+> to an existing client is available via the client-master API —
+> `POST /v1/clients/:client_no/banks` (SP `link_client_bank`, encrypts `acct_no` →
+> `ACCT_NO_ENC`; `is_default` flag) and `PUT /v1/clients/:client_no/banks/:link_id/default`
+> (SP `set_default_client_bank`). Both are audited into `WLT_CLIENT_AUDIT_LOG` via
+> `trg_audit_fm_client_bk`. The Tier-3 onboarding wrapper above (`/v1/onboard/link-bank`,
+> with KYC-tier side effects) is still pending.
+
 ---
 
 ## 4. Wallet opening flow

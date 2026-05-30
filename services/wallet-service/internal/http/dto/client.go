@@ -42,3 +42,32 @@ type ClientResponse struct {
 func ClientRespFrom(r *domain.ClientResult) ClientResponse {
 	return ClientResponse{ClientNo: r.ClientNo, Status: r.Status, Timestamp: r.Timestamp}
 }
+
+// LinkBankRequest — POST /v1/clients/:client_no/banks. acct_no is plaintext;
+// the SP encrypts it to ACCT_NO_ENC (never stored or echoed in clear).
+type LinkBankRequest struct {
+	BankCode       string `json:"bank_code"                  binding:"required,max=20"`
+	AcctNo         string `json:"acct_no"                    binding:"required,max=40"`
+	BankName       string `json:"bank_name,omitempty"        binding:"omitempty,max=120"`
+	AcctHolderName string `json:"acct_holder_name,omitempty" binding:"omitempty,max=200"`
+	IsDefault      bool   `json:"is_default,omitempty"`
+}
+
+// BankLinkResponse — link_client_bank / set_default_client_bank result.
+type BankLinkResponse struct {
+	LinkID    int64     `json:"link_id"`
+	ClientNo  string    `json:"client_no"`
+	IsDefault bool      `json:"is_default"`
+	Status    string    `json:"status"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+func BankLinkRespFrom(r *domain.BankLinkResult) BankLinkResponse {
+	return BankLinkResponse{
+		LinkID:    r.LinkID,
+		ClientNo:  r.ClientNo,
+		IsDefault: r.IsDefault != 0,
+		Status:    r.Status,
+		Timestamp: r.Timestamp,
+	}
+}

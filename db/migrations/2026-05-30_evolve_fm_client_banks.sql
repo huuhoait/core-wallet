@@ -14,6 +14,7 @@
 --   - ADD  IS_DEFAULT      SMALLINT NOT NULL DEF 0 (customer's default payout bank)
 --   - ADD  CHECK is_default IN (0,1)
 --   - ADD  partial UNIQUE  (at most one default bank per client)
+--   - ADD  trigger trg_audit_fm_client_bk → fn_audit_client_change (WLT_CLIENT_AUDIT_LOG)
 --
 -- Preserved automatically by ALTER (no action needed):
 --   FK fk_cb_client, GRANT to wallet_pii_ro, trigger trg_audit_cols,
@@ -65,6 +66,15 @@ CREATE INDEX IF NOT EXISTS idx_cb_client ON fm_client_banks (client_no);
 -- At most one default bank per client.
 CREATE UNIQUE INDEX IF NOT EXISTS uk_cb_one_default
   ON fm_client_banks (client_no) WHERE is_default = 1;
+
+-- 4. Audit -------------------------------------------------------------------
+-- Field-level change capture into WLT_CLIENT_AUDIT_LOG. fn_audit_client_change
+-- already exists (was attached only to WLT_CLIENT_KYC); enable it for bank links
+-- so link / set-default / unlink are audited.
+DROP TRIGGER IF EXISTS trg_audit_fm_client_bk ON fm_client_banks;
+CREATE TRIGGER trg_audit_fm_client_bk
+  AFTER INSERT OR UPDATE OR DELETE ON fm_client_banks
+  FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 
 COMMIT;
 

@@ -790,12 +790,14 @@ CREATE TRIGGER trg_audit_wlt_kyc
   AFTER INSERT OR UPDATE OR DELETE ON WLT_CLIENT_KYC
   FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 
--- FM-tier triggers (uncomment after coordination with FM data team):
+-- FM_CLIENT_BANKS — audit linked-bank changes (link / set-default / unlink).
+CREATE TRIGGER trg_audit_fm_client_bk       AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_BANKS       FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
+
+-- Other FM-tier triggers (uncomment after coordination with FM data team):
 -- CREATE TRIGGER trg_audit_fm_client       AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT             FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 -- CREATE TRIGGER trg_audit_fm_client_indvl AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_INDVL       FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 -- CREATE TRIGGER trg_audit_fm_client_id    AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_IDENTIFIERS FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 -- CREATE TRIGGER trg_audit_fm_client_ct    AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_CONTACT     FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
--- CREATE TRIGGER trg_audit_fm_client_bk    AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_BANKS       FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 
 
 -- =============================================================================

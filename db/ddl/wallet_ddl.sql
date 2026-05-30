@@ -1387,7 +1387,9 @@ CREATE TRIGGER trg_audit_wlt_kyc
 -- CREATE TRIGGER trg_audit_fm_client_indvl AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_INDVL    FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 -- CREATE TRIGGER trg_audit_fm_client_id    AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_IDENTIFIERS FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 -- CREATE TRIGGER trg_audit_fm_client_ct    AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_CONTACT  FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
--- CREATE TRIGGER trg_audit_fm_client_bk    AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_BANKS    FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
+
+-- FM_CLIENT_BANKS — audit linked-bank changes (link / set-default / unlink).
+CREATE TRIGGER trg_audit_fm_client_bk    AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_BANKS    FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 5.3  Lock down audit table — only the SECURITY DEFINER trigger can INSERT

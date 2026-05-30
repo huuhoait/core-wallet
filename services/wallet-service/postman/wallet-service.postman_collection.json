@@ -254,6 +254,117 @@
               }
             }
           ]
+        },
+        {
+          "name": "POST link bank (default)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bank_code\":        \"970418\",\n  \"acct_no\":          \"1903{{$timestamp}}\",\n  \"bank_name\":        \"BIDV\",\n  \"acct_holder_name\": \"Tran Thi B\",\n  \"is_default\":       true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/clients/{{client_no}}/banks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients",
+                "{{client_no}}",
+                "banks"
+              ]
+            },
+            "description": "Link a bank account to a client. acct_no is plaintext in -> SP encrypts to ACCT_NO_ENC (pgp_sym_encrypt). is_default=true makes it the sole default. Captures {{bank_link_id}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([201,404,422]));",
+                  "if (pm.response.code===201){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('link_id returned', ()=>pm.expect(b.link_id).to.be.a('number'));",
+                  "  pm.test('is_default true', ()=>pm.expect(b.is_default).to.eql(true));",
+                  "  pm.environment.set('bank_link_id', b.link_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PUT set default bank",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/clients/{{client_no}}/banks/{{bank_link_id}}/default",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients",
+                "{{client_no}}",
+                "banks",
+                "{{bank_link_id}}",
+                "default"
+              ]
+            },
+            "description": "Make an existing linked bank the client's sole default (clears any prior default). 404 BANK_LINK_NOT_FOUND if the link_id is not owned by the client."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if (pm.response.code===200){",
+                  "  pm.test('is_default true', ()=>pm.expect(pm.response.json().is_default).to.eql(true));",
+                  "}"
+                ]
+              }
+            }
+          ]
         }
       ]
     },

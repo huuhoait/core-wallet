@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -61,4 +62,46 @@ func (h *Wallet) UpdateClient(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, dto.ClientRespFrom(res))
+}
+
+// POST /v1/clients/:client_no/banks — link a bank account (optionally default).
+func (h *Wallet) LinkClientBank(c *gin.Context) {
+	var req dto.LinkBankRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		renderValidationError(c, err)
+		return
+	}
+	res, err := h.svc.LinkClientBank(c.Request.Context(), domain.BankLinkInput{
+		ClientNo:       c.Param("client_no"),
+		BankCode:       req.BankCode,
+		AcctNo:         req.AcctNo,
+		BankName:       req.BankName,
+		AcctHolderName: req.AcctHolderName,
+		IsDefault:      req.IsDefault,
+		Audit:          middleware.FromGin(c),
+	})
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, dto.BankLinkRespFrom(res))
+}
+
+// PUT /v1/clients/:client_no/banks/:link_id/default — set the default bank.
+func (h *Wallet) SetDefaultClientBank(c *gin.Context) {
+	linkID, err := strconv.ParseInt(c.Param("link_id"), 10, 64)
+	if err != nil {
+		renderError(c, domain.InvalidRequest("link_id must be an integer", err))
+		return
+	}
+	res, err := h.svc.SetDefaultClientBank(c.Request.Context(), domain.SetDefaultBankInput{
+		ClientNo: c.Param("client_no"),
+		LinkID:   linkID,
+		Audit:    middleware.FromGin(c),
+	})
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.BankLinkRespFrom(res))
 }

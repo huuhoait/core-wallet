@@ -73,6 +73,8 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 		{
 			clients.POST("", h.CreateClient)
 			clients.PATCH("/:client_no", h.UpdateClient)
+			clients.POST("/:client_no/banks", h.LinkClientBank)                      // link a bank account
+			clients.PUT("/:client_no/banks/:link_id/default", h.SetDefaultClientBank) // set default bank
 		}
 
 		// ── Accounts: lifecycle (open / block / close) + profile + balance reads ──

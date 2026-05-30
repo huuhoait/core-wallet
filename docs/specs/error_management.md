@@ -179,6 +179,8 @@ Success responses additionally carry `transaction_status` (`ACSC` settled /
 >
 > Client master CRUD (SP `create_client`/`update_client`): `INVALID_CLIENT_TYPE` (E2010) → 422, `CLIENT_ALREADY_EXISTS` (E2009, ISO `AM05`) → 409, `CLIENT_NOT_FOUND` (E2011) → 404.
 >
+> Client linked-bank management (SP `link_client_bank`/`set_default_client_bank`): `CLIENT_NOT_FOUND` → 404, `BANK_LINK_NOT_FOUND` (E2012) → 404, `INVALID_REQUEST` (missing `bank_code`/`acct_no`) → 400, `PII_DEK_NOT_SET` → 500 (acct_no encryption). Endpoints: `POST /v1/clients/:client_no/banks`, `PUT /v1/clients/:client_no/banks/:link_id/default`.
+>
 > Account lifecycle (SP `open_account`/`update_account_status`): `INVALID_ACCT_TYPE` (E3007) → 422, `MAX_WALLET_PER_CLIENT_EXCEEDED` (E3002) → 409, `ACCT_CLOSE_NONZERO_BAL` (E3003) → 422, `ACCT_NOT_ACTIVE` (closed/terminal) → 403.
 
 ### 4.1 Auth & rate limiting

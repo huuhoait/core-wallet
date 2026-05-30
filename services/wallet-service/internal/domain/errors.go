@@ -78,6 +78,8 @@ const (
 	CodeInvalidClientType   = "INVALID_CLIENT_TYPE"
 	CodeClientAlreadyExists = "CLIENT_ALREADY_EXISTS"
 	CodeClientNotFound      = "CLIENT_NOT_FOUND"
+	// Client linked-bank management (BANK_LINK_NOT_FOUND → 404 via _NOT_FOUND family)
+	CodeBankLinkNotFound = "BANK_LINK_NOT_FOUND"
 	// Account (wallet) lifecycle
 	CodeInvalidAcctType     = "INVALID_ACCT_TYPE"
 	CodeMaxWalletExceeded   = "MAX_WALLET_PER_CLIENT_EXCEEDED"

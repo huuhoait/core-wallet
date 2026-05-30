@@ -25,3 +25,23 @@ func (s *WalletService) UpdateClient(ctx context.Context, in domain.ClientUpdate
 	}
 	return res, nil
 }
+
+// LinkClientBank links a bank account to a client (optionally as default).
+func (s *WalletService) LinkClientBank(ctx context.Context, in domain.BankLinkInput) (*domain.BankLinkResult, error) {
+	res, err := s.repo.LinkClientBank(ctx, in)
+	if err != nil {
+		s.logFailure(ctx, "link_client_bank", in.ClientNo, err)
+		return nil, err
+	}
+	return res, nil
+}
+
+// SetDefaultClientBank makes an existing linked bank the client's default.
+func (s *WalletService) SetDefaultClientBank(ctx context.Context, in domain.SetDefaultBankInput) (*domain.BankLinkResult, error) {
+	res, err := s.repo.SetDefaultClientBank(ctx, in)
+	if err != nil {
+		s.logFailure(ctx, "set_default_client_bank", in.ClientNo, err)
+		return nil, err
+	}
+	return res, nil
+}
