@@ -1,11 +1,12 @@
 # Error Code Management — Core Account E-Wallet
 
-**Version**: 1.0
-**Date**: 2026-05-28
+**Version**: 1.5
+**Date**: 2026-05-30
 **Status**: Draft
 **Author**: Core Wallet Team
 
 **Changelog**
+- v1.5 (2026-05-30): Added **§13 ISO 20022 & PSD2 (Berlin Group) alignment** and **§14 Appendix A — error-code crosswalk** (public code ↔ internal ↔ ISO 20022 External Status Reason ↔ Berlin Group message code ↔ `pain.002` `transactionStatus`). Consolidated the duplicated §7 idempotency subsection (replay = idempotent 2xx; `409 DUPLICATE_REFERENCE` only on `PAYLOAD_HASH` collision). Documented the divergence between this catalog and the implemented Go codes (`services/wallet-service/internal/domain/errors.go`) in §14.2 and proposed a single canonical set.
 - v1.4 (2026-05-28): Added `POSTING_TIMEOUT` (E9004), `DB_CONTENTION` (E9005), `POOL_EXHAUSTED` (E9006) for Go service + plpgsql SP architecture. Rewrote §7 retry policy following 3s/2.5s/1.5s timeout layering.
 - v1.3 (2026-05-28): Added `REVERSAL_BLOCKED_BY_RESTRAINT` (E6005) for hard-stop when reversing a transaction whose purpose ∈ {`COURT_ORDER`,`AML_HOLD`}.
 - v1.2 (2026-05-28): Split `RESTRAINT_TYPE` (Debit/Credit/All/Info) and `RESTRAINT_PURPOSE` following T24 convention; added `ACCT_CR_RESTRAINED`, `RESTRAINT_PURPOSE_INVALID`, `RESTRAINT_TYPE_PURPOSE_CONFLICT`; renumbered E3010-E3015 → E3020-E3027 to leave room for expanded wallet account codes.
@@ -349,17 +350,14 @@ return nil, ErrOptimisticExhausted   // → 503 OPTIMISTIC_LOCK_FAILED
 ### 7.4 Idempotency
 
 - Every POST write **MUST** carry a `REFERENCE` (idempotency key), unique per `CLIENT_NO + ENDPOINT + 24h`.
-- SP `INSERT WLT_API_MESSAGE ... ON CONFLICT (REFERENCE) DO NOTHING` — DB-level gate.
-- Replay (same `REFERENCE`) → SP returns `result_code = 'REPLAY'` + previous payload → Go returns the corresponding 2xx.
-- There is no "409 DUPLICATE_REFERENCE" with the same payload — it is always idempotent success.
-- Different payload with the same REFERENCE: SP detects it via `PAYLOAD_HASH` mismatch (out of scope for V1, currently only REFERENCE is checked).
+- **DB-level gate**: SP `INSERT WLT_API_MESSAGE ... ON CONFLICT (REFERENCE) DO NOTHING`; the server also persists a `PAYLOAD_HASH` for ≥ 24h.
+- **Replay — same `REFERENCE` + same payload** → SP returns `result_code = 'REPLAY'` + the stored payload → Go re-returns the original **2xx** response. This is idempotent success, **not** an error: no `409` is raised.
+- **Collision — same `REFERENCE` + different payload** (`PAYLOAD_HASH` mismatch) → `409 DUPLICATE_REFERENCE` (E4011) + `details: { "reason": "reference_collision" }`. `409` exists **only** for this collision case.
+- **V1 note**: payload-hash comparison may be deferred. If only `REFERENCE` is checked, treat every replay as idempotent success (`REPLAY`) and do **not** raise `409` for an identical retry.
+- ISO 20022 / catalog cross-ref: `DUPLICATE_REFERENCE` → reason `AM05` (Duplication) / `DUPL`; see §14.
 
-### 7.1 Idempotency
-
-- Every POST write **MUST** carry a `REFERENCE` (idempotency key), unique per `CLIENT_NO + ENDPOINT + 24h`.
-- The server caches the request hash in `WLT_API_MESSAGE` for ≥ 24h.
-- Replay (same `REFERENCE`, same payload) → return the previous response + 200/2xx, or 409 `DUPLICATE_REFERENCE` depending on context (see `finance_transaction.md §2.4`).
-- Replay with a different payload → 409 `DUPLICATE_REFERENCE` + `details: {reason: "reference_collision"}`.
+> Supersedes the two earlier (conflicting) idempotency notes. `X-Request-ID` is a
+> separate **transport** correlation key — see §13.6.
 
 ---
 
@@ -461,7 +459,265 @@ This file is the **single source of truth**. Error sections in other specs will 
 
 ---
 
-## 13. References
+## 13. ISO 20022 & PSD2 (Berlin Group) alignment
+
+Maps the wallet's error model onto two external standards so the ledger
+interoperates cleanly at the Treasury / NAPAS boundary and is ready for any
+future Open-Banking exposure. The code-by-code crosswalk is in §14.
+
+### 13.1 Scope — what applies and what does not
+
+"PSD2 API format" in practice means the **Berlin Group NextGenPSD2 (XS2A)**
+specification (alternatives: STET, UK OBIE). XS2A is a **third-party-access**
+standard — consent, Strong Customer Authentication (SCA), eIDAS certificates
+(QWAC/QSeal), HTTP message signing.
+
+| Concern | Applies to the internal wallet API? |
+|---------|-------------------------------------|
+| Error envelope structure, message codes | ✅ Adopt (§13.4–13.5) |
+| `transactionStatus` for async ops | ✅ Adopt (§13.3) |
+| `X-Request-ID` header + idempotency | ✅ Adopt (§13.6) |
+| Consent / SCA / TPP / eIDAS signing | ❌ Out of scope — belongs to the API-gateway / Open-Banking layer if external access is ever offered. **Do not** build it into the ledger. |
+
+> 🇻🇳 Lớp consent/SCA/eIDAS thuộc về TPP-access, KHÔNG đưa vào ledger nội bộ.
+
+### 13.2 ISO 20022 reason codes (highest value / lowest cost)
+
+ISO 20022 publishes an **External Status Reason** code list (used in
+`pain.002` / `pacs.002` payment-status messages). Mapping each business error to
+one ISO reason code makes the wallet's rejects intelligible to any ISO 20022
+counterparty (NAPAS, partner banks) without a translation layer in Treasury.
+Representative mapping (full list in §14.1):
+
+| Business case | ISO 20022 reason |
+|---------------|------------------|
+| Insufficient balance | `AM04` InsufficientFunds |
+| Amount not allowed / over limit | `AM02` NotAllowedAmount |
+| Account closed / not active | `AC04` ClosedAccountNumber |
+| Account blocked / restrained | `AC06` BlockedAccount (+ `AG01` TransactionForbidden) |
+| Account number unknown | `AC01` IncorrectAccountNumber |
+| Duplicate reference | `AM05` Duplication / `DUPL` |
+| KYC tier / regulatory | `RR04` RegulatoryReason |
+| AML / court-order hold | `FRAD` FraudulentOrigin / `RR04` |
+| Currency not allowed | `AM03` NotAllowedCurrency |
+| Invalid date | `DT01` InvalidDate |
+
+### 13.3 ISO 20022 `transactionStatus` for asynchronous flows
+
+Withdrawals and merchant settlements are asynchronous (disbursement is handed to
+Treasury). The `WLT_WITHDRAW_TRACK` state machine maps directly onto the ISO
+20022 payment-status codes (`ExternalPaymentTransactionStatus1Code` — the same
+codes Berlin Group returns from a payment `/status` resource):
+
+| `WLT_WITHDRAW_TRACK` | ISO 20022 `transactionStatus` | Meaning |
+|----------------------|-------------------------------|---------|
+| `SUBMITTED` | `RCVD` | Received |
+| `ACKED` | `ACTC` | AcceptedTechnicalValidation |
+| `DISBURSING` | `ACSP` | AcceptedSettlementInProcess |
+| `COMPLETED` | `ACSC` | AcceptedSettlementCompleted |
+| `FAILED` | `RJCT` | Rejected (+ reason code) |
+| `REVERSED` | — | Separate reversal (camt-style), not a status |
+
+Recommendation: async responses carry both the existing `status` string (for
+backward compatibility, ≥ 1 version) and the ISO `transaction_status`.
+
+> **Timeout ≠ reject.** `POSTING_TIMEOUT` / `504` MUST map to `PDNG` (pending /
+> outcome unknown), never `RJCT`. The caller must query status before retrying,
+> or risk a double debit.
+
+### 13.4 Envelope — options & recommendation
+
+| Standard | Shape | Use when |
+|----------|-------|----------|
+| **RFC 7807** `application/problem+json` (STET-PSD2) | `type, title, status, detail, instance` + extensions | **Recommended** — IETF standard, closest to the current envelope (§3) |
+| Berlin Group `tppMessages[]` | `{ "tppMessages": [{ "category", "code", "path", "text" }] }` | Only when exposing XS2A to TPPs |
+| UK OBIE | `{ "Code", "Id", "Message", "Errors": [] }` | UK Open-Banking ecosystem |
+
+**Recommendation:** adopt RFC 7807 as the base and extend it with the bank
+fields already in §3 (`code`, `internal_code`, `trace_id`, `retry`) plus
+`iso20022_reason_code` and (async) `transaction_status`. The business `code`
+contract stays intact while gaining standard interop fields. Keep an `errors[]`
+array for field-level validation (the role Berlin Group's `tppMessages` / OBIE's
+`Errors` play).
+
+### 13.5 Unified envelope (target)
+
+```json
+{
+  "type":        "https://docs.wallet.example/errors/INSUFFICIENT_FUND",
+  "title":       "Insufficient funds",
+  "status":      422,
+  "detail":      "Balance 50000 < required 100000",
+  "instance":    "/v1/transactions/transfer",
+  "code":                 "INSUFFICIENT_FUND",
+  "internal_code":        "E4022",
+  "iso20022_reason_code": "AM04",
+  "transaction_status":   "RJCT",
+  "trace_id":             "01J9XK5T7R8M2N3P4Q5S6V7W8X",
+  "timestamp":            "2026-05-30T10:23:45.123+07:00",
+  "retry":   { "retryable": false, "after_ms": null },
+  "errors":  [ { "path": "amount", "code": "AM04", "message": "exceeds available balance" } ]
+}
+```
+
+`Content-Type: application/problem+json`. Additive over §3 (the current envelope
+is a strict subset) → existing clients keep working.
+
+### 13.6 Headers & idempotency
+
+| Header | Direction | Purpose |
+|--------|-----------|---------|
+| `X-Request-ID` (UUID) | request → echoed in response | Transport correlation + idempotency (Berlin Group convention); becomes `trace_id` in the envelope |
+| `Accept-Language` | request | Selects `message` locale (§3.1) |
+| `Content-Type: application/problem+json` | response (errors) | RFC 7807 |
+
+The business `REFERENCE` (§7.4) is the **posting** idempotency key;
+`X-Request-ID` is the **transport** correlation/idempotency key — complementary:
+`REFERENCE` survives gateway retries, `X-Request-ID` is per HTTP attempt.
+
+### 13.7 Implementation roadmap
+
+| Phase | Work | Risk |
+|-------|------|------|
+| 0 | Reconcile this catalog with the Go codes (§14.2) — pick one canonical set | doc + code rename |
+| 1 | Add `iso20022_reason_code` to the catalog (§14) and to logs (§8) | doc only |
+| 2 | Switch the Go `ErrorResponse` to the §13.5 envelope (RFC 7807) | code + tests |
+| 3 | Return `transaction_status` on withdraw / merchant / treasury endpoints | code + Treasury contract |
+| 4 | (Future, external exposure only) full Berlin Group XS2A: consent, SCA, signing, `BkTxCd` on statements | large |
+
+### 13.8 Anti-patterns
+
+- ❌ Mapping `504` / timeout to `RJCT` — use `PDNG` (§13.3).
+- ❌ Building consent / SCA / eIDAS into the ledger — wrong layer (§13.1).
+- ❌ Changing the meaning of an existing `code` — add a new code instead (§9).
+- ❌ Converting wholesale to Berlin Group `tppMessages` before XS2A is exposed — unnecessary churn.
+
+---
+
+## 14. Appendix A — Error-code crosswalk
+
+`—` = no direct standard equivalent (internal/technical or auth-layer code).
+**tx** = `pain.002` `transactionStatus` for posting-path codes (§13.3).
+
+### 14.1 Public catalog → ISO 20022 / Berlin Group
+
+**Auth, KYC & account**
+
+| Public code | HTTP | ISO 20022 reason | Berlin Group | tx |
+|-------------|:----:|------------------|--------------|:--:|
+| `UNAUTHORIZED` | 401 | — | `TOKEN_INVALID` | — |
+| `OTP_INVALID` | 401 | — | `PSU_CREDENTIALS_INVALID` | — |
+| `OTP_EXPIRED` | 410 | — | `RESOURCE_EXPIRED` | — |
+| `RATE_LIMITED` / `OTP_RATE_LIMITED` | 429 | — | `ACCESS_EXCEEDED` | — |
+| `FORBIDDEN_NOT_OWNER` | 403 | `AG01` | `CONSENT_INVALID` | — |
+| `FORBIDDEN_RESTRAINT_ROLE` | 403 | — | — | — |
+| `RESTRAINT_MAKER_CANNOT_CHECK` | 403 | — | — | — |
+| `INVALID_PHONE_FORMAT` | 400 | — | `FORMAT_ERROR` | — |
+| `PHONE_ALREADY_REGISTERED` | 409 | — | — | — |
+| `CCCD_ALREADY_USED` | 409 | — | — | — |
+| `CCCD_EXPIRED` | 422 | `RR04` | — | — |
+| `EKYC_FAIL_LOW_SCORE` / `EKYC_LIVENESS_FAIL` | 422 | — | — | — |
+| `KYC_TIER_INSUFFICIENT` | 403 | `RR04` | `CONSENT_INVALID` | `RJCT` |
+| `CLIENT_BLOCKED` | 423 | `AC06` / `FRAD` | `SERVICE_BLOCKED` | `RJCT` |
+| `ACCT_NOT_FOUND` | 404 | `AC01` | `RESOURCE_UNKNOWN` | `RJCT` |
+| `MAX_WALLET_PER_CLIENT_EXCEEDED` | 409 | — | — | — |
+| `ACCT_CLOSE_NONZERO_BAL` | 422 | — | `STATUS_INVALID` | — |
+| `ACCT_BLOCKED` | 423 | `AC06` | `SERVICE_BLOCKED` | `RJCT` |
+| `ACCT_RESTRAINED` | 423 | `AC06` / `AG01` | `SERVICE_BLOCKED` | `RJCT` |
+| `ACCT_CR_RESTRAINED` | 423 | `AC06` | `SERVICE_BLOCKED` | `RJCT` |
+
+**Posting, fee/VAT, reversal & partner**
+
+| Public code | HTTP | ISO 20022 reason | Berlin Group | tx |
+|-------------|:----:|------------------|--------------|:--:|
+| `INVALID_PAYLOAD` | 400 | — | `FORMAT_ERROR` | `RJCT` |
+| `SELF_TRANSFER` | 400 | `BE01` | `FORMAT_ERROR` | `RJCT` |
+| `INVALID_TRAN_TYPE` | 400 | `AG02` | `PRODUCT_INVALID` | `RJCT` |
+| `INVALID_CCY` | 400 | `AM03` | `FORMAT_ERROR` | `RJCT` |
+| `DUPLICATE_REFERENCE` | 409 | `AM05` / `DUPL` | — | — |
+| `INSUFFICIENT_FUND` | 422 | `AM04` | — | `RJCT` |
+| `LIMIT_EXCEEDED` | 422 | `AM02` / `SL01` | — | `RJCT` |
+| `AMOUNT_OUT_OF_RANGE` | 422 | `AM02` / `AM06` | — | `RJCT` |
+| `OPTIMISTIC_LOCK_FAILED` | 422 | — (technical) | — | `PDNG` |
+| `FEE_CONFIG_MISSING` | 422 | — | — | `RJCT` |
+| `GL_CODE_NOT_FOUND` | 500 | — | `INTERNAL_SERVER_ERROR` | `PDNG` |
+| `DR_CR_UNBALANCED` | 500 | — | `INTERNAL_SERVER_ERROR` | `PDNG` |
+| `NOSTRO_LINK_MISSING` | 500 | — | `INTERNAL_SERVER_ERROR` | `PDNG` |
+| `ORIGINAL_NOT_FOUND` | 404 | — | `RESOURCE_UNKNOWN` | — |
+| `ALREADY_REVERSED` | 409 | — | `STATUS_INVALID` | — |
+| `WINDOW_EXPIRED` | 410 | — | `RESOURCE_EXPIRED` | — |
+| `BALANCE_INSUFFICIENT_TO_REVERSE` | 422 | `AM04` | — | `RJCT` |
+| `REVERSAL_BLOCKED_BY_RESTRAINT` | 423 | `FRAD` / `RR04` | `SERVICE_BLOCKED` | `RJCT` |
+| `PARTNER_DECLINED` | 422 | `AC04` / `AM04` (from rail) | `PAYMENT_FAILED` | `RJCT` |
+| `DOWNSTREAM_TIMEOUT` | 503 | — | — | `PDNG` |
+| `PARTNER_UNAVAILABLE` | 503 | — | `SERVICE_UNAVAILABLE` | `PDNG` |
+
+**History/statement, restraint & system**
+
+| Public code | HTTP | ISO 20022 reason | Berlin Group | tx |
+|-------------|:----:|------------------|--------------|:--:|
+| `GONE_ONLINE` | 410 | — | `RESOURCE_EXPIRED` | — |
+| `INVALID_CURSOR` | 422 | — | `FORMAT_ERROR` | — |
+| `INVALID_DATE` | 422 | `DT01` | `PERIOD_INVALID` | — |
+| `BATCH_SIZE_EXCEEDED` | 422 | — | `FORMAT_ERROR` | — |
+| `RESTRAINT_NOT_FOUND` | 404 | — | `RESOURCE_UNKNOWN` | — |
+| `RESTRAINT_ALREADY_REMOVED` | 409 | — | `STATUS_INVALID` | — |
+| `RESTRAINT_TYPE_INVALID` | 422 | — | `FORMAT_ERROR` | — |
+| `RESTRAINT_PURPOSE_INVALID` | 422 | — | `FORMAT_ERROR` | — |
+| `RESTRAINT_TYPE_PURPOSE_CONFLICT` | 422 | — | `FORMAT_ERROR` | — |
+| `RESTRAINT_AMT_EXCEEDS_BALANCE` | 422 | `AM04` | — | — |
+| `RESTRAINT_DATE_INVALID` | 422 | `DT01` | `PERIOD_INVALID` | — |
+| `COURT_ORDER_REMOVE_REQUIRES_DOC` | 422 | `RR04` | `FORMAT_ERROR` | — |
+| `INTERNAL_ERROR` | 500 | — | `INTERNAL_SERVER_ERROR` | `PDNG` |
+| `MAINTENANCE` | 503 | — | `SERVICE_UNAVAILABLE` | `PDNG` |
+| `CIRCUIT_OPEN` | 503 | — | `SERVICE_UNAVAILABLE` | `PDNG` |
+| `POSTING_TIMEOUT` | 504 | — | — | **`PDNG`** |
+| `DB_CONTENTION` | 503 | — | — | `PDNG` |
+| `POOL_EXHAUSTED` | 503 | — | `SERVICE_UNAVAILABLE` | `PDNG` |
+
+### 14.2 Implemented Go codes ↔ catalog (reconciliation)
+
+The Go service (`services/wallet-service/internal/domain/errors.go`) currently
+uses names that diverge from this catalog and defines several codes the catalog
+is missing. **Pick one canonical set before Phase 1.** Recommendation: keep the
+**catalog names** (the published API contract), rename the Go constants to
+match, and add the missing withdraw-tracking / metadata / PII codes to §4.
+
+`✓` = matches · `⚠️` = name mismatch to resolve · `➕` = in code, missing from catalog §4.
+
+| Go constant | Catalog code (§4) | |
+|-------------|-------------------|:--:|
+| `ACCT_NOT_FOUND` | `ACCT_NOT_FOUND` | ✓ |
+| `INVALID_DATE` | `INVALID_DATE` | ✓ |
+| `GONE_ONLINE` | `GONE_ONLINE` | ✓ |
+| `BATCH_SIZE_EXCEEDED` | `BATCH_SIZE_EXCEEDED` | ✓ |
+| `UNAUTHORIZED` | `UNAUTHORIZED` | ✓ |
+| `INTERNAL_ERROR` | `INTERNAL_ERROR` | ✓ |
+| `AMOUNT_OUT_OF_RANGE` | `AMOUNT_OUT_OF_RANGE` | ✓ |
+| `INSUFFICIENT_FUNDS` | `INSUFFICIENT_FUND` | ⚠️ plural |
+| `SAME_ACCOUNT` | `SELF_TRANSFER` | ⚠️ rename |
+| `VERSION_CONFLICT` | `OPTIMISTIC_LOCK_FAILED` | ⚠️ rename |
+| `TIMEOUT` | `POSTING_TIMEOUT` | ⚠️ rename |
+| `DR_RESTRAINT_ACTIVE` | `ACCT_RESTRAINED` | ⚠️ rename |
+| `CR_RESTRAINT_ACTIVE` | `ACCT_CR_RESTRAINED` | ⚠️ rename |
+| `ACCT_NOT_ACTIVE` | `ACCT_BLOCKED` | ⚠️ align |
+| `TIER_INSUFFICIENT` | `KYC_TIER_INSUFFICIENT` | ⚠️ rename |
+| `TIER_LIMIT_EXCEEDED` | `LIMIT_EXCEEDED` | ⚠️ rename |
+| `TRAN_TYPE_INACTIVE` | `INVALID_TRAN_TYPE` | ⚠️ align |
+| `INVALID_REQUEST` | `INVALID_PAYLOAD` | ⚠️ align |
+| `FORBIDDEN` | `FORBIDDEN_NOT_OWNER` | ⚠️ align |
+| `INVALID_AMOUNT` | `INVALID_PAYLOAD` / `AMOUNT_OUT_OF_RANGE` | ⚠️ no exact code |
+| `METADATA_TOO_LARGE` | — | ➕ add to §4.4 |
+| `METADATA_HAS_P1` | — | ➕ add to §4.4 |
+| `PII_DEK_NOT_SET` | — | ➕ add to §4.10 |
+| `WD_NOT_FOUND` | — | ➕ add (withdraw tracking) |
+| `WD_INVALID_STATE` | — | ➕ add (→ BG `STATUS_INVALID`) |
+| `WD_ALREADY_COMPLETED` | — | ➕ add (→ BG `STATUS_INVALID`) |
+| `WD_ALREADY_REVERSED` | `ALREADY_REVERSED` (≈) | ⚠️ align |
+
+---
+
+## 15. References
 
 - `wallet_HLD.md` §4 (modules), §7 (NFR availability/recovery), §13 (cross-reference)
 - `wallet_DLD.md` §6 (Error handling & state machine), §3 (WLT_API_MESSAGE/TRACE schema)
@@ -469,4 +725,8 @@ This file is the **single source of truth**. Error sections in other specs will 
 - `finance_transaction.md` §8 (Restraint), §9 (Get Balance), §12 (Error code matrix), §13 (acceptance criteria)
 - `t24_transaction_posting.md` — 6-step pipeline (source of errors at each step)
 - OWASP API Security Top 10 — guideline for avoiding info leaks
-- RFC 7807 Problem Details — reference (we define our own envelope because we add `internal_code`, `trace_id`, `retry`)
+- RFC 7807 / RFC 9457 — Problem Details for HTTP APIs (base envelope, §13.4–13.5)
+- ISO 20022 — External Code Sets (`ExternalStatusReason1Code`, `ExternalPaymentTransactionStatus1Code`); `pain.002` CustomerPaymentStatusReport (§13.2–13.3)
+- Berlin Group **NextGenPSD2 XS2A** Framework — Implementation Guidelines (error model `tppMessages[]`, per-HTTP message codes, `transactionStatus`)
+- STET PSD2 API — `application/problem+json` (RFC 7807) error model
+- UK Open Banking (OBIE) Read/Write API — error response model
