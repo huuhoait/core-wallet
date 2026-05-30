@@ -130,11 +130,15 @@ for f in db/procedures/wallet_sp_balance.sql \
 done
 ```
 
-`wallet_sp_eod.sql` is self-contained (it creates the EOD tables, the
-`WLT_PERIOD` period lock + write-freeze triggers, and grants for the local
-`wallet_app` role), so loading it activates period locking locally. For tracked
-deploys, also apply the incremental migrations in `db/migrations/` (they harden
-the EOD writes onto the dedicated `wallet_eod` role).
+`wallet_sp_eod.sql` is self-contained (it creates the EOD tables, the `WLT_PERIOD`
+write-freeze triggers, and grants for the local `wallet_app` role), so loading it
+activates the GL period seal locally. The model is a modern-core **GL accounting
+cutoff**: the GL is cut by `WLT_GL_BATCH.ACCOUNTING_DATE` at a daily time
+(`WLT_GL_CONFIG.cutoff_time`, default 18:00 GMT+7) — `run_gl_close` seals today's
+accounting day with **no ledger downtime** (entries posted at/after the cutoff
+carry the next accounting date), while the 24/7 customer ledger (`WLT_TRAN_HIST`)
+is never period-frozen. For tracked deploys, also apply the incremental migrations
+in `db/migrations/` (they harden the EOD writes onto the dedicated `wallet_eod` role).
 
 > 🇻🇳 Docker chỉ tự nạp `wallet_schema.sql` + `wallet_sp.sql` khi khởi tạo lần
 > đầu. Các stored function còn lại và seed phải nạp thủ công như trên.

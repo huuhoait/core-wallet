@@ -8,6 +8,23 @@ condensed from the HLD changelog.
 
 ## [Unreleased]
 
+### Changed — GL accounting cutoff (modern-core 24/7 model) (2026-05-31) — US-6.1
+- The period seal moved from a calendar `POST_DATE` freeze on **both** the customer
+  ledger and the GL to a **GL-only freeze keyed by `WLT_GL_BATCH.ACCOUNTING_DATE`**.
+  The 24/7 customer ledger (`WLT_TRAN_HIST`) is **no longer period-frozen** (append-
+  only by convention; reversals are compensating entries in the open period).
+- New `WLT_GL_CONFIG` (`cutoff_time`, default 18:00 GMT+7) + `fn_accounting_date()`;
+  `WLT_GL_BATCH.ACCOUNTING_DATE` filled by a column **DEFAULT** (posting SPs unchanged).
+  An entry posted at/after the cutoff carries the **next** accounting date, so the GL
+  period seals at the cutoff with **no ledger downtime** (post-cutoff entries land in
+  the open period). `eod_close_period` guard relaxed to `< fn_accounting_date()`.
+- EOD orchestration split: `run_eod` = customer tasks (T1/T2/T5, calendar day, overnight);
+  new **`run_gl_close`** = T3→T6→T7 (GL, accounting date, at the cutoff). The in-process
+  scheduler runs both jobs (`EOD_RUN_AT` + new `EOD_GL_CUTOFF`, default 18:00).
+- Migration `db/migrations/2026-05-31_gl_accounting_cutoff.sql`; new
+  `db/tests/wallet_gl_cutoff_test.sql`; `wallet_eod_period_lock_test.sql` rewritten for
+  the accounting-date model (10/10). Supersedes the post_date freeze in the entry below.
+
 ### Added — EOD period locking + GL-feed post (2026-05-30) — US-6.1/6.2, unblocks US-3.7
 - **Period write-freeze (full immutability).** New `WLT_PERIOD` control table (one
   row per closed business date) + `fn_period_closed_through()` high-water mark.

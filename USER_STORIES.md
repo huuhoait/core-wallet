@@ -81,7 +81,7 @@ docs alone).
 | US-3.4 | As ops, I reverse a merchant withdrawal | ✅ | SP `post_merchant_withdraw_reversal`. |
 | US-3.5 | Reversals are idempotent and refund fee + VAT legs | ✅ | Reversal SPs write outbox + refund all legs. |
 | US-3.6 | Reversal is rejected outside the allowed time window | ⬜ | Spec §6.4 defines the window, but **no reversal SP enforces it** (no `WINDOW_EXPIRED` / time check in any `*_reversal` SP). |
-| US-3.7 | VAT reversal across a closed period is handled correctly | ✅ | Period locking (US-6.1) now makes a closed day immutable, so the closed VAT period (e.g. May) cannot be mutated; a reversal posts `POST_DATE = CURRENT_DATE` into the open period (June) per spec §6.8. Guaranteed by the write-freeze (`fn_freeze_closed_period`), proved in `db/tests/wallet_eod_period_lock_test.sql`. |
+| US-3.7 | VAT reversal across a closed period is handled correctly | ✅ | Period locking (US-6.1) seals a closed **accounting** period (GL), so the closed VAT period (e.g. May) cannot be mutated; a reversal's GL legs carry the OPEN `ACCOUNTING_DATE` (post-cutoff → next day) and its ledger leg posts `POST_DATE = CURRENT_DATE`, per spec §6.8. Guaranteed by the accounting-date write-freeze (`fn_freeze_closed_period`), proved in `db/tests/wallet_eod_period_lock_test.sql`. |
 
 ## Epic 4 — Balance & Statements / Số dư & sao kê
 
@@ -111,7 +111,7 @@ docs alone).
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-6.1 | EOD close & period locking | ✅ | Close batch `run_eod` (T1→T2→T5→T3→T6→**T7 close**), `wallet_sp_eod.sql`. **Period locking** done: `eod_close_period(D)` seals each past day in `WLT_PERIOD` (D < CURRENT_DATE; runs last, only after all tasks DONE), advancing the high-water mark; `fn_freeze_closed_period` triggers on `WLT_GL_BATCH`/`WLT_TRAN_HIST` make a closed day **fully immutable** (no INSERT/UPDATE/DELETE, SQLSTATE P0092 → `PERIOD_CLOSED`/409). Verified end-to-end + `db/tests/wallet_eod_period_lock_test.sql` (10/10). Unblocks US-3.7. |
+| US-6.1 | EOD close & GL accounting cutoff (period locking) | ✅ | Modern-core 24/7 model. Customer EOD `run_eod` (T1→T2→T5, calendar day) runs overnight; **`run_gl_close`** (T3→T6→**T7 close**, accounting date) runs at the **GL cutoff** (`WLT_GL_CONFIG.cutoff_time`, default 18:00 GMT+7). `eod_close_period(D)` seals an accounting day once it is no longer open (`D < fn_accounting_date()`) → today's GL day seals at the cutoff with **no ledger downtime** (post-cutoff entries carry the next `ACCOUNTING_DATE`). `fn_freeze_closed_period` makes a sealed day's **GL** (`WLT_GL_BATCH`, by `ACCOUNTING_DATE`) immutable (P0092 → `PERIOD_CLOSED`/409); the 24/7 customer ledger `WLT_TRAN_HIST` is **not** period-frozen. `db/tests/wallet_eod_period_lock_test.sql` (10/10) + `wallet_gl_cutoff_test.sql`. Unblocks US-3.7. |
 | US-6.2 | Suspense / clearing GL framework | 🟡 | **GL-feed post** built: `eod_gl_feed_post(D)` (T3) finalises the day's GL journal `WLT_GL_BATCH` `'P'`→`'S'`, chunked + restart-safe. Full suspense/clearing GL framework (HLD §9b) still design only. |
 | US-6.3 | Daily trial-balance materialization + signed proof | ✅ | SP `eod_trial_balance` (`wallet_sp_eod.sql`, T6 in `run_eod`). Per-`(gl_code,ccy)` from `WLT_GL_BATCH` → `WLT_TRIAL_BALANCE` (opening carry-forward + period DR/CR + closing); proves ΣDR=ΣCR ∧ Σclosing=0; seals each day in `WLT_TRIAL_BALANCE_PROOF` via a `sha256` **hash chain** (`chain=H(totals‖content‖prev)`). `eod_verify_chain()` re-derives & detects tampering (verified: editing a sealed line flips `chain_ok`→false). |
 | US-6.4 | E-invoice integration (Decree 123/2020, Circular 78/2021) | ⬜ | HLD §9b. Design only. |
@@ -128,6 +128,7 @@ docs alone).
 | US-7.1 | Every posting writes a Kafka event row atomically (transactional outbox) | ✅ | `WLT_OUTBOX`; `INSERT INTO WLT_OUTBOX` inside every posting SP. |
 | US-7.2 | Relay outbox → Kafka (Debezium CDC primary, Go polling worker fallback) | ⬜ | HLD v1.9. Table only; no relay worker (`cmd/` has server only). |
 | US-7.3 | Downstream consumers react to `withdraw.posted` etc. | ⬜ | Out of scope here (Treasury Service). |
+| US-7.4 | Review use go scheduler or pg-cron to eod & gl closing | ⬜ | TODO |
 
 ## Epic 8 — Audit, PII & Compliance / Audit, PII & tuân thủ
 
