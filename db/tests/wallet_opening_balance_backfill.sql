@@ -5,7 +5,7 @@
 --
 -- Mỗi ví lệch nhận:
 --   • 1 dòng wlt_tran_hist: TOPUP / CR / prev=0 / act=opening / seq_no=0 (xếp đầu chuỗi)
---   • 2 leg wlt_batch:  DR 101.02.001 (Nostro @ Bank)  /  CR ví (201.01.001 | 201.02.001)
+--   • 2 leg wlt_gl_batch:  DR 101.02.001 (Nostro @ Bank)  /  CR ví (201.01.001 | 201.02.001)
 -- KHÔNG sửa wlt_acct.actual_bal (đã đúng).
 --
 -- opening = actual_bal - Σ(CR-DR ledger)  (= previous_bal_amt của bút toán đầu tiên)
@@ -63,7 +63,7 @@ BEGIN
        v_key, 'OPENING-BAL-'||r.acct_no, r.ccy, 'WLT', 'Opening balance brought forward', 'RECON', 'RECON');
 
     -- (2) Hai leg GL double-entry (giống post_topup): DR Nostro / CR ví
-    INSERT INTO wlt_batch
+    INSERT INTO wlt_gl_batch
       (tran_key, seq_no, gl_code, client_no, acct_internal_key, amount, tran_nature,
        ccy, reference, narrative, post_date, value_date, source_module, status, created_by, updated_by)
     VALUES
@@ -102,7 +102,7 @@ BEGIN
   -- (b) trial balance toàn cục
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'),
          sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_dr, v_cr FROM wlt_batch;
+    INTO v_dr, v_cr FROM wlt_gl_batch;
 
   -- (c) running-balance math + (d) chain continuity
   SELECT count(*) INTO v_bad_math FROM wlt_tran_hist_2026_05

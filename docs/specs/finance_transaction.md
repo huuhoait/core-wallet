@@ -83,7 +83,7 @@ sequenceDiagram
     Note over GO,DB: 1 round-trip — entire Phase 1+2 inside the SP
     GO->>DB: SELECT * FROM post_internal_credit($1..$5)
     Note over DB: Phase 1 in plpgsql:<br/>- SELECT acct + def + KYC + monthly_total<br/>- IF CR_BLOCKED='Y' → SELECT restraints live<br/>- Validate status, tier, range, limit, restraint
-    Note over DB: Phase 2 in plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT (VERSION check inline)<br/>- INSERT WLT_TRAN_HIST + WLT_BATCH × 2<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, error_code, tfr_key, payload)
+    Note over DB: Phase 2 in plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT (VERSION check inline)<br/>- INSERT WLT_TRAN_HIST + WLT_GL_BATCH × 2<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, error_code, tfr_key, payload)
     DB-->>GO: row (POSTED | REJECTED | CONFLICT | REPLAY)
   end
   
@@ -287,7 +287,7 @@ sequenceDiagram
     Note over GO,DB: 1 round-trip per attempt
     GO->>DB: SELECT * FROM post_internal_debit($1..$6) — params: ref, acct, amount, 'WDRAW', ext_ref, narrative
     Note over DB: Phase 1 plpgsql:<br/>- Snapshot (acct + def + KYC + limits + daily/monthly aggregate)<br/>- IF RESTRAINT_PRESENT='Y' → live SELECT restraints<br/>- Validate: status, tier ≥ 2, amount range, limit, restraint DR<br/>- Fee + VAT compute (FIXED/PERCENT/clamp)<br/>- Fund check: ACTUAL_BAL - TOTAL_RESTRAINED_AMT ≥ total_with_fee
-    Note over DB: Phase 2 plpgsql (atomic, lock ~0.5-1ms):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT SET ACTUAL_BAL -= total, VERSION++<br/>  WHERE VERSION=:snap AND ACTUAL_BAL - TOTAL_RESTRAINED_AMT ≥ total<br/>- INSERT WLT_TRAN_HIST × 2 (WDRAW + FEEWD)<br/>- INSERT WLT_BATCH × 5 (DR wallet / CR nostro + 3 fee/VAT legs)<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, error_code, tfr_key, payload)
+    Note over DB: Phase 2 plpgsql (atomic, lock ~0.5-1ms):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT SET ACTUAL_BAL -= total, VERSION++<br/>  WHERE VERSION=:snap AND ACTUAL_BAL - TOTAL_RESTRAINED_AMT ≥ total<br/>- INSERT WLT_TRAN_HIST × 2 (WDRAW + FEEWD)<br/>- INSERT WLT_GL_BATCH × 5 (DR wallet / CR nostro + 3 fee/VAT legs)<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, error_code, tfr_key, payload)
     DB-->>GO: row
   end
   
@@ -508,7 +508,7 @@ sequenceDiagram
     Note over GO,DB: 1 round-trip per attempt
     GO->>DB: SELECT * FROM post_transfer($1..$5) — ref, from, to, amount, narrative
     Note over DB: Phase 1 plpgsql:<br/>- SELECT both accts + def + KYC<br/>- Validate: self-transfer, status, ccy match, tier, amount range<br/>- Restraint live check: from DR side, to CR side<br/>- Fee + VAT compute<br/>- Fund check on from
-    Note over DB: Phase 2 plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT × 2 ordered INTERNAL_KEY ASC (deadlock prevention)<br/>  each UPDATE WHERE VERSION=:snap + fund check inline<br/>- INSERT WLT_TRAN_HIST × 3 (TRFOUT, TRFIN, FEETRF)<br/>- INSERT WLT_BATCH × 5<br/>- UPSERT WLT_ACCT_BAL × 2<br/>- RETURN (result_code, error_code, tfr_key, payload)
+    Note over DB: Phase 2 plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT × 2 ordered INTERNAL_KEY ASC (deadlock prevention)<br/>  each UPDATE WHERE VERSION=:snap + fund check inline<br/>- INSERT WLT_TRAN_HIST × 3 (TRFOUT, TRFIN, FEETRF)<br/>- INSERT WLT_GL_BATCH × 5<br/>- UPSERT WLT_ACCT_BAL × 2<br/>- RETURN (result_code, error_code, tfr_key, payload)
     DB-->>GO: row
   end
   
@@ -654,7 +654,7 @@ sequenceDiagram
   rect rgba(200,230,255,0.4)
     GO->>DB: SELECT * FROM post_reversal($1..$4) — ref, original_seq_no, reason, actor
     Note over DB: Phase 1 plpgsql:<br/>- Read original tran + all fee legs with the same TFR_INTERNAL_KEY<br/>- REV-05 check (not yet reversed), REV-06 time window<br/>- REV-08 hard-stop: restraint purpose ∈ {COURT_ORDER, AML_HOLD}<br/>  on any affected wallet → REJECTED REVERSAL_BLOCKED_BY_RESTRAINT<br/>- Compute reversal deltas per affected acct
-    Note over DB: Phase 2 plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE affected accts ordered INTERNAL_KEY ASC<br/>  (CR reversal may fail if B has already spent everything → BALANCE_INSUFFICIENT_TO_REVERSE)<br/>- INSERT WLT_TRAN_HIST reversal × N (principal + fee + VAT legs reversed)<br/>- INSERT WLT_BATCH reversed × M<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, ..., reversal_tran_id, payload)
+    Note over DB: Phase 2 plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE affected accts ordered INTERNAL_KEY ASC<br/>  (CR reversal may fail if B has already spent everything → BALANCE_INSUFFICIENT_TO_REVERSE)<br/>- INSERT WLT_TRAN_HIST reversal × N (principal + fee + VAT legs reversed)<br/>- INSERT WLT_GL_BATCH reversed × M<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, ..., reversal_tran_id, payload)
     DB-->>GO: row
   end
   
@@ -709,7 +709,7 @@ If the reversal falls in the **next VAT filing period** (e.g., original in May, 
 Query:
 ```sql
 SELECT SUM(CASE TRAN_NATURE WHEN 'CR' THEN AMOUNT ELSE -AMOUNT END) AS vat_net
-FROM WLT_BATCH
+FROM WLT_GL_BATCH
 WHERE GL_CODE = '203.01'
   AND POST_DATE BETWEEN :start_of_month AND :end_of_month;
 ```
@@ -1274,7 +1274,7 @@ Same `TFR_INTERNAL_KEY` as the original transaction:
 
 ```
 1 row WLT_TRAN_HIST: TRAN_TYPE=FEE_TRAN_TYPE, DR wallet, amount=fee_gross
-3 rows WLT_BATCH:
+3 rows WLT_GL_BATCH:
   - DR customer wallet (GL 201.x), amount = fee_gross
   - CR Fee revenue (GL FEE_GL_CODE, 401.x), amount = fee_net
   - CR VAT payable (GL VAT_GL_CODE, 203.x), amount = vat_amt
@@ -1290,7 +1290,7 @@ VND has no decimals. Calculations use `NUMERIC(18,2)` then:
 ```sql
 -- Total VAT collected for month T
 SELECT SUM(CASE TRAN_NATURE WHEN 'CR' THEN AMOUNT ELSE -AMOUNT END) AS vat_net
-FROM   WLT_BATCH
+FROM   WLT_GL_BATCH
 WHERE  GL_CODE = '203.01'
   AND  POST_DATE BETWEEN '2026-05-01' AND '2026-05-31'
   AND  STATUS = 'P';
@@ -1299,7 +1299,7 @@ WHERE  GL_CODE = '203.01'
 SELECT  d.TRAN_TYPE, d.TRAN_DESC,
         SUM(CASE WHEN b.GL_CODE = d.FEE_GL_CODE THEN b.AMOUNT END) AS fee_net,
         SUM(CASE WHEN b.GL_CODE = d.VAT_GL_CODE THEN b.AMOUNT END) AS vat
-FROM    WLT_BATCH b
+FROM    WLT_GL_BATCH b
 JOIN    WLT_TRAN_DEF d ON b.GL_CODE IN (d.FEE_GL_CODE, d.VAT_GL_CODE)
 WHERE   b.POST_DATE BETWEEN :start AND :end
   AND   b.TRAN_NATURE = 'CR'
@@ -1345,7 +1345,7 @@ Implement **without** schema changes:
 | RECEIVED | Just received request, Phase 1 in progress (in-memory only, no DB row) |
 | VALIDATED | Passed Phase 1 (in-memory transient) |
 | REJECTED | Phase 1 failed → 4xx error response, no history/batch row generated |
-| POSTED | Phase 2 committed successfully → row exists in `WLT_TRAN_HIST` + `WLT_BATCH` |
+| POSTED | Phase 2 committed successfully → row exists in `WLT_TRAN_HIST` + `WLT_GL_BATCH` |
 | REVERSED | A reversal row exists in `WLT_TRAN_HIST` linked via `ORIG_SEQ_NO` |
 
 > **v1.6**: removed states `PENDING`, `ACCEPTED`, `COMPLETED`, `EXPIRED` (only existed with async pending settle). Sync model: every tran is posted within one request.
@@ -1386,7 +1386,7 @@ Implement **without** schema changes:
 | FT-01 | Valid topup → CR wallet + DR nostro, Σ DR = Σ CR | 2 BATCH rows balanced, balance correct |
 | FT-02 | Duplicate REFERENCE topup | Return cached response, no new row |
 | FT-03 | Deposit via agent → CR customer wallet + DR agent wallet + 3 fee legs | 5 BATCH rows balanced |
-| FT-04 | Withdraw with sufficient funds → POSTED immediately (sync internal) | `WLT_TRAN_HIST` 2 rows (WDRAW + FEEWD); `WLT_BATCH` 5 rows; `ACTUAL_BAL` decreases; emit `withdraw.posted` Kafka |
+| FT-04 | Withdraw with sufficient funds → POSTED immediately (sync internal) | `WLT_TRAN_HIST` 2 rows (WDRAW + FEEWD); `WLT_GL_BATCH` 5 rows; `ACTUAL_BAL` decreases; emit `withdraw.posted` Kafka |
 | FT-05 | Withdraw with insufficient funds (incl fee) → reject | `422 INSUFFICIENT_FUND`, no row |
 | FT-06 | Transfer 1M + fee 5.5k → 5 legs, A loses 1,005,500, B receives 1,000,000 | DR=CR=1,005,500, balance correct |
 | FT-07 | Transfer with insufficient funds including fee | 422 INSUFFICIENT_FUND, no row |
@@ -1406,11 +1406,11 @@ Implement **without** schema changes:
 
 | Operation | INSERT tables | UPDATE tables | DELETE tables |
 |-----------|-------------|-------------|-------------|
-| Topup | `WLT_API_MESSAGE`, `WLT_TRAN_HIST`, `WLT_BATCH` ×2 | `WLT_ACCT`, `WLT_ACCT_BAL` (upsert) | – |
-| Deposit (+fee) | + `WLT_TRAN_HIST` ×3, `WLT_BATCH` ×5 | `WLT_ACCT` ×2 | – |
-| Withdraw (sync, +fee) | `WLT_API_MESSAGE`, `WLT_TRAN_HIST` ×2, `WLT_BATCH` ×5 | `WLT_ACCT`, `WLT_ACCT_BAL` (upsert) | – |
-| Transfer (+fee+VAT) | `WLT_API_MESSAGE`, `WLT_TRAN_HIST` ×3, `WLT_BATCH` ×5 | `WLT_ACCT` ×2, `WLT_ACCT_BAL` ×2 | – |
-| Reversal | `WLT_TRAN_HIST` ×N (principal+fee legs), `WLT_BATCH` ×M | `WLT_ACCT` (rollback) | – |
+| Topup | `WLT_API_MESSAGE`, `WLT_TRAN_HIST`, `WLT_GL_BATCH` ×2 | `WLT_ACCT`, `WLT_ACCT_BAL` (upsert) | – |
+| Deposit (+fee) | + `WLT_TRAN_HIST` ×3, `WLT_GL_BATCH` ×5 | `WLT_ACCT` ×2 | – |
+| Withdraw (sync, +fee) | `WLT_API_MESSAGE`, `WLT_TRAN_HIST` ×2, `WLT_GL_BATCH` ×5 | `WLT_ACCT`, `WLT_ACCT_BAL` (upsert) | – |
+| Transfer (+fee+VAT) | `WLT_API_MESSAGE`, `WLT_TRAN_HIST` ×3, `WLT_GL_BATCH` ×5 | `WLT_ACCT` ×2, `WLT_ACCT_BAL` ×2 | – |
+| Reversal | `WLT_TRAN_HIST` ×N (principal+fee legs), `WLT_GL_BATCH` ×M | `WLT_ACCT` (rollback) | – |
 | History list | – | – | – |
 | Statement gen | (background) | – | – |
 

@@ -16,7 +16,7 @@ SET statement_timeout = 0;
 SELECT 'wlt_acct (LT)'   AS scope, count(*) AS rows FROM wlt_acct      WHERE acct_no  LIKE 'LT%'
 UNION ALL SELECT 'fm_client (LT)',         count(*) FROM fm_client     WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%'
 UNION ALL SELECT 'wlt_tran_hist (PB/LT)',  count(*) FROM wlt_tran_hist WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%'
-UNION ALL SELECT 'wlt_batch (PB/LT)',      count(*) FROM wlt_batch     WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
+UNION ALL SELECT 'wlt_gl_batch (PB/LT)',      count(*) FROM wlt_gl_batch     WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
 
 BEGIN;
 /*
@@ -34,7 +34,7 @@ DELETE FROM wlt_tran_hist
  WHERE internal_key IN (SELECT internal_key FROM _lt_acct)
     OR reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
 
-DELETE FROM wlt_batch
+DELETE FROM wlt_gl_batch
  WHERE acct_internal_key IN (SELECT internal_key FROM _lt_acct)
     OR client_no IN (SELECT client_no FROM _lt_client)
     OR reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
@@ -80,5 +80,5 @@ COMMIT;
 SELECT 'wlt_acct (LT)'   AS scope, count(*) AS rows FROM wlt_acct      WHERE acct_no  LIKE 'LT%'
 UNION ALL SELECT 'fm_client (LT)',         count(*) FROM fm_client     WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%'
 UNION ALL SELECT 'wlt_tran_hist (PB/LT)',  count(*) FROM wlt_tran_hist WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%'
-UNION ALL SELECT 'wlt_batch (PB/LT)',      count(*) FROM wlt_batch     WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
+UNION ALL SELECT 'wlt_gl_batch (PB/LT)',      count(*) FROM wlt_gl_batch     WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
 SELECT 'baseline fm_client (C*) preserved' AS check, count(*) AS rows FROM fm_client WHERE client_no NOT LIKE 'LT%';

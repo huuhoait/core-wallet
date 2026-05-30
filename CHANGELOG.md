@@ -11,12 +11,12 @@ condensed from the HLD changelog.
 ### Added — EOD period locking + GL-feed post (2026-05-30) — US-6.1/6.2, unblocks US-3.7
 - **Period write-freeze (full immutability).** New `WLT_PERIOD` control table (one
   row per closed business date) + `fn_period_closed_through()` high-water mark.
-  `BEFORE INSERT/UPDATE/DELETE` triggers (`fn_freeze_closed_period`) on `WLT_BATCH`
+  `BEFORE INSERT/UPDATE/DELETE` triggers (`fn_freeze_closed_period`) on `WLT_GL_BATCH`
   and `WLT_TRAN_HIST` reject any change to a row in a closed period — a sealed
   day's trial balance + hash chain (US-6.3) are now tamper-proof. SQLSTATE `P0092`
   → domain `PERIOD_CLOSED` → HTTP 409 (ISO 20022 `DT01`).
 - **GL-feed post (T3).** `eod_gl_feed_post(D)` finalises the day's GL journal
-  `WLT_BATCH` `'P'`→`'S'`, chunked (COMMIT/chunk) + restart-safe.
+  `WLT_GL_BATCH` `'P'`→`'S'`, chunked (COMMIT/chunk) + restart-safe.
 - **Period close (T7).** `eod_close_period(D)` seals a *past* day (`D < CURRENT_DATE`)
   in `WLT_PERIOD` after all tasks are DONE; runs LAST. `run_eod` is now
   T1→T2→T5→T3→T6→T7.

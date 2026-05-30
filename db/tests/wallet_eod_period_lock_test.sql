@@ -36,7 +36,7 @@ BEGIN
   END IF;
 
   -- ───── seed two "old" rows on v_hw BEFORE anything is sealed ─────
-  INSERT INTO wlt_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date,status)
+  INSERT INTO wlt_gl_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date,status)
   VALUES (-7000, 1, '201.01.001', 100, 'DR', 'VND', v_hw, v_hw, 'P');
   INSERT INTO wlt_tran_hist(internal_key,tran_type,tran_date,effect_date,post_date,value_date,
                             tran_amt,cr_dr_maint_ind,previous_bal_amt,actual_bal_amt,reference,ccy)
@@ -54,7 +54,7 @@ BEGIN
 
   -- ───── TC2: freeze rejects INSERT dated ON the high-water (P0092) ─────
   BEGIN
-    INSERT INTO wlt_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date)
+    INSERT INTO wlt_gl_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date)
     VALUES (-7001, 1, '201.01.001', 100, 'DR', 'VND', v_hw, v_hw);
     INSERT INTO _t(name,ok,detail) VALUES ('TC2 freeze rejects INSERT post_date = closed', false, 'no exception');
   EXCEPTION WHEN sqlstate 'P0092' THEN
@@ -65,7 +65,7 @@ BEGIN
 
   -- ───── TC3: freeze rejects INSERT dated BELOW the high-water (P0092) ─────
   BEGIN
-    INSERT INTO wlt_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date)
+    INSERT INTO wlt_gl_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date)
     VALUES (-7002, 1, '201.01.001', 100, 'DR', 'VND', v_below, v_below);
     INSERT INTO _t(name,ok,detail) VALUES ('TC3 freeze rejects INSERT post_date < closed', false, 'no exception');
   EXCEPTION WHEN sqlstate 'P0092' THEN
@@ -76,7 +76,7 @@ BEGIN
 
   -- ───── TC4: freeze ALLOWS INSERT on the open date (> high-water) ─────
   BEGIN
-    INSERT INTO wlt_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date,status)
+    INSERT INTO wlt_gl_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date,status)
     VALUES (-7050, 1, '201.01.001', 100, 'DR', 'VND', v_today, v_today, 'S');  -- 'S' so it stays out of the TC6 feed scope
     INSERT INTO _t(name,ok,detail) VALUES ('TC4 freeze allows INSERT post_date = today', true, 'inserted');
   EXCEPTION WHEN others THEN
@@ -97,36 +97,36 @@ BEGIN
 
   -- ───── TC6: GL-feed flips only PENDING legs P→S on the OPEN date ─────
   -- (proves the legitimate pre-close UPDATE is NOT blocked by the freeze)
-  INSERT INTO wlt_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date,status) VALUES
+  INSERT INTO wlt_gl_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date,status) VALUES
     (-7100, 1, '201.01.001', 100, 'DR', 'VND', v_today, v_today, 'P'),
     (-7100, 2, '101.02.001', 100, 'CR', 'VND', v_today, v_today, 'P'),
     (-7101, 1, '201.01.001', 100, 'DR', 'VND', v_today, v_today, 'S');
-  UPDATE wlt_batch SET status='S', time_stamp=now()
+  UPDATE wlt_gl_batch SET status='S', time_stamp=now()
    WHERE post_date = v_today AND status = 'P' AND tran_key < 0;
   GET DIAGNOSTICS v_upd = ROW_COUNT;
-  SELECT count(*) INTO v_s FROM wlt_batch WHERE tran_key IN (-7100,-7101) AND status='S';
+  SELECT count(*) INTO v_s FROM wlt_gl_batch WHERE tran_key IN (-7100,-7101) AND status='S';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC6 GL-feed flips only PENDING legs P→S (open date)',
      v_upd = 2 AND v_s = 3, format('flipped=%s sent=%s (want 2 / 3)', v_upd, v_s));
 
   -- ───── TC7: freeze rejects UPDATE of a row in a closed period (P0092) ─────
   BEGIN
-    UPDATE wlt_batch SET status='S' WHERE tran_key = -7000;   -- the old v_hw row
-    INSERT INTO _t(name,ok,detail) VALUES ('TC7 freeze rejects UPDATE of closed-period WLT_BATCH row', false, 'no exception');
+    UPDATE wlt_gl_batch SET status='S' WHERE tran_key = -7000;   -- the old v_hw row
+    INSERT INTO _t(name,ok,detail) VALUES ('TC7 freeze rejects UPDATE of closed-period WLT_GL_BATCH row', false, 'no exception');
   EXCEPTION WHEN sqlstate 'P0092' THEN
-    INSERT INTO _t(name,ok,detail) VALUES ('TC7 freeze rejects UPDATE of closed-period WLT_BATCH row', true, SQLERRM);
+    INSERT INTO _t(name,ok,detail) VALUES ('TC7 freeze rejects UPDATE of closed-period WLT_GL_BATCH row', true, SQLERRM);
   WHEN others THEN
-    INSERT INTO _t(name,ok,detail) VALUES ('TC7 freeze rejects UPDATE of closed-period WLT_BATCH row', false, 'wrong error: '||SQLERRM);
+    INSERT INTO _t(name,ok,detail) VALUES ('TC7 freeze rejects UPDATE of closed-period WLT_GL_BATCH row', false, 'wrong error: '||SQLERRM);
   END;
 
   -- ───── TC8: freeze rejects DELETE of a row in a closed period (P0092) ─────
   BEGIN
-    DELETE FROM wlt_batch WHERE tran_key = -7000;
-    INSERT INTO _t(name,ok,detail) VALUES ('TC8 freeze rejects DELETE of closed-period WLT_BATCH row', false, 'no exception');
+    DELETE FROM wlt_gl_batch WHERE tran_key = -7000;
+    INSERT INTO _t(name,ok,detail) VALUES ('TC8 freeze rejects DELETE of closed-period WLT_GL_BATCH row', false, 'no exception');
   EXCEPTION WHEN sqlstate 'P0092' THEN
-    INSERT INTO _t(name,ok,detail) VALUES ('TC8 freeze rejects DELETE of closed-period WLT_BATCH row', true, SQLERRM);
+    INSERT INTO _t(name,ok,detail) VALUES ('TC8 freeze rejects DELETE of closed-period WLT_GL_BATCH row', true, SQLERRM);
   WHEN others THEN
-    INSERT INTO _t(name,ok,detail) VALUES ('TC8 freeze rejects DELETE of closed-period WLT_BATCH row', false, 'wrong error: '||SQLERRM);
+    INSERT INTO _t(name,ok,detail) VALUES ('TC8 freeze rejects DELETE of closed-period WLT_GL_BATCH row', false, 'wrong error: '||SQLERRM);
   END;
 
   -- ───── TC9: same immutability on the customer ledger (UPDATE) ─────

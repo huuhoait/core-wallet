@@ -52,13 +52,13 @@ BEGIN
   -- TC1: double-entry balanced
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'),
          sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_dr, v_cr FROM wlt_batch WHERE tran_key=v_tfr;
+    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tfr;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC1 transfer: ΣDR = ΣCR', v_dr = v_cr, format('DR=%s CR=%s', v_dr, v_cr));
 
   -- TC2: fee split + VAT formula (gross 5500 = net 5000 + VAT 500; VAT=round(5500*0.1/1.1))
-  SELECT amount INTO v_net401 FROM wlt_batch WHERE tran_key=v_tfr AND gl_code='401.01';
-  SELECT amount INTO v_vat203 FROM wlt_batch WHERE tran_key=v_tfr AND gl_code='203.01';
+  SELECT amount INTO v_net401 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='401.01';
+  SELECT amount INTO v_vat203 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='203.01';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC2 fee split + VAT GL codes',
      v_fee=5500 AND v_vat=500 AND v_net401=5000 AND v_vat203=500
@@ -67,7 +67,7 @@ BEGIN
 
   -- TC3: principal nets to 0 on wallet GL 201.01.001 → net DR = fee only (5500)
   SELECT sum(CASE tran_nature WHEN 'DR' THEN amount ELSE -amount END)
-    INTO v_net_wallet FROM wlt_batch WHERE tran_key=v_tfr AND gl_code='201.01.001';
+    INTO v_net_wallet FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='201.01.001';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC3 principal nets to 0 on 201.01.001 (only fee remains)',
      v_net_wallet = 5500, format('net DR on wallet GL = %s (expect 5500)', v_net_wallet));
@@ -90,11 +90,11 @@ BEGIN
   -- ════════════════════ FEE-FREE TRANSFER (TRFOUTF) ════════════════════
   SELECT tfr_internal_key, fee_gross INTO v_tfr, v_fee
     FROM post_transfer(v_a, v_b, 10000, 'ACCTT-FREE-1', 'TRFOUTF', '{}'::jsonb, 'MOBILE', 'test');
-  SELECT count(*) INTO v_legs FROM wlt_batch WHERE tran_key=v_tfr;
+  SELECT count(*) INTO v_legs FROM wlt_gl_batch WHERE tran_key=v_tfr;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC6 TRFOUTF: no fee, only 2 GL legs, no 401/203',
      v_fee=0 AND v_legs=2
-       AND NOT EXISTS(SELECT 1 FROM wlt_batch WHERE tran_key=v_tfr AND gl_code IN ('401.01','203.01')),
+       AND NOT EXISTS(SELECT 1 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code IN ('401.01','203.01')),
      format('fee=%s legs=%s', v_fee, v_legs));
 
   -- ════════════════════ TRANSFER FUND GUARD ════════════════════
@@ -115,20 +115,20 @@ BEGIN
   -- TC8: withdraw double-entry
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'),
          sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_dr, v_cr FROM wlt_batch WHERE tran_key=v_tfr;
+    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tfr;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC8 withdraw: ΣDR = ΣCR', v_dr=v_cr, format('DR=%s CR=%s', v_dr, v_cr));
 
   -- TC9: nostro CR leg = principal (escrow reduced by exactly the principal)
-  SELECT amount INTO v_nostro FROM wlt_batch
+  SELECT amount INTO v_nostro FROM wlt_gl_batch
     WHERE tran_key=v_tfr AND gl_code='101.02.001' AND tran_nature='CR';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC9 withdraw nostro CR = principal (200000)',
      v_nostro=200000, format('nostro CR=%s (expect 200000)', v_nostro));
 
   -- TC10: withdraw fee split (PERCENT 0.1% clamp min 11000 → 11000; net 10000 + VAT 1000)
-  SELECT amount INTO v_net401 FROM wlt_batch WHERE tran_key=v_tfr AND gl_code='401.01';
-  SELECT amount INTO v_vat203 FROM wlt_batch WHERE tran_key=v_tfr AND gl_code='203.01';
+  SELECT amount INTO v_net401 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='401.01';
+  SELECT amount INTO v_vat203 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='203.01';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC10 withdraw fee clamp + split',
      v_fee=11000 AND v_net401=10000 AND v_vat203=1000,
@@ -171,9 +171,9 @@ BEGIN
   -- TC14: reversal GL balanced (ΣDR=ΣCR) and wallet GL net-credited the full 211000
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'),
          sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_rev_dr, v_rev_cr FROM wlt_batch WHERE tran_key=v_rev;
+    INTO v_rev_dr, v_rev_cr FROM wlt_gl_batch WHERE tran_key=v_rev;
   SELECT sum(CASE tran_nature WHEN 'CR' THEN amount ELSE -amount END)
-    INTO v_net_wallet FROM wlt_batch WHERE tran_key=v_rev AND gl_code='201.01.001';
+    INTO v_net_wallet FROM wlt_gl_batch WHERE tran_key=v_rev AND gl_code='201.01.001';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC14 reversal GL balanced + wallet credited 211000',
      v_rev_dr=v_rev_cr AND v_net_wallet=211000,
@@ -183,8 +183,8 @@ BEGIN
   --       and revenue(401.01)/VAT(203.01) are reversed via DR legs (10000 / 1000)
   SELECT tran_amt INTO v_rvwd FROM wlt_tran_hist WHERE tfr_internal_key=v_rev AND tran_type='RVWD';
   SELECT tran_amt INTO v_rvfee_wallet FROM wlt_tran_hist WHERE tfr_internal_key=v_rev AND tran_type='RVFEE';
-  SELECT amount INTO v_dr401 FROM wlt_batch WHERE tran_key=v_rev AND gl_code='401.01' AND tran_nature='DR';
-  SELECT amount INTO v_dr203 FROM wlt_batch WHERE tran_key=v_rev AND gl_code='203.01' AND tran_nature='DR';
+  SELECT amount INTO v_dr401 FROM wlt_gl_batch WHERE tran_key=v_rev AND gl_code='401.01' AND tran_nature='DR';
+  SELECT amount INTO v_dr203 FROM wlt_gl_batch WHERE tran_key=v_rev AND gl_code='203.01' AND tran_nature='DR';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC15 RVWD/RVFEE refund fee + reverse revenue/VAT',
      v_rvwd=200000 AND v_rvfee_wallet=11000 AND v_dr401=10000 AND v_dr203=1000,

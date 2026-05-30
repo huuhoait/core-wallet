@@ -100,7 +100,7 @@ Build a **Core Wallet** system that manages e-wallet accounts and processes:
                            │
                 ┌──────────▼──────────────────────────────┐
                 │   Core Wallet Database (PostgreSQL 17)   │
-                │   WLT_ACCT • WLT_TRAN_HIST • WLT_BATCH   │
+                │   WLT_ACCT • WLT_TRAN_HIST • WLT_GL_BATCH   │
                 │   WLT_RESTRAINTS • WLT_ACCT_BAL          │
                 │   WLT_OUTBOX (transactional outbox) ★    │
                 │   WLT_WITHDRAW_TRACK (disbursement st.)★ │
@@ -153,7 +153,7 @@ Following the T24 model, the core wallet is split into **two data tiers**:
 │  TRANSACTIONAL TIER — WLT_*                                     │
 │  (state, transactions, balances — changes continuously)         │
 │                                                                  │
-│  WLT_ACCT • WLT_ACCT_BAL • WLT_TRAN_HIST • WLT_BATCH            │
+│  WLT_ACCT • WLT_ACCT_BAL • WLT_TRAN_HIST • WLT_GL_BATCH            │
 │  WLT_RESTRAINTS • WLT_API_MESSAGE • WLT_CLIENT_KYC              │
 │                          │                                       │
 │                          │ references (FK)                       │
@@ -200,7 +200,7 @@ WLT_ACCT.CLIENT_NO         ──FK──▶ FM_CLIENT.CLIENT_NO
 WLT_ACCT.CCY               ──FK──▶ FM_CURRENCY.CCY
 WLT_ACCT_TYPE.GL_CODE      ──FK──▶ FM_GL_MAST.GL_CODE
 WLT_NOSTRO_LINK.NOS_VOS_NO ──FK──▶ FM_NOS_VOS.NOS_VOS_NO
-WLT_BATCH.GL_CODE          ──FK──▶ FM_GL_MAST.GL_CODE
+WLT_GL_BATCH.GL_CODE          ──FK──▶ FM_GL_MAST.GL_CODE
 WLT_CLIENT_KYC.CLIENT_NO   ──FK──▶ FM_CLIENT.CLIENT_NO
 ```
 
@@ -217,7 +217,7 @@ WLT_CLIENT_KYC.CLIENT_NO   ──FK──▶ FM_CLIENT.CLIENT_NO
 | 3 | **Account Management** | WLT | Wallet CRUD, status, limit, restraint | Account module |
 | 4 | **Posting Engine** | WLT | 7-step posting pipeline, generate accounting entries | Transaction module |
 | 5 | **Fee & VAT Engine** | WLT | Compute fee (fixed/percent/tier), compute VAT, generate fee + VAT legs into the posting | Service charge (RB_SERV_CHARGE) |
-| 6 | **Ledger / GL Feed** | WLT→FM | Push `WLT_BATCH` to the GL via `FM_GL_MAST` | Accounting module |
+| 6 | **Ledger / GL Feed** | WLT→FM | Push `WLT_GL_BATCH` to the GL via `FM_GL_MAST` | Accounting module |
 | 7 | **Reconciliation** | WLT+FM | Reconcile nostro (`FM_NOS_VOS`) vs ledger, break detection | Recon module |
 | 8 | **Statement / Reporting** | WLT+FM | Customer statements, SBV reports, DW feed, **VAT report for the tax authority** | Statement module |
 | 9 | **Notification** | – | Push, SMS, email per event | Channel adapter |
@@ -235,7 +235,7 @@ WLT_CLIENT_KYC.CLIENT_NO   ──FK──▶ FM_CLIENT.CLIENT_NO
 │  Wallet & KYC                                                 │
 │    WLT_ACCT, WLT_ACCT_TYPE, WLT_ACCT_BAL, WLT_CLIENT_KYC     │
 │  Transaction & Fee/VAT config                                  │
-│    WLT_TRAN_DEF (with fee/VAT cols), WLT_TRAN_HIST, WLT_BATCH  │
+│    WLT_TRAN_DEF (with fee/VAT cols), WLT_TRAN_HIST, WLT_GL_BATCH  │
 │  Control                                                       │
 │    WLT_RESTRAINTS, WLT_API_MESSAGE, WLT_API_TRACE             │
 │    WLT_STMT_HEADER, WLT_STMT_DETAIL, WLT_OLTP_AUDIT          │
@@ -291,7 +291,7 @@ Treasury Service → POST /v1/transactions/topup (s2s auth)
                     → Posting Engine
                        ├─► Phase 1: validate (no lock) — status, tier, CR-restraint, limit
                        ├─► Phase 2: atomic UPDATE WLT_ACCT (+amount, VERSION++)
-                       │      └─► INSERT WLT_TRAN_HIST + WLT_BATCH (DR nostro / CR wallet)
+                       │      └─► INSERT WLT_TRAN_HIST + WLT_GL_BATCH (DR nostro / CR wallet)
                        └─► COMMIT → emit "topup.posted" Kafka → 200 POSTED
 ```
 
@@ -305,7 +305,7 @@ User A → App → API Gateway → Posting Engine (deferred locking)
                               │   ├─► UPDATE WLT_ACCT × 2 ordered by INTERNAL_KEY ASC
                               │   │      (atomic fund check + VERSION in WHERE)
                               │   ├─► INSERT WLT_TRAN_HIST × 3 (DR A, CR B, FEETRF A)
-                              │   ├─► INSERT WLT_BATCH × 5 (DR/CR core + 3 fee/VAT legs)
+                              │   ├─► INSERT WLT_GL_BATCH × 5 (DR/CR core + 3 fee/VAT legs)
                               │   ├─► UPSERT WLT_ACCT_BAL × 2
                               │   └─► COMMIT
                               └─► emit "transfer.posted" → 200 POSTED
@@ -320,7 +320,7 @@ User → App → POST /withdraw → Posting Engine (deferred locking)
               ├─► Phase 2 (atomic, single TX):
               │   ├─► UPDATE WLT_ACCT (-amount-fee, VERSION++)
               │   ├─► INSERT WLT_TRAN_HIST × 2 (WDRAW + FEEWD)
-              │   ├─► INSERT WLT_BATCH × 5 (DR wallet / CR internal nostro + fee/VAT)
+              │   ├─► INSERT WLT_GL_BATCH × 5 (DR wallet / CR internal nostro + fee/VAT)
               │   ├─► INSERT WLT_WITHDRAW_TRACK(STATUS='SUBMITTED', EXT_PAYOUT_REF,
               │   │           ACK_DEADLINE=NOW()+60s, FINAL_DEADLINE=NOW()+24h)
               │   ├─► INSERT WLT_OUTBOX(event='wallet.withdraw.posted.v1', ...)
@@ -339,7 +339,7 @@ Treasury notification (mechanism per Treasury spec) → calls one of:
   ├─► mark_withdraw_completed(ext_ref, napas_ref)   → STATUS='COMPLETED' (terminal)
   └─► post_withdraw_reversal(ext_ref, fail_code,    → STATUS='REVERSED' (terminal)
         fail_reason, 'TREASURY_FAILED')                + credit-back posted to customer
-                                                        + RVWD + RVFEE legs + WLT_BATCH reversed
+                                                        + RVWD + RVFEE legs + WLT_GL_BATCH reversed
                                                         + WLT_OUTBOX(event='wallet.withdraw.reversed.v1')
 
 [SLA safety net — IN SCOPE]
@@ -385,7 +385,7 @@ Customer sees: wallet A −1,005,500; wallet B +1,000,000.
    - `FEE_TYPE='PERCENT'` → `fee_gross = TRAN_AMT × FEE_RATE`, clamped to `[FEE_MIN, FEE_MAX]`
    - `FEE_TYPE='NONE'` → skip
 3. Split VAT: `vat_amt = fee_gross × VAT_RATE / (1 + VAT_RATE)`; `fee_net = fee_gross − vat_amt`.
-4. Generate DR wallet + CR `FEE_GL_CODE` + CR `VAT_GL_CODE` legs into `WLT_TRAN_HIST` (TRAN_TYPE = `FEE_TRAN_TYPE`, e.g. `FEETRF`) + `WLT_BATCH`.
+4. Generate DR wallet + CR `FEE_GL_CODE` + CR `VAT_GL_CODE` legs into `WLT_TRAN_HIST` (TRAN_TYPE = `FEE_TRAN_TYPE`, e.g. `FEETRF`) + `WLT_GL_BATCH`.
 5. VAT reporting queries directly from `WLT_TRAN_HIST` joined with `WLT_TRAN_DEF` for a given date range.
 
 **Periodic VAT remittance** (end of month): DR `GL 203.01 VAT payable` / CR `GL operational nostro` — transferring funds to the tax authority.
@@ -458,7 +458,7 @@ Every column in WLT and FM tables is tagged with one of four tiers. Classificati
 |------|-----------|-------------------------|
 | **P1 — Direct identifiers** | Identify an individual on their own | `FM_CLIENT_IDENTIFIERS.GLOBAL_ID` (CCCD, passport), `WLT_CLIENT_KYC.PHONE_NO`, `WLT_CLIENT_KYC.EMAIL`, `FM_CLIENT.CLIENT_NAME`, `FM_CLIENT_BANKS.ACCT_NO_ENC` |
 | **P2 — Quasi-identifiers** | Identifying when combined with other data | `FM_CLIENT_INDVL.BIRTH_DATE`, `FM_CLIENT_CONTACT.ADDR_*`, device fingerprint, IP, `TERMINAL_ID` |
-| **P3 — Sensitive financial** | Financial activity bound to identity | `WLT_ACCT.ACTUAL_BAL`, `WLT_TRAN_HIST.*`, `WLT_STMT_DETAIL.*`, `WLT_BATCH.*` |
+| **P3 — Sensitive financial** | Financial activity bound to identity | `WLT_ACCT.ACTUAL_BAL`, `WLT_TRAN_HIST.*`, `WLT_STMT_DETAIL.*`, `WLT_GL_BATCH.*` |
 | **P4 — Authentication secrets** | Credentials and crypto material | API client secrets, signing keys, OTP, session tokens, eKYC face-match templates |
 
 > Wallet `ACCT_NO` is treated as **P2** — it's not directly an identity but uniquely maps to one customer, and is exposed to counterparties on transfers.
@@ -591,7 +591,7 @@ This section defines how operational data flows out of the OLTP primary as it ag
 
 Assumptions: launch in Y1 with Year-1 volume from §11 Assumptions (50M tran/month), 50% YoY growth, ~5 GL legs per transaction (Fee + VAT model), ~1.05 wallets per active customer.
 
-| Year | Customers (active) | Tran/month | Tran/year | `WLT_TRAN_HIST` rows added | `WLT_BATCH` rows added | Daily balance snapshots |
+| Year | Customers (active) | Tran/month | Tran/year | `WLT_TRAN_HIST` rows added | `WLT_GL_BATCH` rows added | Daily balance snapshots |
 |------|--------------------|-----------|-----------|----------------------------|------------------------|--------------------------|
 | Y1 | 3M | 50M | 600M | 1.8B (×3 legs avg) | 3B | 1.1B |
 | Y2 | 5M | 75M | 900M | 2.7B | 4.5B | 1.8B |
@@ -605,7 +605,7 @@ Per-row storage (post LZ4 compression on `WLT_API_MESSAGE.TEXT` columns, dense f
 | Table | Avg row bytes (data+index) | 5Y total |
 |-------|---------------------------|----------|
 | `WLT_TRAN_HIST` | ~280 B | ~6.6 TB |
-| `WLT_BATCH` | ~110 B | ~4.3 TB |
+| `WLT_GL_BATCH` | ~110 B | ~4.3 TB |
 | `WLT_ACCT_BAL` | ~90 B | ~1.3 TB |
 | `WLT_API_MESSAGE` (payload ~600B LZ4'd) | ~700 B | ~5.5 TB |
 | `WLT_PII_ACCESS_LOG`, `WLT_OLTP_AUDIT`, `WLT_SWEEP_LOG` | mixed | ~1.5 TB |
@@ -652,7 +652,7 @@ Tier boundaries are configurable per table (next section). The 13-month hot wind
 | Table | Hot (OLTP primary) | Warm (cold replica / detached) | Cold (object storage) | Archive | Notes |
 |-------|--------------------|-------------------------------|----------------------|---------|-------|
 | `WLT_TRAN_HIST` | 13 months | months 14–36 | year 4–7 in Parquet | year 8–10 Deep Archive | Drives most volume; partition by month + hash 32 |
-| `WLT_BATCH` | 13 months | months 14–24 | year 3–7 | year 8–10 | Once posted to GL and reconciled (T+1), only kept for audit |
+| `WLT_GL_BATCH` | 13 months | months 14–24 | year 3–7 | year 8–10 | Once posted to GL and reconciled (T+1), only kept for audit |
 | `WLT_ACCT_BAL` | 13 months daily | months 14–24 daily | year 3+ keep only month-end snapshot | – | Daily granularity not needed beyond 2 years; collapse to monthly |
 | `WLT_API_MESSAGE` | **90 days** | – | year 1+ Parquet (request/response bodies stripped of PII at export time) | year 8–10 | Idempotency window short; payloads expensive to keep hot |
 | `WLT_API_TRACE` | **30 days** | – | year 1+ in OpenSearch warm, then S3 | drop at 2 years | Trace data, not a compliance record |

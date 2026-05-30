@@ -120,7 +120,7 @@ BEGIN
      v_settle.GROUP_ID);
 
   -- GL: both MERCHANT wallets → 201.02.001; DR shard / CR settlement (net 0)
-  INSERT INTO WLT_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY,
+  INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY,
                          AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
   VALUES
     (v_tfr, 1, '201.02.001', v_shard.CLIENT_NO,  v_shard.INTERNAL_KEY,  v_swept, 'DR', v_shard.CCY,  'SWEEP-'||v_tfr, CURRENT_DATE, CURRENT_DATE),
@@ -291,12 +291,12 @@ BEGIN
   -- GL: DR settlement liability / CR nostro + fee legs. Resolve the liability GL
   -- into a variable first (the FK is checked at INSERT, so it must be a real code).
   SELECT GL_CODE_LIAB INTO v_liab_gl FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_settle.ACCT_TYPE;
-  INSERT INTO WLT_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+  INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
   VALUES
     (v_tfr, 1, v_liab_gl,            v_settle.CLIENT_NO, v_settle.INTERNAL_KEY, p_amount, 'DR', v_settle.CCY, p_reference, CURRENT_DATE, CURRENT_DATE),
     (v_tfr, 2, v_def.CONTRA_GL_CODE, v_settle.CLIENT_NO, v_settle.INTERNAL_KEY, p_amount, 'CR', v_settle.CCY, p_reference, CURRENT_DATE, CURRENT_DATE);
   IF v_fee > 0 THEN
-    INSERT INTO WLT_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+    INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
     VALUES
       (v_tfr, 3, v_liab_gl,         v_settle.CLIENT_NO, v_settle.INTERNAL_KEY, v_fee, 'DR', v_settle.CCY, p_reference, CURRENT_DATE, CURRENT_DATE),
       (v_tfr, 4, v_def.FEE_GL_CODE, v_settle.CLIENT_NO, v_settle.INTERNAL_KEY, v_net, 'CR', v_settle.CCY, p_reference, CURRENT_DATE, CURRENT_DATE),
@@ -423,12 +423,12 @@ BEGIN
   END IF;
 
   -- GL flip: DR nostro / CR settlement (principal); fee: DR 401.02 + DR 203.01 / CR settlement
-  INSERT INTO WLT_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+  INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
   VALUES
     (v_rev_tfr, 1, v_def.CONTRA_GL_CODE, v_settle.CLIENT_NO, v_settle.INTERNAL_KEY, v_amt, 'DR', v_settle.CCY, v_rref, CURRENT_DATE, CURRENT_DATE),
     (v_rev_tfr, 2, v_liab_gl,            v_settle.CLIENT_NO, v_settle.INTERNAL_KEY, v_amt, 'CR', v_settle.CCY, v_rref, CURRENT_DATE, CURRENT_DATE);
   IF v_fee > 0 THEN
-    INSERT INTO WLT_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+    INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
     VALUES
       (v_rev_tfr, 3, v_def.FEE_GL_CODE, v_settle.CLIENT_NO, v_settle.INTERNAL_KEY, v_net, 'DR', v_settle.CCY, v_rref, CURRENT_DATE, CURRENT_DATE),
       (v_rev_tfr, 4, v_def.VAT_GL_CODE, v_settle.CLIENT_NO, v_settle.INTERNAL_KEY, v_vat, 'DR', v_settle.CCY, v_rref, CURRENT_DATE, CURRENT_DATE),

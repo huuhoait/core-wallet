@@ -51,7 +51,7 @@ erDiagram
     FM_CLIENT ||--o{ WLT_ACCT : "owns wallet"
     FM_CURRENCY ||--o{ WLT_ACCT : "CCY"
     FM_GL_MAST ||--o{ WLT_ACCT_TYPE : "liability GL"
-    FM_GL_MAST ||--o{ WLT_BATCH : "GL feed target"
+    FM_GL_MAST ||--o{ WLT_GL_BATCH : "GL feed target"
     FM_GL_MAST ||--o{ WLT_GL_MAP : "GL ref"
     FM_NOS_VOS ||--o{ WLT_NOSTRO_LINK : "links to wallet ledger"
     FM_NOS_VOS ||--o{ WLT_NOSTRO_BAL : "daily snapshot"
@@ -66,7 +66,7 @@ erDiagram
     WLT_ACCT ||--o{ WLT_RESTRAINTS : "acct-level scope"
     WLT_ACCT ||--o{ WLT_STMT_DETAIL : "appears on"
     WLT_TRAN_DEF ||--o{ WLT_TRAN_HIST : "type ref"
-    WLT_TRAN_HIST ||--o{ WLT_BATCH : "GL entries"
+    WLT_TRAN_HIST ||--o{ WLT_GL_BATCH : "GL entries"
     WLT_NOSTRO_BAL ||--o{ WLT_RECON_BREAK : "break vs ledger"
     WLT_API_MESSAGE ||--o{ WLT_TRAN_HIST : "originates"
     WLT_API_MESSAGE ||--o{ WLT_API_TRACE : "trace"
@@ -251,7 +251,7 @@ erDiagram
         VARCHAR     APPROVAL_REF
     }
 
-    WLT_BATCH {
+    WLT_GL_BATCH {
         BIGINT  TRAN_KEY PK
         BIGINT  SEQ_NO PK
         VARCHAR GL_CODE
@@ -307,7 +307,7 @@ erDiagram
 - 1 `FM_CLIENT` → 1 `WLT_CLIENT_KYC` (KYC tier per client)
 - 1 `WLT_ACCT` → 1 row/day in `WLT_ACCT_BAL` (snapshot)
 - 1 transfer transaction → 2 `WLT_TRAN_HIST` rows linked by `TFR_INTERNAL_KEY`
-- 1 `WLT_TRAN_HIST` → ≥ 2 `WLT_BATCH` rows (double-entry into GL)
+- 1 `WLT_TRAN_HIST` → ≥ 2 `WLT_GL_BATCH` rows (double-entry into GL)
 - 1 `FM_NOS_VOS` → 1 corresponding `FM_GL_MAST.GL_CODE` (each nostro has 1 GL)
 - 1 posting transaction → 1 `WLT_OUTBOX` row (atomic with `WLT_TRAN_HIST` insert; ≥ 2 for fee/VAT-carrying transfers if downstream needs per-leg events)
 - 1 withdraw transaction → 1 `WLT_WITHDRAW_TRACK` row (keyed by `EXT_PAYOUT_REF`; non-withdraw transactions have no track row)
@@ -920,10 +920,10 @@ WHERE r.STATUS = 'A'
   AND CURRENT_DATE BETWEEN r.START_DATE AND COALESCE(r.END_DATE, '9999-12-31');
 ```
 
-### 2.7 WLT_BATCH (GL feed — FK to FM_GL_MAST)
+### 2.7 WLT_GL_BATCH (GL feed — FK to FM_GL_MAST)
 
 ```sql
-CREATE TABLE WLT_BATCH (
+CREATE TABLE WLT_GL_BATCH (
   TRAN_KEY          BIGINT        NOT NULL,
   SEQ_NO            BIGINT        NOT NULL,
   GL_CODE           VARCHAR(32)   NOT NULL,        -- → FM_GL_MAST
@@ -940,14 +940,14 @@ CREATE TABLE WLT_BATCH (
   STATUS            VARCHAR(4)    DEFAULT 'P',
   TIME_STAMP        TIMESTAMPTZ   DEFAULT NOW(),
   PRIMARY KEY (TRAN_KEY, SEQ_NO),
-  CONSTRAINT fk_batch_gl     FOREIGN KEY (GL_CODE) REFERENCES FM_GL_MAST(GL_CODE),
-  CONSTRAINT fk_batch_ccy    FOREIGN KEY (CCY)     REFERENCES FM_CURRENCY(CCY),
-  CONSTRAINT chk_batch_nat   CHECK (TRAN_NATURE IN ('DR','CR'))
+  CONSTRAINT fk_gl_batch_gl     FOREIGN KEY (GL_CODE) REFERENCES FM_GL_MAST(GL_CODE),
+  CONSTRAINT fk_gl_batch_ccy    FOREIGN KEY (CCY)     REFERENCES FM_CURRENCY(CCY),
+  CONSTRAINT chk_gl_batch_nat   CHECK (TRAN_NATURE IN ('DR','CR'))
 );
 
-CREATE INDEX idx_batch_gl_date ON WLT_BATCH(GL_CODE, POST_DATE);
-CREATE INDEX idx_batch_ref     ON WLT_BATCH(REFERENCE);
-CREATE INDEX idx_batch_acct    ON WLT_BATCH(ACCT_INTERNAL_KEY, POST_DATE);
+CREATE INDEX idx_gl_batch_gl_date ON WLT_GL_BATCH(GL_CODE, POST_DATE);
+CREATE INDEX idx_gl_batch_ref     ON WLT_GL_BATCH(REFERENCE);
+CREATE INDEX idx_gl_batch_acct    ON WLT_GL_BATCH(ACCT_INTERNAL_KEY, POST_DATE);
 ```
 
 ### 2.8 WLT_NOSTRO_LINK + WLT_NOSTRO_BAL (replaces the old WLT_NOSTRO_MASTER)
@@ -1026,7 +1026,7 @@ ALTER TABLE WLT_API_MESSAGE ALTER COLUMN OBJECT_RESPONE_DATA SET COMPRESSION lz4
 
 ### 2.11 WLT_OUTBOX (transactional outbox — atomic event emission)
 
-**Problem solved**: prior to v1.6.5, posting SPs committed to PG and then the Go layer produced to Kafka in a second step. A crash between commit and produce silently dropped events — Treasury could miss a `withdraw.posted`, notifications could miss a transfer, fraud monitoring could miss a top-up. The fix: write a row to `WLT_OUTBOX` **inside the same transaction** that writes `WLT_TRAN_HIST` + `WLT_BATCH` + `WLT_ACCT`. A separate relay process ships outbox rows to Kafka at-least-once, with consumers idempotent on `EVENT_UUID`.
+**Problem solved**: prior to v1.6.5, posting SPs committed to PG and then the Go layer produced to Kafka in a second step. A crash between commit and produce silently dropped events — Treasury could miss a `withdraw.posted`, notifications could miss a transfer, fraud monitoring could miss a top-up. The fix: write a row to `WLT_OUTBOX` **inside the same transaction** that writes `WLT_TRAN_HIST` + `WLT_GL_BATCH` + `WLT_ACCT`. A separate relay process ships outbox rows to Kafka at-least-once, with consumers idempotent on `EVENT_UUID`.
 
 **Invariant**: a Kafka event exists **iff** the corresponding `WLT_TRAN_HIST` rows exist. Neither side can drift.
 
@@ -1185,7 +1185,7 @@ BEGIN
   -- Phase 2: atomic posting — existing logic
   v_tfr_key := nextval('seq_tfr');
   INSERT INTO WLT_TRAN_HIST (...) VALUES (...);
-  INSERT INTO WLT_BATCH (...) VALUES (...);
+  INSERT INTO WLT_GL_BATCH (...) VALUES (...);
   UPDATE WLT_ACCT SET ACTUAL_BAL = ACTUAL_BAL - p_amount, VERSION = VERSION + 1
    WHERE ACCT_NO = p_acct_no AND VERSION = ...;
   INSERT INTO WLT_WITHDRAW_TRACK (...) VALUES (...);   -- see §2.12
@@ -1316,7 +1316,7 @@ BEGIN
     FROM WLT_TRAN_HIST
    WHERE TFR_INTERNAL_KEY = v_track.TFR_INTERNAL_KEY
      AND TRAN_TYPE IN ('WDRAW','FEEWD');
-  -- ...matching WLT_BATCH legs flipped DR↔CR...
+  -- ...matching WLT_GL_BATCH legs flipped DR↔CR...
   -- Credit the customer wallet
   UPDATE WLT_ACCT SET ACTUAL_BAL = ACTUAL_BAL + v_track.AMOUNT + v_track.FEE_GROSS,
                        VERSION   = VERSION + 1,

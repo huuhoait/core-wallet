@@ -72,7 +72,7 @@ Build a **Core Wallet** system that manages e-wallet accounts and processes:
 | Active customers | 1–2M |
 | Active wallets | 1–2M (ratio ~1.05) |
 | WLT_TRAN_HIST growth | ~6 GB/year (3 legs × ~280 B × 25M tran/month avg) |
-| WLT_BATCH growth | ~10 GB/year (5 GL legs × ~110 B) |
+| WLT_GL_BATCH growth | ~10 GB/year (5 GL legs × ~110 B) |
 | Total OLTP DB size Y1 | ~25–35 GB |
 | Total OLTP DB size Y2 | ~70 GB (with 3× growth) |
 
@@ -263,9 +263,9 @@ erDiagram
     FM_CLIENT             ||--o{ WLT_ACCT_GROUP         : "owns merchant/agent group"
     FM_CLIENT             ||--o{ WLT_CLIENT_AUDIT_LOG   : "change history"
     FM_CURRENCY           ||--o{ WLT_ACCT               : "ccy"
-    FM_CURRENCY           ||--o{ WLT_BATCH              : "ccy"
+    FM_CURRENCY           ||--o{ WLT_GL_BATCH              : "ccy"
     FM_GL_MAST            ||--o{ WLT_ACCT_TYPE          : "liability GL"
-    FM_GL_MAST            ||--o{ WLT_BATCH              : "GL feed target"
+    FM_GL_MAST            ||--o{ WLT_GL_BATCH              : "GL feed target"
     FM_GL_MAST            ||--o{ WLT_GL_MAP             : "GL ref"
     FM_GL_MAST            ||--o{ WLT_TRAN_DEF           : "fee/VAT GL"
     FM_NOS_VOS            ||--|| WLT_NOSTRO_LINK        : "nostro alias"
@@ -282,7 +282,7 @@ erDiagram
     WLT_ACCT              ||--o{ WLT_ACCT_BAL           : "daily snapshot"
     WLT_ACCT              ||--o{ WLT_TRAN_HIST          : "posts"
     WLT_ACCT              ||--o{ WLT_RESTRAINTS         : "acct-level scope"
-    WLT_TRAN_HIST         ||--o{ WLT_BATCH              : "GL legs"
+    WLT_TRAN_HIST         ||--o{ WLT_GL_BATCH              : "GL legs"
     WLT_TRAN_HIST         ||--o| WLT_WITHDRAW_TRACK     : "disbursement state (withdraw only)"
     WLT_TRAN_HIST         ||--o{ WLT_OUTBOX             : "emits event (same TX)"
     WLT_API_MESSAGE       ||--o{ WLT_TRAN_HIST          : "idempotency origin"
@@ -415,7 +415,7 @@ erDiagram
         JSONB   METADATA
         JSONB   CLIENT_INFO
     }
-    WLT_BATCH {
+    WLT_GL_BATCH {
         BIGINT  TRAN_KEY PK
         BIGINT  SEQ_NO PK
         VARCHAR GL_CODE FK
@@ -511,7 +511,7 @@ erDiagram
 > Cardinality cheatsheet:
 > - 1 `FM_CLIENT` → N `WLT_ACCT` (one customer, multiple wallets)
 > - 1 transfer transaction → 3 `WLT_TRAN_HIST` rows (DR + CR + FEETRF) linked by `TFR_INTERNAL_KEY`
-> - 1 withdraw transaction → 2 `WLT_TRAN_HIST` + 1 `WLT_WITHDRAW_TRACK` + 5 `WLT_BATCH` + 1 `WLT_OUTBOX`
+> - 1 withdraw transaction → 2 `WLT_TRAN_HIST` + 1 `WLT_WITHDRAW_TRACK` + 5 `WLT_GL_BATCH` + 1 `WLT_OUTBOX`
 > - 1 atomic posting → exactly 1 `WLT_OUTBOX` row (`AGGREGATE_ID = TFR_INTERNAL_KEY`)
 > - 1 client-table mutation → 1 `WLT_CLIENT_AUDIT_LOG` row (via trigger)
 
@@ -527,7 +527,7 @@ WLT TIER
   Master:      WLT_ACCT_TYPE, WLT_CLIENT_KYC, WLT_TRAN_DEF, WLT_GL_MAP,
                WLT_NOSTRO_LINK, WLT_ACCT_GROUP
   Account:     WLT_ACCT, WLT_ACCT_BAL
-  Ledger:      WLT_TRAN_HIST, WLT_BATCH
+  Ledger:      WLT_TRAN_HIST, WLT_GL_BATCH
   Control:     WLT_RESTRAINTS, WLT_API_MESSAGE
   Async:       WLT_OUTBOX, WLT_WITHDRAW_TRACK
   Audit:       WLT_CLIENT_AUDIT_LOG, WLT_SWEEP_LOG
@@ -573,7 +573,7 @@ Treasury Service → POST /v1/transactions/topup (s2s auth)
                        ├─► Phase 2: atomic
                        │   ├─► UPDATE WLT_ACCT (+amount, VERSION++)
                        │   ├─► INSERT WLT_TRAN_HIST × 1 (TOPUP)
-                       │   ├─► INSERT WLT_BATCH × 2 (DR nostro / CR wallet)
+                       │   ├─► INSERT WLT_GL_BATCH × 2 (DR nostro / CR wallet)
                        │   ├─► INSERT WLT_OUTBOX
                        │   └─► COMMIT
                        └─► 200 POSTED
@@ -587,7 +587,7 @@ User A → App → API GW → post_transfer SP
                          ├─► Phase 2: atomic
                          │   ├─► UPDATE WLT_ACCT × 2 ordered by INTERNAL_KEY ASC
                          │   ├─► INSERT WLT_TRAN_HIST × 3 (DR A, CR B, FEETRF A)
-                         │   ├─► INSERT WLT_BATCH × 5 (DR/CR + 3 fee/VAT legs)
+                         │   ├─► INSERT WLT_GL_BATCH × 5 (DR/CR + 3 fee/VAT legs)
                          │   ├─► UPSERT WLT_ACCT_BAL × 2
                          │   ├─► INSERT WLT_OUTBOX
                          │   └─► COMMIT
@@ -603,7 +603,7 @@ User → App → POST /withdraw → post_withdraw SP
               ├─► Phase 2: atomic
               │   ├─► UPDATE WLT_ACCT (-amount-fee, VERSION++)
               │   ├─► INSERT WLT_TRAN_HIST × 2 (WDRAW + FEEWD)
-              │   ├─► INSERT WLT_BATCH × 5
+              │   ├─► INSERT WLT_GL_BATCH × 5
               │   ├─► INSERT WLT_WITHDRAW_TRACK(STATUS='SUBMITTED',
               │   │           ACK_DEADLINE=NOW()+60s, FINAL_DEADLINE=NOW()+24h)
               │   ├─► INSERT WLT_OUTBOX(event='wallet.withdraw.posted.v1')

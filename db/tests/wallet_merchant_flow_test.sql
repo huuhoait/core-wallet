@@ -72,9 +72,9 @@ BEGIN
 
   -- ───── TC4: MERCHWD GL balanced + fee split (401.02/203.01) ─────
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'), sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_dr, v_cr FROM wlt_batch WHERE tran_key=v_tfr;
-  SELECT amount INTO v_nostro FROM wlt_batch WHERE tran_key=v_tfr AND gl_code='101.02.001' AND tran_nature='CR';
-  SELECT amount INTO v_net FROM wlt_batch WHERE tran_key=v_tfr AND gl_code='401.02' AND tran_nature='CR';
+    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tfr;
+  SELECT amount INTO v_nostro FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='101.02.001' AND tran_nature='CR';
+  SELECT amount INTO v_net FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='401.02' AND tran_nature='CR';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC4 MERCHWD GL balanced + nostro=principal + fee→401.02/203.01',
      v_dr=v_cr AND v_nostro=1000000 AND v_net=20000 AND v_vat=2000,
@@ -123,7 +123,7 @@ BEGIN
     FROM post_merchant_withdraw_reversal('MWD-GA-1', 'NAPAS_TIMEOUT', 'payout failed', 'TREASURY_FAILED', 'SYS', 'test');
   SELECT actual_bal INTO v_setpost FROM wlt_acct WHERE acct_no='MCH01S';
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'), sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_revdr, v_revcr FROM wlt_batch WHERE tran_key=v_revtfr;
+    INTO v_revdr, v_revcr FROM wlt_gl_batch WHERE tran_key=v_revtfr;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC9 revert merchant withdraw: restore principal+fee, GL balanced',
      v_already=false AND v_setpost=(v_setpre+1022000) AND v_revdr=v_revcr AND v_revdr=1022000,

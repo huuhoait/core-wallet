@@ -2,7 +2,7 @@
 
 **Version:** 1.0 (2026-05-29)
 **Scope:** Independent e-wallet (NĐ 52/2024, TT 23/2019 NHNN) — VND, Year 1
-**Applies to:** `FM_GL_MAST`, `WLT_TRAN_DEF`, `WLT_GL_MAP`, `WLT_ACCT_TYPE`, `WLT_BATCH`
+**Applies to:** `FM_GL_MAST`, `WLT_TRAN_DEF`, `WLT_GL_MAP`, `WLT_ACCT_TYPE`, `WLT_GL_BATCH`
 **Seed:** [wallet_coa_seed.sql](../wallet_coa_seed.sql) · **Exports:** [wallet_coa.csv](wallet_coa.csv) · [wallet_coa.json](wallet_coa.json)
 **Status:** Applied to `wallet` DB (62 accounts). Extends the 14-account minimal set in [wallet_schema.sql](../wallet_schema.sql) §11.
 
@@ -13,7 +13,7 @@
 | # | Principle | Implication in this ledger |
 |---|-----------|----------------------------|
 | 1 | Customer wallet balance is a **liability** of WalletCo, not revenue | `201.01.*`, `201.02.*` are class-`L` accounts |
-| 2 | **Double-entry**: every operation balances Σ DR = Σ CR | Posting engine writes ≥2 `WLT_BATCH` legs per `TFR_INTERNAL_KEY` |
+| 2 | **Double-entry**: every operation balances Σ DR = Σ CR | Posting engine writes ≥2 `WLT_GL_BATCH` legs per `TFR_INTERNAL_KEY` |
 | 3 | **TKĐBTT (escrow) ≥ total real wallet balance** (SBV) | Invariant: `Σ(101.01.*)+Σ(101.02.*) ≥ Σ(201.01.*+201.02.*)` |
 | 4 | Money "in transit" never nets directly — it parks in **clearing/suspense** | `109.*` accounts; must drain to 0 each EOD |
 | 5 | Promotional money is **not escrow-backed** | `201.03.*` funded by expense `502.01`, excluded from invariant #3 |
@@ -171,7 +171,7 @@ Added by this COA (inert until referenced by an SP): `PROMO_CR`→201.03.001, `P
 | # | Control | Rule | On breach |
 |---|---------|------|-----------|
 | C1 | **Escrow coverage (SBV)** | `Σ(101.01.*)+Σ(101.02.*) ≥ Σ(201.01.*+201.02.*)` | Block payouts; alert Treasury |
-| C2 | **Ledger balance** | `Σ DR = Σ CR` across all `WLT_BATCH` | Halt posting; investigate |
+| C2 | **Ledger balance** | `Σ DR = Σ CR` across all `WLT_GL_BATCH` | Halt posting; investigate |
 | C3 | **Clearing drains** | `109.01/02/03.* = 0` at EOD | Residual = stuck txn → ops queue |
 | C4 | **Bank reconciliation** | ledger `101.01.*` = MT940 statement | Diff → park in `109.04.009`, resolve |
 | C5 | **Promo segregation** | `201.03.*` excluded from C1 | Misclassification audit |

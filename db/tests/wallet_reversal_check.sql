@@ -85,7 +85,7 @@ checks(ord, area, name, ok, detail) AS (
   UNION ALL
   SELECT 4,'R4','Mỗi reversal cân (ΣDR=ΣCR)', count(*)=0,
          format('%s reversal lệch double-entry', count(*))
-  FROM (SELECT b.tran_key FROM wlt_batch b
+  FROM (SELECT b.tran_key FROM wlt_gl_batch b
         WHERE b.tran_key IN (SELECT rev_key FROM rev)
         GROUP BY b.tran_key
         HAVING sum(CASE b.tran_nature WHEN 'DR' THEN b.amount ELSE -b.amount END)<>0) y

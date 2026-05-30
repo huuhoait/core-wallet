@@ -13,7 +13,7 @@
 --     customers : fm_client, fm_client_indvl, fm_client_identifiers,
 --                 fm_client_contact, fm_client_banks, wlt_client_kyc
 --     accounts  : wlt_acct, wlt_acct_group, wlt_acct_bal*, wlt_restraints
---     postings  : wlt_batch
+--     postings  : wlt_gl_batch
 --     tran hist : wlt_tran_hist*        (* = partitioned)
 --     outbox    : wlt_outbox*
 --     ops/other : wlt_api_message, wlt_withdraw_track,
@@ -74,7 +74,7 @@ TRUNCATE TABLE
     wlt_acct_bal,            -- partitioned (monthly)
     wlt_restraints,
     -- Posting / GL movements
-    wlt_batch,
+    wlt_gl_batch,
     -- Transaction history (partitioned: month -> hour)
     wlt_tran_hist,
     -- Outbox events (partitioned)

@@ -27,7 +27,7 @@ BEGIN
   SELECT actual_bal INTO a1 FROM wlt_acct WHERE internal_key=ka;
   SELECT actual_bal INTO b1 FROM wlt_acct WHERE internal_key=kb;
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'), sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_dr, v_cr FROM wlt_batch WHERE tran_key=v_rev;
+    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_rev;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC1 transfer revert restores A(+amt+fee) & B(−amt), GL balanced',
      v_already=false AND a1=a0 AND b1=b0 AND v_dr=v_cr AND v_dr=105500,

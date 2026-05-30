@@ -51,11 +51,11 @@ a AS (
            coalesce(sum(amount) FILTER(WHERE tran_nature='DR'),0),
            coalesce(sum(amount) FILTER(WHERE tran_nature='CR'),0),
            coalesce(sum(CASE tran_nature WHEN 'DR' THEN amount ELSE -amount END),0)) detail
-  FROM wlt_batch
+  FROM wlt_gl_batch
 ),
 b AS (
   SELECT count(*)=0 ok, format('%s tran_key lệch', count(*)) detail
-  FROM (SELECT tran_key FROM wlt_batch GROUP BY tran_key
+  FROM (SELECT tran_key FROM wlt_gl_batch GROUP BY tran_key
         HAVING sum(CASE tran_nature WHEN 'DR' THEN amount ELSE -amount END)<>0) x
 ),
 c AS (
@@ -67,7 +67,7 @@ c AS (
            CASE WHEN m.gl_code_type IN ('A','E')
                 THEN sum(CASE b.tran_nature WHEN 'DR' THEN b.amount ELSE -b.amount END)>=0
                 ELSE sum(CASE b.tran_nature WHEN 'DR' THEN b.amount ELSE -b.amount END)<=0 END side_ok
-    FROM wlt_batch b JOIN fm_gl_mast m USING(gl_code)
+    FROM wlt_gl_batch b JOIN fm_gl_mast m USING(gl_code)
     WHERE m.gl_code_type IS NOT NULL
     GROUP BY b.gl_code, m.gl_code_type) s
 ),
@@ -93,7 +93,7 @@ g AS (
 ),
 h AS (
   SELECT count(*)=0 ok, format('%s leg sai GL ví', count(*)) detail
-  FROM wlt_batch b JOIN wlt_acct a ON a.internal_key=b.acct_internal_key
+  FROM wlt_gl_batch b JOIN wlt_acct a ON a.internal_key=b.acct_internal_key
   WHERE b.gl_code IN ('201.01.001','201.02.001')
     AND ((a.acct_type='CONSUMER' AND b.gl_code<>'201.01.001')
       OR (a.acct_type='MERCHANT' AND b.gl_code<>'201.02.001'))
@@ -103,9 +103,9 @@ i AS (
          format('VAT=%s net=%s tỉ lệ=%s (n=%s)', vat, net,
                 CASE WHEN net=0 THEN NULL ELSE round(vat/net,4) END, nfee) detail
   FROM (
-    SELECT coalesce((SELECT sum(amount) FROM wlt_batch WHERE gl_code='203.01' AND tran_nature='CR'),0) vat,
-           coalesce((SELECT sum(amount) FROM wlt_batch WHERE gl_code IN ('401.01','401.02') AND tran_nature='CR'),0) net,
-           (SELECT count(*) FROM wlt_batch WHERE gl_code='203.01' AND tran_nature='CR') nfee) v
+    SELECT coalesce((SELECT sum(amount) FROM wlt_gl_batch WHERE gl_code='203.01' AND tran_nature='CR'),0) vat,
+           coalesce((SELECT sum(amount) FROM wlt_gl_batch WHERE gl_code IN ('401.01','401.02') AND tran_nature='CR'),0) net,
+           (SELECT count(*) FROM wlt_gl_batch WHERE gl_code='203.01' AND tran_nature='CR') nfee) v
 ),
 j AS (
   SELECT asset_dr >= cust_liab ok,
@@ -113,9 +113,9 @@ j AS (
                 asset_dr, cust_liab, asset_dr-cust_liab) detail
   FROM (
     SELECT coalesce((SELECT sum(CASE tran_nature WHEN 'DR' THEN amount ELSE -amount END)
-                     FROM wlt_batch WHERE gl_code LIKE '101%'),0) asset_dr,
+                     FROM wlt_gl_batch WHERE gl_code LIKE '101%'),0) asset_dr,
            coalesce((SELECT -sum(CASE tran_nature WHEN 'DR' THEN amount ELSE -amount END)
-                     FROM wlt_batch WHERE gl_code LIKE '201%' OR gl_code LIKE '204%'),0) cust_liab) s
+                     FROM wlt_gl_batch WHERE gl_code LIKE '201%' OR gl_code LIKE '204%'),0) cust_liab) s
 ),
 k AS (
   SELECT count(*)=0 ok, format('%s ví vi phạm', count(*)) detail
@@ -129,7 +129,7 @@ l AS (
     SELECT f.types,
            coalesce(sum(b.amount) FILTER(WHERE b.tran_nature='DR'),0) dr,
            coalesce(sum(b.amount) FILTER(WHERE b.tran_nature='CR'),0) cr
-    FROM wlt_batch b JOIN flow f ON f.tk=b.tran_key
+    FROM wlt_gl_batch b JOIN flow f ON f.tk=b.tran_key
     GROUP BY f.types) g
 ),
 -- M. Phân loại GL phí: merchant-WD→401.02, transfer/consumer-WD→401.01
@@ -139,14 +139,14 @@ m AS (
   FROM (
     SELECT count(*) FILTER(WHERE f.types LIKE '%MERCHWD%' AND b.gl_code='401.01') wrong_mw,
            count(*) FILTER(WHERE f.types NOT LIKE '%MERCHWD%' AND b.gl_code='401.02') wrong_other
-    FROM wlt_batch b JOIN flow f ON f.tk=b.tran_key
+    FROM wlt_gl_batch b JOIN flow f ON f.tk=b.tran_key
     WHERE b.gl_code IN ('401.01','401.02')) z
 ),
 checks(ord, area, name, ok, detail) AS (
   SELECT  0,'—','CONTEXT', TRUE,
           format('period từ %s | ví=%s | batch_legs=%s',
                  date_trunc('month', CURRENT_DATE)::date,
-                 (SELECT count(*) FROM wlt_acct), (SELECT count(*) FROM wlt_batch))
+                 (SELECT count(*) FROM wlt_acct), (SELECT count(*) FROM wlt_gl_batch))
   UNION ALL SELECT  1,'A','Trial balance ΣDR=ΣCR',            ok,detail FROM a
   UNION ALL SELECT  2,'B','Double-entry mỗi giao dịch',        ok,detail FROM b
   UNION ALL SELECT  3,'C','Bản chất Nợ/Có của GL',            ok,detail FROM c

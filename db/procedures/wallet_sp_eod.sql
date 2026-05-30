@@ -22,7 +22,7 @@
 --                                index), depends on T1.
 --   eod_expire_restraints(D) T5  Auto-expire WLT_RESTRAINTS past END_DATE and
 --                                recompute the few affected WLT_ACCT aggregates.
---   eod_gl_feed_post(D)      T3  Finalise the GL feed: WLT_BATCH 'P' → 'S' for D,
+--   eod_gl_feed_post(D)      T3  Finalise the GL feed: WLT_GL_BATCH 'P' → 'S' for D,
 --                                chunked + restart-safe. Hand-off-ready journal.
 --   eod_trial_balance(D)     T6  Daily GL trial balance + tamper-evident hash
 --                                chain proof (US-6.3).
@@ -84,7 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_eod_log_date ON WLT_EOD_AUDIT_LOG (biz_date, task
 -- (US-6.3) stay immutable and a cross-period reversal (US-3.7) provably lands in
 -- the OPEN period (reversals use POST_DATE = CURRENT_DATE, always > the
 -- high-water mark once a day is closed AFTER its midnight roll).
---   NOTE: the freeze triggers attach to base-schema tables (WLT_BATCH,
+--   NOTE: the freeze triggers attach to base-schema tables (WLT_GL_BATCH,
 --   WLT_TRAN_HIST). They are mirrored — byte-identical — in the tracked migration
 --   db/migrations/2026-05-30_eod_period_locking_gl_feed.sql (the prod artifact,
 --   which also hardens grants onto wallet_eod). Keep both copies in sync.
@@ -110,7 +110,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- fn_freeze_closed_period — full-immutability guard on the books (WLT_TRAN_HIST,
--- WLT_BATCH). Once a day is sealed (POST_DATE <= high-water) its rows can no
+-- WLT_GL_BATCH). Once a day is sealed (POST_DATE <= high-water) its rows can no
 -- longer be INSERTed, UPDATEd, or DELETEd — so a sealed day's trial balance +
 -- hash chain (US-6.3) are tamper-proof and a cross-period reversal (US-3.7)
 -- provably lands in the OPEN period. The write-freeze holds regardless of which
@@ -143,9 +143,9 @@ BEGIN
 END
 $fn$;
 
-DROP TRIGGER IF EXISTS trg_freeze_batch ON WLT_BATCH;
+DROP TRIGGER IF EXISTS trg_freeze_batch ON WLT_GL_BATCH;
 CREATE TRIGGER trg_freeze_batch
-  BEFORE INSERT OR UPDATE OR DELETE ON WLT_BATCH
+  BEFORE INSERT OR UPDATE OR DELETE ON WLT_GL_BATCH
   FOR EACH ROW EXECUTE FUNCTION fn_freeze_closed_period();
 
 DROP TRIGGER IF EXISTS trg_freeze_hist ON WLT_TRAN_HIST;
@@ -181,8 +181,8 @@ CREATE TABLE IF NOT EXISTS WLT_TRIAL_BALANCE (
   ccy         VARCHAR(4)    NOT NULL,
   gl_desc     VARCHAR(120),
   opening_bal NUMERIC(20,2) NOT NULL DEFAULT 0,   -- = prior day's closing (carry-forward)
-  period_dr   NUMERIC(20,2) NOT NULL DEFAULT 0,   -- Σ WLT_BATCH DR for the day
-  period_cr   NUMERIC(20,2) NOT NULL DEFAULT 0,   -- Σ WLT_BATCH CR for the day
+  period_dr   NUMERIC(20,2) NOT NULL DEFAULT 0,   -- Σ WLT_GL_BATCH DR for the day
+  period_cr   NUMERIC(20,2) NOT NULL DEFAULT 0,   -- Σ WLT_GL_BATCH CR for the day
   closing_bal NUMERIC(20,2) NOT NULL,             -- opening + period_dr - period_cr
   created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
   created_by  VARCHAR(64)   NOT NULL DEFAULT 'SYSTEM',
@@ -422,7 +422,7 @@ $$;
 -- =============================================================================
 -- T6 — daily trial balance + signed (hash-chained) proof  (US-6.3)
 -- =============================================================================
--- Aggregates the immutable GL feed (WLT_BATCH, frozen for D after cutover) into a
+-- Aggregates the immutable GL feed (WLT_GL_BATCH, frozen for D after cutover) into a
 -- per-(gl_code, ccy) trial balance, carries opening forward from the prior TB,
 -- checks the books balance, and seals the day with a sha256 hash chain. Few GL
 -- codes ⇒ one short TX (no chunking). Deterministic: re-running for unchanged data
@@ -456,7 +456,7 @@ BEGIN
 
   -- every currency that moved today, or carried a balance from the prior TB
   FOR r_ccy IN
-    SELECT ccy FROM WLT_BATCH WHERE post_date = p_biz_date
+    SELECT ccy FROM WLT_GL_BATCH WHERE post_date = p_biz_date
     UNION
     SELECT ccy FROM WLT_TRIAL_BALANCE
      WHERE biz_date = (SELECT max(biz_date) FROM WLT_TRIAL_BALANCE WHERE biz_date < p_biz_date)
@@ -476,7 +476,7 @@ BEGIN
       SELECT gl_code,
              COALESCE(SUM(amount) FILTER (WHERE tran_nature = 'DR'), 0) AS dr,
              COALESCE(SUM(amount) FILTER (WHERE tran_nature = 'CR'), 0) AS cr
-        FROM WLT_BATCH
+        FROM WLT_GL_BATCH
        WHERE post_date = p_biz_date AND ccy = r_ccy.ccy
        GROUP BY gl_code
     ),
@@ -535,9 +535,9 @@ END;
 $$;
 
 -- =============================================================================
--- T3 — GL-feed post: finalise the day's GL journal  (WLT_BATCH 'P' → 'S')
+-- T3 — GL-feed post: finalise the day's GL journal  (WLT_GL_BATCH 'P' → 'S')
 -- =============================================================================
--- Every posting writes its GL legs to WLT_BATCH (the GL feed) as PENDING ('P').
+-- Every posting writes its GL legs to WLT_GL_BATCH (the GL feed) as PENDING ('P').
 -- At close we mark the day's legs POSTED ('S') — the GL feed for D is finalised
 -- and ready for downstream hand-off (the bank core GL / T24, out of scope here).
 -- Chunked short-TX (COMMIT per chunk → no xmin pinning, never blocks posting's
@@ -567,10 +567,10 @@ BEGIN
 
   SELECT last_key, rows_done INTO v_lo, v_tot
     FROM WLT_EOD_RUN WHERE biz_date = p_biz_date AND task = 'GL_FEED';
-  SELECT COALESCE(max(tran_key), 0) INTO v_max FROM WLT_BATCH WHERE post_date = p_biz_date;
+  SELECT COALESCE(max(tran_key), 0) INTO v_max FROM WLT_GL_BATCH WHERE post_date = p_biz_date;
 
   WHILE v_lo <= v_max LOOP
-    UPDATE WLT_BATCH
+    UPDATE WLT_GL_BATCH
        SET status = 'S', time_stamp = now()
      WHERE post_date = p_biz_date
        AND status    = 'P'
@@ -741,7 +741,7 @@ BEGIN
   CALL eod_snapshot(p_biz_date);          -- T1
   CALL eod_prev_day_roll(p_biz_date);     -- T2 (depends on T1)
   CALL eod_expire_restraints(p_biz_date); -- T5
-  CALL eod_gl_feed_post(p_biz_date);      -- T3  WLT_BATCH 'P' → 'S' (GL feed finalised)
+  CALL eod_gl_feed_post(p_biz_date);      -- T3  WLT_GL_BATCH 'P' → 'S' (GL feed finalised)
   CALL eod_trial_balance(p_biz_date);     -- T6 (US-6.3)
   CALL eod_close_period(p_biz_date);      -- T7  seal D → engage write-freeze (US-6.1)
 END;
@@ -765,7 +765,7 @@ GRANT EXECUTE ON PROCEDURE run_eod(DATE)                     TO wallet_app;
 -- wallet_app keeps SELECT WLT_PERIOD + EXECUTE fn_period_closed_through() because
 -- the freeze trigger reads them on the (wallet_app) posting path.
 GRANT SELECT, INSERT, UPDATE ON WLT_PERIOD                   TO wallet_app;
-GRANT UPDATE (STATUS, TIME_STAMP) ON WLT_BATCH               TO wallet_app;
+GRANT UPDATE (STATUS, TIME_STAMP) ON WLT_GL_BATCH               TO wallet_app;
 GRANT EXECUTE ON FUNCTION  fn_period_closed_through()        TO wallet_app;
 GRANT EXECUTE ON PROCEDURE eod_gl_feed_post(DATE, BIGINT)    TO wallet_app;
 GRANT EXECUTE ON PROCEDURE eod_close_period(DATE)            TO wallet_app;

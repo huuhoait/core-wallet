@@ -33,9 +33,9 @@
 
 ## 2. Bảng KHỚP cột hoàn toàn (12 bảng — chỉ cần xét thứ tự, không đụng nội dung)
 
-`FM_CLIENT_INDVL`, `FM_CLIENT_IDENTIFIERS`, `WLT_ACCT_TYPE`, `WLT_ACCT_GROUP`, `WLT_BATCH`, `WLT_RESTRAINTS`, `WLT_SWEEP_LOG`, `WLT_GL_MAP`, `WLT_NOSTRO_LINK`, `WLT_API_MESSAGE`, `WLT_OUTBOX`, `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`.
+`FM_CLIENT_INDVL`, `FM_CLIENT_IDENTIFIERS`, `WLT_ACCT_TYPE`, `WLT_ACCT_GROUP`, `WLT_GL_BATCH`, `WLT_RESTRAINTS`, `WLT_SWEEP_LOG`, `WLT_GL_MAP`, `WLT_NOSTRO_LINK`, `WLT_API_MESSAGE`, `WLT_OUTBOX`, `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`.
 
-*(Lưu ý: một số bảng trên ở `wallet_schema.sql` có thêm CHECK constraint — vd `chk_batch_status`, `chk_api_status` — nhưng tập cột & thứ tự cột trùng khớp.)*
+*(Lưu ý: một số bảng trên ở `wallet_schema.sql` có thêm CHECK constraint — vd `chk_gl_batch_status`, `chk_api_status` — nhưng tập cột & thứ tự cột trùng khớp.)*
 
 ---
 
@@ -192,7 +192,7 @@ Diff hai kết quả phải rỗng cho các bảng cần đồng bộ.
 
 ### 8.1 Bảng ĐÃ hợp lý — giữ nguyên (19 bảng)
 
-`FM_CURRENCY`, `FM_GL_MAST`, `FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_NOS_VOS`, `WLT_CLIENT_KYC`, `WLT_ACCT_TYPE`, `WLT_ACCT_GROUP`, `WLT_ACCT_BAL`, `WLT_BATCH`, `WLT_RESTRAINTS`, `WLT_SWEEP_LOG`, `WLT_GL_MAP`, `WLT_NOSTRO_BAL`, `WLT_API_MESSAGE`, `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`, + 3 bảng ddl-only (`WLT_RECON_BREAK`, `WLT_API_TRACE`, `WLT_STMT_DETAIL`).
+`FM_CURRENCY`, `FM_GL_MAST`, `FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_NOS_VOS`, `WLT_CLIENT_KYC`, `WLT_ACCT_TYPE`, `WLT_ACCT_GROUP`, `WLT_ACCT_BAL`, `WLT_GL_BATCH`, `WLT_RESTRAINTS`, `WLT_SWEEP_LOG`, `WLT_GL_MAP`, `WLT_NOSTRO_BAL`, `WLT_API_MESSAGE`, `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`, + 3 bảng ddl-only (`WLT_RECON_BREAK`, `WLT_API_TRACE`, `WLT_STMT_DETAIL`).
 
 → PK đầu bảng, audit/timestamp cuối bảng, các khối nghiệp vụ gom hợp lý theo tính năng (vd state-machine của `WLT_WITHDRAW_TRACK`, khối WHO/WHAT/WHERE của `WLT_CLIENT_AUDIT_LOG`, khối relay-state của `WLT_OUTBOX`).
 
