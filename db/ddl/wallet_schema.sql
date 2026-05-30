@@ -59,6 +59,13 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;             -- pgp_sym_encrypt for PII 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";          -- gen_random_uuid in event UUIDs
 -- pg_partman + pg_cron deferred to Y2 (manual partitions are enough at 20 TPS)
 
+-- Pin the business timezone (GMT+7, no DST) at DB level so CURRENT_DATE / now()
+-- and all accounting dates are independent of the host/container OS tz and
+-- consistent across PgBouncer-pooled backends. Applies to NEW sessions.
+DO $$ BEGIN
+  EXECUTE format('ALTER DATABASE %I SET timezone = %L', current_database(), 'Asia/Ho_Chi_Minh');
+END $$;
+
 
 -- =============================================================================
 -- §3. FM TIER  (skip this section if integrating with an existing T24/FM core)

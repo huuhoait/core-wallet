@@ -402,6 +402,13 @@
 -- (PG 13+ has gen_random_uuid() built-in; this is a safety net)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Pin the business timezone (GMT+7, no DST) at DB level so CURRENT_DATE / now()
+-- and all accounting dates (POST_DATE, VALUE_DATE, …) are independent of the
+-- host OS tz and consistent across PgBouncer-pooled backends. New sessions only.
+DO $$ BEGIN
+  EXECUTE format('ALTER DATABASE %I SET timezone = %L', current_database(), 'Asia/Ho_Chi_Minh');
+END $$;
+
 -- TFR_INTERNAL_KEY — links legs of a single transfer.
 -- Not using IDENTITY because multiple rows share one value.
 CREATE SEQUENCE IF NOT EXISTS seq_tfr AS BIGINT CACHE 1000;
