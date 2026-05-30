@@ -75,9 +75,11 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			clients.PATCH("/:client_no", h.UpdateClient)
 		}
 
-		// ── Accounts: profile + balance reads (Get Balance §9). Read-only. ──
+		// ── Accounts: lifecycle (open / block / close) + profile + balance reads ──
 		accounts := v1.Group("/accounts")
 		{
+			accounts.POST("", h.OpenAccount)                     // open wallet (count-limited)
+			accounts.PATCH("/:acct_no", h.UpdateAccountStatus)   // block / close / re-activate
 			accounts.GET("/:acct_no", h.GetAccount)              // account profile (no client PII)
 			accounts.GET("/:acct_no/balance", h.GetBalance)      // realtime + historical (?as_of_date=)
 		}

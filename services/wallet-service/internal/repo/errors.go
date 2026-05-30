@@ -68,7 +68,10 @@ func mapPgError(err error) error {
 			"check violation: "+detail, err)
 	}
 
-	if code == "" {
+	// Only PL/pgSQL RAISE (custom 'P0' SQLSTATE class) carries a canonical code
+	// in its message. Anything else (42501 permission, 08006 connection, …) must
+	// NOT leak its raw text as a public code (§3.3) → INTERNAL_ERROR.
+	if code == "" || !strings.HasPrefix(pgErr.Code, "P0") {
 		return domain.Internal(err)
 	}
 	return domain.NewError(code, httpStatusFor(code), detail, err)
@@ -116,7 +119,8 @@ func httpStatusFor(code string) int {
 		domain.CodeWDAlreadyReversed,
 		domain.CodeWDInvalidState,
 		domain.CodeRestraintAlreadyRemoved,
-		domain.CodeClientAlreadyExists:
+		domain.CodeClientAlreadyExists,
+		domain.CodeMaxWalletExceeded:
 		return http.StatusConflict
 	case domain.CodeRestraintTypeInvalid,
 		domain.CodeRestraintPurposeInvalid,
@@ -124,7 +128,9 @@ func httpStatusFor(code string) int {
 		domain.CodeRestraintAmtExceedsBalance,
 		domain.CodeRestraintDateInvalid,
 		domain.CodeCourtOrderRemoveRequiresDoc,
-		domain.CodeInvalidClientType:
+		domain.CodeInvalidClientType,
+		domain.CodeInvalidAcctType,
+		domain.CodeAcctCloseNonzeroBal:
 		return http.StatusUnprocessableEntity
 	case domain.CodePIIDekNotSet:
 		return http.StatusInternalServerError

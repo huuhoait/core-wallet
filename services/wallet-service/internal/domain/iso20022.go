@@ -68,6 +68,10 @@ var codeMeta = map[string]CodeMeta{
 	CodeInvalidClientType:   {"Invalid client type", "E2010", "", ""},
 	CodeClientAlreadyExists: {"Client already exists", "E2009", "AM05", ""},
 	CodeClientNotFound:      {"Client not found", "E2011", "", ""},
+	// Account (wallet) lifecycle
+	CodeInvalidAcctType:     {"Invalid account type", "E3007", "", ""},
+	CodeMaxWalletExceeded:   {"Wallet count limit exceeded", "E3002", "", ""},
+	CodeAcctCloseNonzeroBal: {"Cannot close account with non-zero balance", "E3003", "", ""},
 }
 
 // MetaFor returns the standards metadata for a canonical code. Unknown codes

@@ -78,6 +78,10 @@ const (
 	CodeInvalidClientType   = "INVALID_CLIENT_TYPE"
 	CodeClientAlreadyExists = "CLIENT_ALREADY_EXISTS"
 	CodeClientNotFound      = "CLIENT_NOT_FOUND"
+	// Account (wallet) lifecycle
+	CodeInvalidAcctType     = "INVALID_ACCT_TYPE"
+	CodeMaxWalletExceeded   = "MAX_WALLET_PER_CLIENT_EXCEEDED"
+	CodeAcctCloseNonzeroBal = "ACCT_CLOSE_NONZERO_BAL"
 )
 
 // Helpers for constructing errors at boundaries.

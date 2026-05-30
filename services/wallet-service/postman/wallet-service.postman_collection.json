@@ -965,6 +965,165 @@
       "name": "Accounts",
       "item": [
         {
+          "name": "POST open account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "accounts"
+              ]
+            },
+            "description": "Open a CONSUMER wallet for {{client_no}} (run create-client first). Count-limited (3/CCY). Captures {{opened_acct_no}}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_no\": \"{{client_no}}\",\n  \"acct_type\": \"CONSUMER\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([201,404,409,422]));",
+                  "if (pm.response.code===201){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('acct_no + status A', ()=>{ pm.expect(b.acct_no).to.be.a('string'); pm.expect(b.acct_status).to.equal('A'); });",
+                  "  pm.environment.set('opened_acct_no', b.acct_no);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH block account",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/accounts/{{opened_acct_no}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "accounts",
+                "{{opened_acct_no}}"
+              ]
+            },
+            "description": "Block {{opened_acct_no}} (no debits).",
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"B\" }"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if (pm.response.code===200) pm.test('status B', ()=>pm.expect(pm.response.json().acct_status).to.equal('B'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH close account",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/accounts/{{opened_acct_no}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "accounts",
+                "{{opened_acct_no}}"
+              ]
+            },
+            "description": "Close {{opened_acct_no}} (requires balance 0 → else 422 ACCT_CLOSE_NONZERO_BAL).",
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"C\" }"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,404,422]));",
+                  "if (pm.response.code===200) pm.test('status C', ()=>pm.expect(pm.response.json().acct_status).to.equal('C'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "GET account profile",
           "request": {
             "method": "GET",

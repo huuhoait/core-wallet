@@ -22,7 +22,7 @@ docs alone).
 
 | Epic | ✅ | 🟡 | ⬜ |
 |------|:--:|:--:|:--:|
-| 1. Onboarding & Wallet Management | 1 | 1 | 6 |
+| 1. Onboarding & Wallet Management | 4 | 0 | 4 |
 | 2. Transactions — Posting | 6 | 0 | 1 |
 | 3. Reversals & Refunds | 5 | 1 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
@@ -32,24 +32,24 @@ docs alone).
 | 8. Audit, PII & Compliance | 2 | 1 | 1 |
 | 9. Platform / Infra / Observability | 9 | 0 | 3 |
 | 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **37** | **4** | **20** |
+| **Total** | **40** | **3** | **18** |
 
 ---
 
 ## Epic 1 — Onboarding & Wallet Management / Mở ví & KYC
 
-> Client master CRUD is implemented (US-1.8: `create_client`/`update_client`), but
-> the **onboarding flow** (OTP, eKYC, tier progression, wallet opening) is **not** —
-> those remain seed-only (`fn_create_client`, `fn_open_wallet`, test data).
+> Client master CRUD (US-1.8) and wallet open/block/close (US-1.3/1.5) with
+> count limits (US-1.4) are implemented. The **onboarding flow** (OTP, eKYC, KYC
+> tier progression) is **not** — that remains seed-only / out of scope.
 > Spec: [docs/specs/wallet_onboarding.md](docs/specs/wallet_onboarding.md).
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
 | US-1.1 | As a new user, I register & verify OTP to create a Tier-1 client | ⬜ | Spec §3, §7.1–7.2. No `/v1/onboard/*` route. |
 | US-1.2 | As a user, I pass eKYC to upgrade to Tier-2 | ⬜ | Spec §5.1, §7.3. Not implemented. |
-| US-1.3 | As a Tier-2 user, I open a wallet (ACCT_NO gen + zero-balance snapshot) | 🟡 | `fn_open_wallet` exists in `db/seeds/` **for test seeding only** (spec §12). No production `POST /v1/accounts` (account opening). |
-| US-1.4 | As the platform, I enforce wallet-count limits per customer | ⬜ | Spec §4.3. Not implemented. |
-| US-1.5 | As ops, I block / close a wallet (close requires balance = 0) | ⬜ | Spec §6.2, AC-08. `WLT_ACCT.ACCT_STATUS` exists; no account-mutation endpoint. |
+| US-1.3 | As ops, I open a wallet (ACCT_NO gen, zero balance) | ✅ | SP `open_account`; `POST /v1/accounts`. ACCT_NO = `9701`+10 (seq_acct_no), `ACTUAL_BAL=0`. (KYC-tier gate **not** enforced — onboarding out of scope; EOD makes the historical snapshot.) |
+| US-1.4 | As the platform, I enforce wallet-count limits per customer | ✅ | In `open_account` (§4.3): CONSUMER 3/CCY, MERCHANT 10 (closed excluded) → `MAX_WALLET_PER_CLIENT_EXCEEDED` (409). |
+| US-1.5 | As ops, I block / close / re-activate a wallet (close requires balance = 0) | ✅ | SP `update_account_status`; `PATCH /v1/accounts/:acct_no`. State machine A↔B→C; close→`ACCT_CLOSE_NONZERO_BAL` if bal≠0; mutate closed→`ACCT_NOT_ACTIVE`. |
 | US-1.6 | As compliance, KYC downgrade & 12-month re-KYC | ⬜ | Spec §5.2, §13 (open item). |
 | US-1.7 | As a corporate customer, I onboard (CORP, legal rep / UBO) | ⬜ | Spec §13 — schema gaps noted; not designed. |
 | US-1.8 | As ops, I create/update a **client master record** (identity only, no KYC/onboarding flow) | ✅ | SP `create_client`/`update_client` (SECURITY DEFINER); `POST /v1/clients` + `PATCH /v1/clients/:client_no`. FM_CLIENT (+FM_CLIENT_INDVL). Wallet opening/KYC still out of scope. |
@@ -165,7 +165,7 @@ docs alone).
 
 ## Next priorities (suggested) / Ưu tiên tiếp theo (gợi ý)
 
-1. **getClient + account opening** (Epic 1) — `GET /v1/clients/:id` needs the masked PII view; `POST /v1/accounts` (open wallet) needs a production SP. (client create/update already done — US-1.8.)
+1. **getClient** (Epic 1) — `GET /v1/clients/:id` needs the masked PII view (`v_kyc_masked`). (client CRUD + account open/block/close already done — US-1.3/1.4/1.5/1.8.)
 2. **Outbox relay worker** (US-7.2) — events are written but never published.
 3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
 4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.

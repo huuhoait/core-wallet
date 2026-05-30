@@ -178,6 +178,8 @@ Success responses additionally carry `transaction_status` (`ACSC` settled /
 > Restraint codes (`RESTRAINT_TYPE_INVALID`/`PURPOSE_INVALID`/`TYPE_PURPOSE_CONFLICT`/`AMT_EXCEEDS_BALANCE`/`DATE_INVALID` → 422, `RESTRAINT_ALREADY_REMOVED` → 409, `RESTRAINT_NOT_FOUND` → 404, `COURT_ORDER_REMOVE_REQUIRES_DOC` → 422) are now implemented too (SP `add_restraint`/`release_restraint`) — listed in §4.9.
 >
 > Client master CRUD (SP `create_client`/`update_client`): `INVALID_CLIENT_TYPE` (E2010) → 422, `CLIENT_ALREADY_EXISTS` (E2009, ISO `AM05`) → 409, `CLIENT_NOT_FOUND` (E2011) → 404.
+>
+> Account lifecycle (SP `open_account`/`update_account_status`): `INVALID_ACCT_TYPE` (E3007) → 422, `MAX_WALLET_PER_CLIENT_EXCEEDED` (E3002) → 409, `ACCT_CLOSE_NONZERO_BAL` (E3003) → 422, `ACCT_NOT_ACTIVE` (closed/terminal) → 403.
 
 ### 4.1 Auth & rate limiting
 

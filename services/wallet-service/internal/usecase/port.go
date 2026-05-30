@@ -52,4 +52,8 @@ type WalletRepository interface {
 	// Client master CRUD (create_client / update_client).
 	CreateClient(ctx context.Context, in domain.ClientCreateInput) (*domain.ClientResult, error)
 	UpdateClient(ctx context.Context, in domain.ClientUpdateInput) (*domain.ClientResult, error)
+
+	// Account (wallet) lifecycle (open_account / update_account_status).
+	OpenAccount(ctx context.Context, in domain.AccountOpenInput) (*domain.AccountOpenResult, error)
+	UpdateAccountStatus(ctx context.Context, in domain.AccountStatusInput) (*domain.AccountStatusResult, error)
 }
