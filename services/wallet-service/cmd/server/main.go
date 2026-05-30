@@ -69,8 +69,25 @@ func run(logger *slog.Logger) error {
 		slog.Int("max_conns", int(cfg.DB.MaxConns)),
 		slog.Int("min_conns", int(cfg.DB.MinConns)))
 
+	// ---- read pool (replica) for lag-tolerant reads ------------------------
+	// Only the account/client-profile + statement-list reads use this (see repo).
+	// Empty DB_READ_DSN → reuse the primary pool (no replica; strong consistency).
+	readPool := pool
+	if cfg.DB.ReadDSN != "" {
+		readCfg := cfg.DB
+		readCfg.DSN = cfg.DB.ReadDSN
+		readPool, err = db.NewPool(rootCtx, readCfg)
+		if err != nil {
+			return fmt.Errorf("db read pool: %w", err)
+		}
+		defer readPool.Close()
+		logger.Info("db read pool ready (replica)")
+	} else {
+		logger.Info("db read pool = primary (DB_READ_DSN unset)")
+	}
+
 	// ---- adapter → usecase → http -----------------------------------------
-	walletRepo := repo.NewPgWalletRepo(pool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout)
+	walletRepo := repo.NewPgWalletRepo(pool, readPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout)
 	walletSvc := usecase.NewWalletService(walletRepo, logger)
 
 	server, err := netHTTP.New(cfg.HTTP, walletSvc, logger)

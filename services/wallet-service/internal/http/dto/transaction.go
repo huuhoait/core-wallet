@@ -58,12 +58,15 @@ type TxEntryResponse struct {
 
 type TxListResponse struct {
 	AcctNo     string            `json:"acct_no"`
+	From       string            `json:"from,omitempty"`
+	To         string            `json:"to,omitempty"`
+	PageSize   int               `json:"page_size"`
 	Items      []TxEntryResponse `json:"items"`
 	Count      int               `json:"count"`
 	NextCursor *int64            `json:"next_cursor,omitempty"` // pass as ?before_seq= for the next page
 }
 
-func TxListRespFrom(acctNo string, entries []domain.TxEntry, limit int) TxListResponse {
+func TxListRespFrom(q domain.TxListQuery, entries []domain.TxEntry) TxListResponse {
 	items := make([]TxEntryResponse, 0, len(entries))
 	for _, e := range entries {
 		items = append(items, TxEntryResponse{
@@ -73,9 +76,15 @@ func TxListRespFrom(acctNo string, entries []domain.TxEntry, limit int) TxListRe
 			Reference: e.Reference, Narrative: e.Narrative,
 		})
 	}
-	out := TxListResponse{AcctNo: acctNo, Items: items, Count: len(items)}
+	out := TxListResponse{AcctNo: q.AcctNo, PageSize: q.Limit, Items: items, Count: len(items)}
+	if q.From != nil {
+		out.From = q.From.Format("2006-01-02")
+	}
+	if q.To != nil {
+		out.To = q.To.Format("2006-01-02")
+	}
 	// A full page implies more rows may exist → expose the keyset cursor.
-	if limit > 0 && len(entries) == limit {
+	if q.Limit > 0 && len(entries) == q.Limit {
 		last := entries[len(entries)-1].SeqNo
 		out.NextCursor = &last
 	}

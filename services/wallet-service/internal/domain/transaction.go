@@ -36,15 +36,21 @@ type TxLeg struct {
 	Narrative    string
 }
 
-// TxListQuery parameterises an account statement query (keyset pagination).
+// TxListQuery parameterises an account statement query: filter by account +
+// optional post_date range, keyset-paginated newest-first.
 type TxListQuery struct {
 	AcctNo    string
-	Limit     int    // 1..MaxTxPageSize (clamped in usecase)
-	BeforeSeq *int64 // cursor: return rows with seq_no < BeforeSeq (newest-first)
+	Limit     int        // 1..MaxTxPageSize (clamped in usecase)
+	BeforeSeq *int64     // cursor: return rows with seq_no < BeforeSeq (newest-first)
+	From      *time.Time // optional: post_date >= From (inclusive)
+	To        *time.Time // optional: post_date <= To (inclusive)
 }
 
-// MaxTxPageSize bounds a single statement page.
-const MaxTxPageSize = 100
+// Statement page sizing — a page returns up to 200 entries (default 200).
+const (
+	DefaultTxPageSize = 200
+	MaxTxPageSize     = 200
+)
 
 // AccountView is the account profile (WLT_ACCT), excluding client PII.
 type AccountView struct {

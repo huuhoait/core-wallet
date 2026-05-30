@@ -12,10 +12,10 @@ func (s *WalletService) GetAccount(ctx context.Context, acctNo string) (*domain.
 }
 
 // ListTransactions returns an account statement page. Limit is clamped to
-// [1, MaxTxPageSize] with a default of 20.
+// [1, MaxTxPageSize] with a default of DefaultTxPageSize (200).
 func (s *WalletService) ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error) {
 	if q.Limit <= 0 {
-		q.Limit = 20
+		q.Limit = domain.DefaultTxPageSize
 	}
 	if q.Limit > domain.MaxTxPageSize {
 		q.Limit = domain.MaxTxPageSize

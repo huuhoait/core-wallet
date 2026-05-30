@@ -25,13 +25,21 @@ import (
 // SET LOCAL is scoped to the current TX so it always takes effect.
 type PgWalletRepo struct {
 	pool             *pgxpool.Pool
+	readPool         *pgxpool.Pool // replica for lag-tolerant reads; == pool when no DB_READ_DSN
 	statementTimeoutMs int64
 	lockTimeoutMs      int64
 }
 
-func NewPgWalletRepo(pool *pgxpool.Pool, statementTimeout, lockTimeout time.Duration) *PgWalletRepo {
+// NewPgWalletRepo wires the write pool (primary) and a read pool. Pass the same
+// pool for both when there is no replica; a nil readPool also falls back to pool.
+// Only the designated lag-tolerant reads use readPool (see transaction.go).
+func NewPgWalletRepo(pool, readPool *pgxpool.Pool, statementTimeout, lockTimeout time.Duration) *PgWalletRepo {
+	if readPool == nil {
+		readPool = pool
+	}
 	return &PgWalletRepo{
 		pool:               pool,
+		readPool:           readPool,
 		statementTimeoutMs: statementTimeout.Milliseconds(),
 		lockTimeoutMs:      lockTimeout.Milliseconds(),
 	}

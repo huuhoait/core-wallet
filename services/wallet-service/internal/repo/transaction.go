@@ -2,6 +2,11 @@
 // audit GUCs. wallet_app holds SELECT on WLT_ACCT / WLT_TRAN_HIST (schema
 // §grants), so these query the tables directly (amounts cast ::text to scan as
 // decimal strings). Client PII is NOT exposed here — that needs the masked view.
+//
+// Replica routing: GetAccount (profile) and ListTransactions (statement list)
+// run on r.readPool — the read replica when DB_READ_DSN is set, else the primary.
+// These are lag-tolerant (eventually-consistent display). GetTransaction (detail)
+// and all balance/ops reads stay on the primary (r.pool) for read-your-writes.
 package repo
 
 import (
@@ -24,7 +29,7 @@ func (r *PgWalletRepo) GetAccount(ctx context.Context, acctNo string) (*domain.A
 		 WHERE acct_no = $1
 	`
 	var a domain.AccountView
-	err := r.pool.QueryRow(ctx, q, acctNo).Scan(
+	err := r.readPool.QueryRow(ctx, q, acctNo).Scan( // replica (lag-tolerant profile)
 		&a.AcctNo, &a.ClientNo, &a.AcctType, &a.Ccy, &a.AcctStatus, &a.AcctRole,
 		&a.ActualBal, &a.RestrainedAmt, &a.CalcBal, &a.PrevDayBal,
 		&a.AcctOpenDate, &a.LastTranDate, &a.RestraintPresent, &a.CrBlocked,
@@ -43,6 +48,7 @@ func (r *PgWalletRepo) GetAccount(ctx context.Context, acctNo string) (*domain.A
 // touched the account), newest-first, keyset-paginated by seq_no. An existing
 // account with no entries returns an empty slice; an unknown account → 404.
 func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error) {
+	// post_date range ($4/$5) also drives partition pruning on WLT_TRAN_HIST.
 	const sql = `
 		SELECT h.seq_no, h.tfr_internal_key, h.tran_type, h.cr_dr_maint_ind,
 		       h.tran_amt::text, h.ccy, h.actual_bal_amt::text,
@@ -51,10 +57,12 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 		  JOIN WLT_ACCT a ON a.internal_key = h.internal_key
 		 WHERE a.acct_no = $1
 		   AND ($2::bigint IS NULL OR h.seq_no < $2)
+		   AND ($4::date  IS NULL OR h.post_date >= $4)
+		   AND ($5::date  IS NULL OR h.post_date <= $5)
 		 ORDER BY h.seq_no DESC
 		 LIMIT $3
 	`
-	rows, err := r.pool.Query(ctx, sql, q.AcctNo, q.BeforeSeq, q.Limit)
+	rows, err := r.readPool.Query(ctx, sql, q.AcctNo, q.BeforeSeq, q.Limit, q.From, q.To) // replica
 	if err != nil {
 		return nil, mapErrIfPg(err)
 	}
@@ -78,7 +86,7 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 	// Empty result: distinguish "no activity" from "unknown account".
 	if len(out) == 0 {
 		var exists bool
-		if err := r.pool.QueryRow(ctx,
+		if err := r.readPool.QueryRow(ctx, // same source as the list → snapshot-consistent
 			`SELECT EXISTS(SELECT 1 FROM WLT_ACCT WHERE acct_no = $1)`, q.AcctNo,
 		).Scan(&exists); err != nil {
 			return nil, mapErrIfPg(err)

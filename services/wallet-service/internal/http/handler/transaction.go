@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -20,7 +21,9 @@ func (h *Wallet) GetAccount(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.AccountRespFrom(res))
 }
 
-// GET /v1/finance/transactions?acct_no=&limit=&before_seq= — account statement.
+// GET /v1/finance/transactions?acct_no=&from=&to=&limit=&before_seq= — account
+// statement: filter by account + optional post_date range (YYYY-MM-DD), paged at
+// 200 items/page (keyset via next_cursor → ?before_seq=).
 func (h *Wallet) ListTransactions(c *gin.Context) {
 	acctNo := c.Query("acct_no")
 	if acctNo == "" {
@@ -28,7 +31,7 @@ func (h *Wallet) ListTransactions(c *gin.Context) {
 		return
 	}
 
-	limit := 20
+	limit := domain.DefaultTxPageSize
 	if v := c.Query("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
@@ -50,13 +53,33 @@ func (h *Wallet) ListTransactions(c *gin.Context) {
 		}
 		q.BeforeSeq = &n
 	}
+	if v := c.Query("from"); v != "" {
+		t, err := time.Parse("2006-01-02", v)
+		if err != nil {
+			renderError(c, domain.InvalidRequest("invalid from date (expected YYYY-MM-DD)", nil))
+			return
+		}
+		q.From = &t
+	}
+	if v := c.Query("to"); v != "" {
+		t, err := time.Parse("2006-01-02", v)
+		if err != nil {
+			renderError(c, domain.InvalidRequest("invalid to date (expected YYYY-MM-DD)", nil))
+			return
+		}
+		q.To = &t
+	}
+	if q.From != nil && q.To != nil && q.From.After(*q.To) {
+		renderError(c, domain.InvalidRequest("from must be on or before to", nil))
+		return
+	}
 
 	entries, err := h.svc.ListTransactions(c.Request.Context(), q)
 	if err != nil {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.TxListRespFrom(acctNo, entries, limit))
+	c.JSON(http.StatusOK, dto.TxListRespFrom(q, entries))
 }
 
 // GET /v1/finance/transactions/:tfr_key — all legs of one transaction.

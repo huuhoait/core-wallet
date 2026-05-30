@@ -34,6 +34,10 @@ type HTTP struct {
 type DB struct {
 	// DSN typically points at PgBouncer (port 6432) in production.
 	DSN             string        `env:"DB_DSN,required"     envExpand:"true"`
+	// ReadDSN routes the lag-tolerant reads (account/client profile + statement
+	// list) at a read replica. Empty → those reads use the primary DSN (no
+	// replica; strong consistency). Balance-realtime/tx-detail/ops stay on DSN.
+	ReadDSN         string        `env:"DB_READ_DSN"         envExpand:"true"`
 	MaxConns        int32         `env:"DB_MAX_CONNS"        envDefault:"50"`
 	MinConns        int32         `env:"DB_MIN_CONNS"        envDefault:"5"`
 	MaxConnLifetime time.Duration `env:"DB_MAX_CONN_LIFETIME" envDefault:"30m"`

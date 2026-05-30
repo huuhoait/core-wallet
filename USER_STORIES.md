@@ -27,12 +27,12 @@ docs alone).
 | 3. Reversals & Refunds | 5 | 1 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
-| 6. Accounting & GL Operations | 0 | 0 | 5 |
+| 6. Accounting & GL Operations | 5 | 1 | 3 |
 | 7. Eventing & Integration | 1 | 0 | 2 |
 | 8. Audit, PII & Compliance | 2 | 1 | 1 |
-| 9. Platform / Infra / Observability | 9 | 0 | 3 |
+| 9. Platform / Infra / Observability | 10 | 0 | 3 |
 | 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **40** | **3** | **17** |
+| **Total** | **46** | **4** | **15** |
 
 ---
 
@@ -91,7 +91,7 @@ docs alone).
 | US-4.2 | As a customer, I view a historical balance (`as_of_date`) | ✅ | SP `get_balance_asof`; `?as_of_date=`. |
 | US-4.3 | As ops, I view the full balance breakdown for a wallet | ✅ | SP `get_balance_ops`; `GET /v1/ops/accounts/:acct_no/balance`. |
 | US-4.4 | As ops, I look up balances in batch | ✅ | SP `get_balance_batch`; `POST /v1/ops/accounts/balance/batch`. |
-| US-4.5 | As a customer, I retrieve a transaction history / account statement | ✅ | `GET /v1/finance/transactions?acct_no=` (keyset-paged) + `GET /v1/finance/transactions/:tfr_key` (all legs) + `GET /v1/accounts/:acct_no` (profile). Direct SELECT on WLT_*. |
+| US-4.5 | As a customer, I retrieve a transaction history / account statement | ✅ | `GET /v1/finance/transactions?acct_no=&from=&to=` (optional `post_date` range, 200 items/page, keyset `next_cursor`→`?before_seq=`) + `GET /v1/finance/transactions/:tfr_key` (all legs) + `GET /v1/accounts/:acct_no` (profile). Direct SELECT on WLT_*. |
 
 ## Epic 5 — Withdrawal Disbursement / Theo dõi giải ngân rút tiền
 
@@ -103,16 +103,22 @@ docs alone).
 
 ## Epic 6 — Accounting & GL Operations / Kế toán & vận hành sổ cái
 
-> Subsystem §9b — designed in the HLD, **not implemented**. No SP, table set, or
-> worker for any of the below exists yet.
+> Subsystem §9b. The **EOD-close batch** (write-DB, posting-safe) is now implemented
+> in `db/procedures/wallet_sp_eod.sql` — US-6.1 (partial) + US-6.3 + US-6.6–6.9. The
+> suspense/clearing GL framework, e-invoice and manual-JE workflows (US-6.2/6.4/6.5)
+> remain HLD design only.
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-6.1 | EOD close & period locking | ⬜ | HLD §9b. Design only. |
+| US-6.1 | EOD close & period locking | 🟡 | Close batch orchestrated by `run_eod` (T1→T2→T5→T6), `wallet_sp_eod.sql`; verified end-to-end on local stack. **Period locking** (write-freeze on closed business dates) still ⬜ — so US-3.7 stays blocked. |
 | US-6.2 | Suspense / clearing GL framework | ⬜ | HLD §9b. Design only. |
-| US-6.3 | Daily trial-balance materialization + signed proof | ⬜ | HLD §9b. Design only. |
+| US-6.3 | Daily trial-balance materialization + signed proof | ✅ | SP `eod_trial_balance` (`wallet_sp_eod.sql`, T6 in `run_eod`). Per-`(gl_code,ccy)` from `WLT_BATCH` → `WLT_TRIAL_BALANCE` (opening carry-forward + period DR/CR + closing); proves ΣDR=ΣCR ∧ Σclosing=0; seals each day in `WLT_TRIAL_BALANCE_PROOF` via a `sha256` **hash chain** (`chain=H(totals‖content‖prev)`). `eod_verify_chain()` re-derives & detects tampering (verified: editing a sealed line flips `chain_ok`→false). |
 | US-6.4 | E-invoice integration (Decree 123/2020, Circular 78/2021) | ⬜ | HLD §9b. Design only. |
 | US-6.5 | Maker-checker manual journal entry workflow | ⬜ | HLD §9b. Design only. |
+| US-6.6 | EOD daily balance snapshot → `WLT_ACCT_BAL[D]` | ✅ | SP `eod_snapshot` (`wallet_sp_eod.sql`). Sparse (accounts that moved on D); close = last `WLT_TRAN_HIST` leg (ledger-authoritative, 24/7-correct); **finalises** the row posting maintains intraday (`ON CONFLICT DO UPDATE`), incl. `calc_bal` = close − final restraint overlay. Chunked short-TX (`COMMIT`/chunk → no xmin pinning), restart-safe. |
+| US-6.7 | EOD prev-day balance roll | ✅ | SP `eod_prev_day_roll`. `WLT_ACCT.prev_day_actual_bal := close(D)` from the snapshot; sparse, skips no-ops (`IS DISTINCT FROM`), HOT update (non-indexed col, fillfactor 80), chunk 10k; depends on US-6.6. |
+| US-6.8 | EOD restraint auto-expiry | ✅ | SP `eod_expire_restraints`. Restraints past `END_DATE` (`A`→`E`, `removed_by='EOD'`) + recompute `WLT_ACCT.{total_restrained_amt,cr_blocked,restraint_present}` (mirrors `release_restraint`); one account / TX. cf. US-8.2. |
+| US-6.9 | EOD run history (audit log) + restart / failure handling | ✅ | Append-only `WLT_EOD_AUDIT_LOG` (status, started/finished, duration, rows — one row per run, via `eod_log`) + `WLT_EOD_RUN` resume cursor (`last_key`); `eod_mark_failed` records FAILED and keeps the cursor for retry. Batch/scheduler-driven (pg_cron / direct primary — no HTTP route by design). |
 
 ## Epic 7 — Eventing & Integration / Sự kiện & tích hợp
 
@@ -147,6 +153,7 @@ docs alone).
 | US-9.10 | AuthN / AuthZ + rate limiting | ⬜ | API-gateway concern (HLD §3); not in this service. |
 | US-9.11 | CI/CD pipeline | ⬜ | None in repo. |
 | US-9.12 | Metrics endpoint (Prometheus) | ⬜ | OTel traces only; no metrics endpoint. |
+| US-9.13 | Read-replica routing for lag-tolerant reads | ✅ | `DB_READ_DSN` → separate read pool (`cmd/server`, `repo.readPool`). Only `GetAccount` (profile) + `ListTransactions` (statement) read it; unset → primary (strong consistency). Balance-realtime / tx-detail / ops stay on primary (read-your-writes). Both paths verified live. |
 
 ## Epic 10 — Quality: Testing & Load / Chất lượng: test & tải
 
@@ -169,6 +176,7 @@ docs alone).
 3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
 4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
 5. **Onboarding service** (Epic 1) — currently seed-only; no production path.
+6. **EOD period-locking + GL feed** (US-6.1/6.2) — close batch runs (snapshot/roll/expire); add the write-freeze on closed business dates (unblocks US-3.7) and the chunked GL-feed post.
 
 > These are suggestions based on the gap analysis above — confirm against the
 > product roadmap before scheduling. / Đây là gợi ý dựa trên phân tích khoảng

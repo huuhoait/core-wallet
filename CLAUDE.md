@@ -68,6 +68,14 @@ http (gin) → handler → usecase → repo → PostgreSQL stored functions
 
 Wiring is in `cmd/server/main.go`: `config → otel → pgxpool → repo → usecase → http`.
 
+### CQRS Pattern (Command Query Responsibility Segregation)
+
+To maximize performance, minimize locking overhead, and support massive throughput, the repository implements a strict CQRS pattern:
+
+- **Commands (Write Paths)**: All mutating operations (e.g., `Topup`, `Transfer`, `Withdraw`, `Reverse`, `AddRestraint`, `OpenAccount`) MUST go through `PgWalletRepo.withTx` in `internal/repo/postgres.go`. This opens an active transaction, sets localized timeouts (`statement_timeout`, `lock_timeout`), registers session-safe audit GUCs (`set_config(...)`), and invokes the corresponding write-heavy PL/pgSQL stored procedure.
+- **Queries (Read Paths)**: All read-only operations (e.g., `GetBalance`, `GetBalanceOps`, `GetBalanceAsOf`, `GetBalanceBatch` in `repo/balance.go`, and transactions/account queries in `repo/transaction.go`) bypass transaction wrapping and audit GUC setups. They call `r.pool.Query` or `r.pool.QueryRow` directly on the `pgxpool`. This conforms to `BAL-05` (balance reads must not write an OLTP audit row) and avoids unnecessary transactional overhead.
+- **Consistency & Routing**: Write commands always run on the primary. Read queries default to running on the primary database pool to ensure strong consistency (e.g., `BAL-06: read-after-write consistency`), but the isolation of read ports makes the codebase fully prepared to route high-volume reporting queries to read replicas if needed.
+
 ### The repo transaction pattern (most important to understand)
 
 Every write goes through `PgWalletRepo.withTx` (`internal/repo/postgres.go`). Each call:

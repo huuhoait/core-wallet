@@ -705,12 +705,25 @@
                   "value": "{{acct_no_a}}"
                 },
                 {
+                  "key": "from",
+                  "value": "2026-05-01",
+                  "description": "optional: post_date >= from (YYYY-MM-DD)",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "2026-05-30",
+                  "description": "optional: post_date <= to (YYYY-MM-DD)",
+                  "disabled": true
+                },
+                {
                   "key": "limit",
-                  "value": "5"
+                  "value": "5",
+                  "description": "page size, default/max 200"
                 }
               ]
             },
-            "description": "Account statement: ledger entries on {{acct_no_a}}, newest-first, keyset-paged (next_cursor → ?before_seq=). Captures a tfr_key for the detail request."
+            "description": "Account statement: ledger entries on {{acct_no_a}}, newest-first. Filter by account + optional post_date range (from/to, YYYY-MM-DD). Paged at 200 items/page — keyset via next_cursor → ?before_seq=. Captures a tfr_key for the detail request."
           },
           "event": [
             {

@@ -86,6 +86,44 @@ AS $$
   VALUES (p_biz_date, p_task, p_status, p_rows, p_started, clock_timestamp(), p_message);
 $$;
 
+-- ── trial balance (US-6.3) ───────────────────────────────────────────────────
+-- Daily GL-level trial balance + tamper-evident hash chain. Granularity is the
+-- chart of accounts (FM_GL_MAST) — a small fixed set, so the whole day is built
+-- in one short TX (no chunking). Balances use a signed-net convention
+-- (closing = opening + ΣDR − ΣCR; debit-positive). A balanced ledger satisfies
+-- BOTH  ΣDR = ΣCR (the day's movements net to zero) AND Σ closing = 0 system-wide.
+CREATE TABLE IF NOT EXISTS WLT_TRIAL_BALANCE (
+  biz_date    DATE          NOT NULL,
+  gl_code     VARCHAR(32)   NOT NULL,
+  ccy         VARCHAR(4)    NOT NULL,
+  gl_desc     VARCHAR(120),
+  opening_bal NUMERIC(20,2) NOT NULL DEFAULT 0,   -- = prior day's closing (carry-forward)
+  period_dr   NUMERIC(20,2) NOT NULL DEFAULT 0,   -- Σ WLT_BATCH DR for the day
+  period_cr   NUMERIC(20,2) NOT NULL DEFAULT 0,   -- Σ WLT_BATCH CR for the day
+  closing_bal NUMERIC(20,2) NOT NULL,             -- opening + period_dr - period_cr
+  created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
+  created_by  VARCHAR(64)   NOT NULL DEFAULT 'SYSTEM',
+  CONSTRAINT pk_trial_balance PRIMARY KEY (biz_date, gl_code, ccy)
+);
+
+-- one sealed proof per (biz_date, ccy); chain_hash links to the prior day's so any
+-- retro-edit of a stored line or proof field breaks the chain from that day forward.
+CREATE TABLE IF NOT EXISTS WLT_TRIAL_BALANCE_PROOF (
+  biz_date     DATE          NOT NULL,
+  ccy          VARCHAR(4)    NOT NULL,
+  gl_count     INTEGER       NOT NULL,
+  grand_dr     NUMERIC(24,2) NOT NULL,
+  grand_cr     NUMERIC(24,2) NOT NULL,
+  net_balance  NUMERIC(24,2) NOT NULL,            -- Σ closing_bal; 0 ⇔ balanced
+  is_balanced  BOOLEAN       NOT NULL,
+  content_hash VARCHAR(64)   NOT NULL,            -- sha256 of the ordered TB lines
+  prev_hash    VARCHAR(64)   NOT NULL,            -- prior day's chain_hash ('GENESIS' if first)
+  chain_hash   VARCHAR(64)   NOT NULL,            -- sha256(totals ‖ content_hash ‖ prev_hash)
+  created_at   TIMESTAMPTZ   NOT NULL DEFAULT now(),
+  created_by   VARCHAR(64)   NOT NULL DEFAULT 'SYSTEM',
+  CONSTRAINT pk_trial_balance_proof PRIMARY KEY (biz_date, ccy)
+);
+
 -- =============================================================================
 -- T1 — daily balance snapshot  →  WLT_ACCT_BAL[D]
 -- =============================================================================
@@ -299,6 +337,121 @@ END;
 $$;
 
 -- =============================================================================
+-- T6 — daily trial balance + signed (hash-chained) proof  (US-6.3)
+-- =============================================================================
+-- Aggregates the immutable GL feed (WLT_BATCH, frozen for D after cutover) into a
+-- per-(gl_code, ccy) trial balance, carries opening forward from the prior TB,
+-- checks the books balance, and seals the day with a sha256 hash chain. Few GL
+-- codes ⇒ one short TX (no chunking). Deterministic: re-running for unchanged data
+-- reproduces the identical hash, so a re-run is safe and a *changed* hash is
+-- exactly the tamper signal. Unbalanced books are RECORDED (is_balanced = false +
+-- WARNING), never hidden by aborting.
+CREATE OR REPLACE PROCEDURE eod_trial_balance(p_biz_date DATE)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_started TIMESTAMPTZ := clock_timestamp();
+  r_ccy     RECORD;
+  v_cnt     INTEGER;
+  v_gdr     NUMERIC(24,2);
+  v_gcr     NUMERIC(24,2);
+  v_net     NUMERIC(24,2);
+  v_content VARCHAR(64);
+  v_prev    VARCHAR(64);
+  v_chain   VARCHAR(64);
+  v_bal     BOOLEAN;
+BEGIN
+  IF p_biz_date IS NULL OR p_biz_date > CURRENT_DATE THEN
+    RAISE EXCEPTION 'EOD_INVALID_DATE: %', p_biz_date USING ERRCODE = 'P0090';
+  END IF;
+  PERFORM set_config('audit.actor', 'EOD', false);
+
+  INSERT INTO WLT_EOD_RUN(biz_date, task, status, started_at)
+       VALUES (p_biz_date, 'TRIAL_BALANCE', 'RUNNING', now())
+  ON CONFLICT (biz_date, task)
+       DO UPDATE SET status = 'RUNNING', started_at = now(), message = NULL;
+
+  -- every currency that moved today, or carried a balance from the prior TB
+  FOR r_ccy IN
+    SELECT ccy FROM WLT_BATCH WHERE post_date = p_biz_date
+    UNION
+    SELECT ccy FROM WLT_TRIAL_BALANCE
+     WHERE biz_date = (SELECT max(biz_date) FROM WLT_TRIAL_BALANCE WHERE biz_date < p_biz_date)
+  LOOP
+    DELETE FROM WLT_TRIAL_BALANCE WHERE biz_date = p_biz_date AND ccy = r_ccy.ccy;  -- idempotent rebuild
+
+    INSERT INTO WLT_TRIAL_BALANCE(biz_date, gl_code, ccy, gl_desc,
+                                  opening_bal, period_dr, period_cr, closing_bal)
+    WITH prior AS (            -- carry-forward opening = most recent prior closing
+      SELECT gl_code, closing_bal
+        FROM WLT_TRIAL_BALANCE
+       WHERE ccy = r_ccy.ccy
+         AND biz_date = (SELECT max(biz_date) FROM WLT_TRIAL_BALANCE
+                          WHERE ccy = r_ccy.ccy AND biz_date < p_biz_date)
+    ),
+    today AS (                 -- today's GL movement
+      SELECT gl_code,
+             COALESCE(SUM(amount) FILTER (WHERE tran_nature = 'DR'), 0) AS dr,
+             COALESCE(SUM(amount) FILTER (WHERE tran_nature = 'CR'), 0) AS cr
+        FROM WLT_BATCH
+       WHERE post_date = p_biz_date AND ccy = r_ccy.ccy
+       GROUP BY gl_code
+    ),
+    keys AS (SELECT gl_code FROM prior UNION SELECT gl_code FROM today)
+    SELECT p_biz_date, k.gl_code, r_ccy.ccy, g.gl_code_desc,
+           COALESCE(pr.closing_bal, 0),
+           COALESCE(t.dr, 0),
+           COALESCE(t.cr, 0),
+           COALESCE(pr.closing_bal, 0) + COALESCE(t.dr, 0) - COALESCE(t.cr, 0)
+      FROM keys k
+      LEFT JOIN prior pr ON pr.gl_code = k.gl_code
+      LEFT JOIN today t  ON t.gl_code  = k.gl_code
+      JOIN fm_gl_mast g  ON g.gl_code  = k.gl_code;
+
+    -- totals + canonical content hash over the ordered lines
+    SELECT count(*), COALESCE(sum(period_dr), 0), COALESCE(sum(period_cr), 0),
+           COALESCE(sum(closing_bal), 0),
+           encode(sha256(convert_to(
+             COALESCE(string_agg(gl_code || ':' || period_dr || ':' || period_cr || ':' || closing_bal,
+                                  '|' ORDER BY gl_code), ''), 'UTF8')), 'hex')
+      INTO v_cnt, v_gdr, v_gcr, v_net, v_content
+      FROM WLT_TRIAL_BALANCE WHERE biz_date = p_biz_date AND ccy = r_ccy.ccy;
+
+    v_bal := (v_gdr = v_gcr AND v_net = 0);
+
+    SELECT chain_hash INTO v_prev
+      FROM WLT_TRIAL_BALANCE_PROOF
+     WHERE ccy = r_ccy.ccy AND biz_date < p_biz_date
+     ORDER BY biz_date DESC LIMIT 1;
+    v_prev := COALESCE(v_prev, 'GENESIS');
+
+    v_chain := encode(sha256(convert_to(
+      p_biz_date::text || '|' || r_ccy.ccy || '|' || v_gdr || '|' || v_gcr || '|' ||
+      v_net || '|' || v_content || '|' || v_prev, 'UTF8')), 'hex');
+
+    INSERT INTO WLT_TRIAL_BALANCE_PROOF(biz_date, ccy, gl_count, grand_dr, grand_cr,
+                                        net_balance, is_balanced, content_hash, prev_hash, chain_hash)
+    VALUES (p_biz_date, r_ccy.ccy, v_cnt, v_gdr, v_gcr, v_net, v_bal, v_content, v_prev, v_chain)
+    ON CONFLICT (biz_date, ccy) DO UPDATE SET
+      gl_count = EXCLUDED.gl_count, grand_dr = EXCLUDED.grand_dr, grand_cr = EXCLUDED.grand_cr,
+      net_balance = EXCLUDED.net_balance, is_balanced = EXCLUDED.is_balanced,
+      content_hash = EXCLUDED.content_hash, prev_hash = EXCLUDED.prev_hash, chain_hash = EXCLUDED.chain_hash;
+
+    IF NOT v_bal THEN
+      RAISE WARNING 'TRIAL BALANCE NOT BALANCED % %: DR=% CR=% net=%',
+        p_biz_date, r_ccy.ccy, v_gdr, v_gcr, v_net;
+    END IF;
+  END LOOP;
+
+  SELECT count(*) INTO v_cnt FROM WLT_TRIAL_BALANCE WHERE biz_date = p_biz_date;
+  UPDATE WLT_EOD_RUN SET status = 'DONE', finished_at = now(), rows_done = v_cnt
+    WHERE biz_date = p_biz_date AND task = 'TRIAL_BALANCE';
+  PERFORM eod_log(p_biz_date, 'TRIAL_BALANCE', 'DONE', v_cnt, v_started);
+  COMMIT;
+END;
+$$;
+
+-- =============================================================================
 -- eod_mark_failed — record a failure (scheduler error path)
 -- =============================================================================
 -- A COMMIT-looping procedure cannot wrap its work in a BEGIN..EXCEPTION block
@@ -323,7 +476,55 @@ END;
 $$;
 
 -- =============================================================================
--- run_eod — orchestrator (T1 → T2 → T5), invoked at top level
+-- eod_verify_chain — re-derive and verify the trial-balance hash chain (tamper check)
+-- =============================================================================
+-- Recomputes each day's content + chain hash from the STORED trial-balance lines
+-- and the prior proof, comparing to the sealed values. chain_ok = false ⇒ a TB
+-- line (or proof field) was edited after sealing; link_ok = false ⇒ the chain was
+-- broken/reordered. Read-only — run on the primary or a replica.
+CREATE OR REPLACE FUNCTION eod_verify_chain(p_ccy VARCHAR, p_from DATE DEFAULT NULL, p_to DATE DEFAULT NULL)
+RETURNS TABLE(biz_date DATE, is_balanced BOOLEAN, chain_ok BOOLEAN, link_ok BOOLEAN)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  r       RECORD;
+  v_gdr   NUMERIC(24,2);
+  v_gcr   NUMERIC(24,2);
+  v_net   NUMERIC(24,2);
+  v_cont  VARCHAR(64);
+  v_chain VARCHAR(64);
+  v_prev  VARCHAR(64) := 'GENESIS';
+BEGIN
+  FOR r IN
+    SELECT pf.* FROM WLT_TRIAL_BALANCE_PROOF pf
+     WHERE pf.ccy = p_ccy
+       AND (p_from IS NULL OR pf.biz_date >= p_from)
+       AND (p_to   IS NULL OR pf.biz_date <= p_to)
+     ORDER BY pf.biz_date
+  LOOP
+    SELECT COALESCE(sum(tb.period_dr), 0), COALESCE(sum(tb.period_cr), 0), COALESCE(sum(tb.closing_bal), 0),
+           encode(sha256(convert_to(
+             COALESCE(string_agg(tb.gl_code || ':' || tb.period_dr || ':' || tb.period_cr || ':' || tb.closing_bal,
+                                  '|' ORDER BY tb.gl_code), ''), 'UTF8')), 'hex')
+      INTO v_gdr, v_gcr, v_net, v_cont
+      FROM WLT_TRIAL_BALANCE tb WHERE tb.biz_date = r.biz_date AND tb.ccy = p_ccy;
+
+    v_chain := encode(sha256(convert_to(
+      r.biz_date::text || '|' || p_ccy || '|' || v_gdr || '|' || v_gcr || '|' ||
+      v_net || '|' || v_cont || '|' || r.prev_hash, 'UTF8')), 'hex');
+
+    biz_date    := r.biz_date;
+    is_balanced := r.is_balanced;
+    chain_ok    := (v_chain = r.chain_hash);   -- recomputed from stored lines == sealed?
+    link_ok     := (r.prev_hash = v_prev);     -- prev_hash links to the previous day's chain?
+    v_prev      := r.chain_hash;
+    RETURN NEXT;
+  END LOOP;
+END;
+$$;
+
+-- =============================================================================
+-- run_eod — orchestrator (T1 → T2 → T5 → T6), invoked at top level
 -- =============================================================================
 CREATE OR REPLACE PROCEDURE run_eod(p_biz_date DATE)
 LANGUAGE plpgsql
@@ -332,15 +533,20 @@ BEGIN
   CALL eod_snapshot(p_biz_date);          -- T1
   CALL eod_prev_day_roll(p_biz_date);     -- T2 (depends on T1)
   CALL eod_expire_restraints(p_biz_date); -- T5
+  CALL eod_trial_balance(p_biz_date);     -- T6 (US-6.3)
 END;
 $$;
 
 -- ── grants (local stack runs EOD as wallet_app; prod: dedicated batch role) ───
-GRANT SELECT, INSERT, UPDATE ON WLT_EOD_RUN       TO wallet_app;
-GRANT SELECT, INSERT         ON WLT_EOD_AUDIT_LOG TO wallet_app;
+GRANT SELECT, INSERT, UPDATE ON WLT_EOD_RUN             TO wallet_app;
+GRANT SELECT, INSERT         ON WLT_EOD_AUDIT_LOG       TO wallet_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON WLT_TRIAL_BALANCE       TO wallet_app;
+GRANT SELECT, INSERT, UPDATE         ON WLT_TRIAL_BALANCE_PROOF TO wallet_app;
 GRANT EXECUTE ON FUNCTION  eod_log(DATE, VARCHAR, VARCHAR, BIGINT, TIMESTAMPTZ, TEXT) TO wallet_app;
+GRANT EXECUTE ON FUNCTION  eod_verify_chain(VARCHAR, DATE, DATE) TO wallet_app;
 GRANT EXECUTE ON PROCEDURE eod_snapshot(DATE, BIGINT)        TO wallet_app;
 GRANT EXECUTE ON PROCEDURE eod_prev_day_roll(DATE, BIGINT)   TO wallet_app;
 GRANT EXECUTE ON PROCEDURE eod_expire_restraints(DATE)       TO wallet_app;
+GRANT EXECUTE ON PROCEDURE eod_trial_balance(DATE)           TO wallet_app;
 GRANT EXECUTE ON PROCEDURE eod_mark_failed(DATE, VARCHAR, TEXT) TO wallet_app;
 GRANT EXECUTE ON PROCEDURE run_eod(DATE)                     TO wallet_app;
