@@ -534,16 +534,22 @@ CREATE TABLE FM_CLIENT_BANKS (
   BANK_NAME         VARCHAR(120),
   ACCT_NO_ENC       BYTEA         NOT NULL,           -- P1 — encrypted (see DLD §8.3)
   ACCT_HOLDER_NAME  VARCHAR(200),
-  IS_DEFAULT        SMALLINT      DEFAULT 0,
-  STATUS            VARCHAR(4)    DEFAULT 'A',        -- 'A'=active, 'R'=removed, 'P'=pending verify
+  IS_DEFAULT        SMALLINT      NOT NULL DEFAULT 0, -- customer's default payout bank
+  STATUS            VARCHAR(4)    NOT NULL DEFAULT 'A',
   VERIFIED_AT       TIMESTAMPTZ,
-  CREATED_AT        TIMESTAMPTZ   DEFAULT NOW(),
-  UPDATED_AT        TIMESTAMPTZ   DEFAULT NOW(),
-  CONSTRAINT fk_banks_client FOREIGN KEY (CLIENT_NO) REFERENCES FM_CLIENT(CLIENT_NO),
-  CONSTRAINT chk_banks_status CHECK (STATUS IN ('A','R','P'))
+  -- audit quintet (matches deployed convention; set by fn_set_audit_columns)
+  CHANNEL           VARCHAR(20),
+  CREATED_AT        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  CREATED_BY        VARCHAR(64)   NOT NULL DEFAULT 'SYSTEM',
+  UPDATED_AT        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  UPDATED_BY        VARCHAR(64)   NOT NULL DEFAULT 'SYSTEM',
+  CONSTRAINT fk_banks_client  FOREIGN KEY (CLIENT_NO) REFERENCES FM_CLIENT(CLIENT_NO),
+  CONSTRAINT chk_cb_default   CHECK (IS_DEFAULT IN (0, 1))
 );
 
 CREATE INDEX idx_fmc_banks_client ON FM_CLIENT_BANKS(CLIENT_NO);
+-- At most one default bank per client.
+CREATE UNIQUE INDEX uk_cb_one_default ON FM_CLIENT_BANKS(CLIENT_NO) WHERE IS_DEFAULT = 1;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 2.8  FM_NOS_VOS — Nostro/Vostro master (TKĐBTT)

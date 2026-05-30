@@ -156,18 +156,25 @@ CREATE TABLE FM_CLIENT_CONTACT (
   CONSTRAINT fk_ct_client FOREIGN KEY (CLIENT_NO) REFERENCES FM_CLIENT(CLIENT_NO)
 );
 
--- ─── FM_CLIENT_BANKS ──────────────────────────────────────────────────────
+-- ─── FM_CLIENT_BANKS (linked bank accounts) ───────────────────────────────
+-- Audit columns CHANNEL/CREATED_AT/CREATED_BY/UPDATED_AT/UPDATED_BY are appended
+-- by the §8 audit DO-loop (kept off the CREATE list, like every other table).
 CREATE TABLE FM_CLIENT_BANKS (
+  LINK_ID          BIGINT        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   CLIENT_NO        VARCHAR(48)   NOT NULL,
-  SEQ_NO           SMALLINT      NOT NULL,
-  BANK_CODE        VARCHAR(20)   NOT NULL,
+  BANK_CODE        VARCHAR(20)   NOT NULL,    -- NAPAS BIN / bank swift
+  BANK_NAME        VARCHAR(120),
   ACCT_NO_ENC      BYTEA         NOT NULL,    -- encrypted P1
-  ACCT_NAME        VARCHAR(200),
+  ACCT_HOLDER_NAME VARCHAR(200),
+  IS_DEFAULT       SMALLINT      NOT NULL DEFAULT 0,
   STATUS           VARCHAR(4)    NOT NULL DEFAULT 'A',
   VERIFIED_AT      TIMESTAMPTZ,
-  PRIMARY KEY (CLIENT_NO, SEQ_NO),
-  CONSTRAINT fk_cb_client FOREIGN KEY (CLIENT_NO) REFERENCES FM_CLIENT(CLIENT_NO)
+  CONSTRAINT fk_cb_client  FOREIGN KEY (CLIENT_NO) REFERENCES FM_CLIENT(CLIENT_NO),
+  CONSTRAINT chk_cb_default CHECK (IS_DEFAULT IN (0, 1))
 );
+CREATE INDEX idx_cb_client ON FM_CLIENT_BANKS(CLIENT_NO);
+-- At most one default bank per client.
+CREATE UNIQUE INDEX uk_cb_one_default ON FM_CLIENT_BANKS(CLIENT_NO) WHERE IS_DEFAULT = 1;
 
 -- ─── FM_NOS_VOS ───────────────────────────────────────────────────────────
 CREATE TABLE FM_NOS_VOS (
