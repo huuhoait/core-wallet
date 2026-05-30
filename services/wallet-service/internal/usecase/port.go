@@ -56,6 +56,11 @@ type WalletRepository interface {
 	CreateClient(ctx context.Context, in domain.ClientCreateInput) (*domain.ClientResult, error)
 	UpdateClient(ctx context.Context, in domain.ClientUpdateInput) (*domain.ClientResult, error)
 
+	// Client profile reads (read-only). GetClient → masked (v_client_masked,
+	// wallet_app); GetClientFull → unmasked PII (wallet_pii_ro, /v1/ops only).
+	GetClient(ctx context.Context, clientNo string) (*domain.ClientView, error)
+	GetClientFull(ctx context.Context, clientNo string) (*domain.ClientFullView, error)
+
 	// Client linked-bank management (link_client_bank / set_default_client_bank).
 	LinkClientBank(ctx context.Context, in domain.BankLinkInput) (*domain.BankLinkResult, error)
 	SetDefaultClientBank(ctx context.Context, in domain.SetDefaultBankInput) (*domain.BankLinkResult, error)

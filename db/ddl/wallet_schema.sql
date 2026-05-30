@@ -856,6 +856,38 @@ SELECT
   KYC_TIER, STATUS, RISK_LEVEL, VERIFIED_AT
 FROM WLT_CLIENT_KYC;
 
+-- Masked client profile (for GET /v1/clients/:client_no via wallet_app).
+-- Runs with the view OWNER's privileges (security_invoker off, PG default), so
+-- wallet_app reads the masked output WITHOUT direct SELECT on raw CLIENT_NAME /
+-- GLOBAL_ID (those grants are deliberately withheld — see §10). PII shown masked;
+-- the unmasked profile is GET /v1/ops/clients/:client_no via wallet_pii_ro.
+CREATE OR REPLACE VIEW v_client_masked AS
+SELECT
+  c.CLIENT_NO,
+  regexp_replace(c.CLIENT_NAME, '(^.).*(.$)', '\1***\2')        AS client_name_masked,
+  c.CLIENT_TYPE,
+  c.GLOBAL_ID_TYPE,
+  CASE WHEN c.GLOBAL_ID IS NULL THEN NULL
+       ELSE '****' || right(c.GLOBAL_ID, 4) END                AS global_id_masked,
+  c.COUNTRY_LOC, c.COUNTRY_CITIZEN, c.CLIENT_GRP, c.ACCT_EXEC,
+  c.STATUS,
+  i.BIRTH_DATE, i.SEX, i.RESIDENT_STATUS,
+  k.KYC_TIER,
+  k.STATUS                                                     AS kyc_status,
+  k.RISK_LEVEL,
+  CASE WHEN k.PHONE_NO_HASH IS NULL THEN NULL
+       ELSE '09xxxxx' || right(encode(k.PHONE_NO_HASH, 'hex'), 3) END AS phone_masked,
+  k.VERIFIED_AT
+FROM FM_CLIENT c
+LEFT JOIN FM_CLIENT_INDVL i ON i.CLIENT_NO = c.CLIENT_NO
+LEFT JOIN LATERAL (
+  SELECT k2.KYC_TIER, k2.STATUS, k2.RISK_LEVEL, k2.PHONE_NO_HASH, k2.VERIFIED_AT
+    FROM WLT_CLIENT_KYC k2
+   WHERE k2.CLIENT_NO = c.CLIENT_NO
+   ORDER BY k2.KYC_ID DESC
+   LIMIT 1
+) k ON true;
+
 
 -- =============================================================================
 -- §8b. AUDIT COLUMN OVERLAY — adds 5 standard audit cols to every base table
@@ -1048,7 +1080,7 @@ GRANT SELECT ON
   WLT_ACCT_TYPE, WLT_ACCT_GROUP, WLT_TRAN_DEF, WLT_GL_MAP,
   WLT_NOSTRO_LINK,
   FM_CURRENCY, FM_GL_MAST, FM_NOS_VOS,
-  v_wlt_group_balance, v_wlt_active_restraints_effective, v_kyc_masked
+  v_wlt_group_balance, v_wlt_active_restraints_effective, v_kyc_masked, v_client_masked
 TO wallet_app;
 
 -- wallet_app does NOT directly INSERT into client tables — SPs use SECURITY DEFINER.

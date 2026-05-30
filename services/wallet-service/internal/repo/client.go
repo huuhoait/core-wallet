@@ -4,6 +4,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 
@@ -83,4 +84,71 @@ func (r *PgWalletRepo) UpdateClient(ctx context.Context, in domain.ClientUpdateI
 		return nil, mapErrIfPg(err)
 	}
 	return &out, nil
+}
+
+// GetClient returns the MASKED client profile from v_client_masked (wallet_app
+// path, readPool). Name + CCCD/passport come back masked; raw PII is never
+// exposed here. Unknown client_no → 404. READ-ONLY: no TX, no audit GUCs.
+func (r *PgWalletRepo) GetClient(ctx context.Context, clientNo string) (*domain.ClientView, error) {
+	const q = `
+		SELECT client_no, client_name_masked, client_type, global_id_type, global_id_masked,
+		       country_loc, country_citizen, client_grp, acct_exec, status,
+		       birth_date, sex, resident_status,
+		       kyc_tier, kyc_status, risk_level, phone_masked, verified_at
+		  FROM v_client_masked
+		 WHERE client_no = $1
+	`
+	var c domain.ClientView
+	err := r.readPool.QueryRow(ctx, q, clientNo).Scan(
+		&c.ClientNo, &c.ClientNameMasked, &c.ClientType, &c.GlobalIDType, &c.GlobalIDMasked,
+		&c.CountryLoc, &c.CountryCitizen, &c.ClientGrp, &c.AcctExec, &c.Status,
+		&c.BirthDate, &c.Sex, &c.ResidentStatus,
+		&c.KycTier, &c.KycStatus, &c.RiskLevel, &c.PhoneMasked, &c.VerifiedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.NotFound("client not found: "+clientNo, nil)
+	}
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return &c, nil
+}
+
+// GetClientFull returns the UNMASKED client profile via the wallet_pii_ro pool
+// (piiPool). Privileged P1/PII read — exposed only under /v1/ops. Phone/email
+// stay encrypted at rest and are not decrypted here. Unknown client_no → 404.
+// READ-ONLY: no TX, no audit GUCs.
+func (r *PgWalletRepo) GetClientFull(ctx context.Context, clientNo string) (*domain.ClientFullView, error) {
+	const q = `
+		SELECT c.client_no, c.client_name, c.client_type, c.global_id, c.global_id_type,
+		       c.country_loc, c.country_citizen, c.client_grp, c.acct_exec, c.status,
+		       c.registered_date, c.created_at, c.updated_at,
+		       i.surname, i.given_name_1, i.birth_date, i.sex, i.resident_status, i.marital_status,
+		       k.kyc_tier, k.kyc_status, k.risk_level, k.verified_at
+		  FROM FM_CLIENT c
+		  LEFT JOIN FM_CLIENT_INDVL i ON i.client_no = c.client_no
+		  LEFT JOIN LATERAL (
+		    SELECT k2.kyc_tier, k2.status AS kyc_status, k2.risk_level, k2.verified_at
+		      FROM WLT_CLIENT_KYC k2
+		     WHERE k2.client_no = c.client_no
+		     ORDER BY k2.kyc_id DESC
+		     LIMIT 1
+		  ) k ON true
+		 WHERE c.client_no = $1
+	`
+	var c domain.ClientFullView
+	err := r.piiPool.QueryRow(ctx, q, clientNo).Scan(
+		&c.ClientNo, &c.ClientName, &c.ClientType, &c.GlobalID, &c.GlobalIDType,
+		&c.CountryLoc, &c.CountryCitizen, &c.ClientGrp, &c.AcctExec, &c.Status,
+		&c.RegisteredDate, &c.CreatedAt, &c.UpdatedAt,
+		&c.Surname, &c.GivenName, &c.BirthDate, &c.Sex, &c.ResidentStatus, &c.MaritalStatus,
+		&c.KycTier, &c.KycStatus, &c.RiskLevel, &c.VerifiedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.NotFound("client not found: "+clientNo, nil)
+	}
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return &c, nil
 }

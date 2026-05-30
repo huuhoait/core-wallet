@@ -39,6 +39,11 @@ type DB struct {
 	// list) at a read replica. Empty → those reads use the primary DSN (no
 	// replica; strong consistency). Balance-realtime/tx-detail/ops stay on DSN.
 	ReadDSN         string        `env:"DB_READ_DSN"         envExpand:"true"`
+	// PIIDSN connects as the wallet_pii_ro role for the unmasked client read
+	// (GET /v1/ops/clients/:client_no). Empty → that read uses the primary DSN
+	// (fine in dev where DSN is a superuser; in prod set this to a wallet_pii_ro
+	// connection so least-privilege holds — wallet_app cannot read raw PII).
+	PIIDSN          string        `env:"DB_PII_DSN"          envExpand:"true"`
 	MaxConns        int32         `env:"DB_MAX_CONNS"        envDefault:"50"`
 	MinConns        int32         `env:"DB_MIN_CONNS"        envDefault:"5"`
 	MaxConnLifetime time.Duration `env:"DB_MAX_CONN_LIFETIME" envDefault:"30m"`
