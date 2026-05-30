@@ -447,6 +447,34 @@ BEGIN
   END LOOP;
 END $$;
 
+-- ─── GL accounting cutoff (modern-core model: 24/7 ledger, GL cut by time) ───
+-- The GL/accounting layer cuts at a daily time (default 18:00, GMT+7). An entry
+-- posted at/after the cutoff carries ACCOUNTING_DATE = next calendar day, so the
+-- GL period can be SEALED at the cutoff WITHOUT freezing the 24/7 ledger:
+-- post-cutoff entries land in the next (open) accounting period. POST_DATE stays
+-- = CURRENT_DATE (ledger truth / partition key); only ACCOUNTING_DATE shifts.
+-- (Vault/10x style: continuous ledger, accounting date derived by cutoff.)
+CREATE TABLE WLT_GL_CONFIG (
+  singleton    BOOLEAN     PRIMARY KEY DEFAULT true CHECK (singleton),
+  cutoff_time  TIME        NOT NULL DEFAULT '18:00:00',
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO WLT_GL_CONFIG (singleton) VALUES (true) ON CONFLICT DO NOTHING;
+
+-- fn_accounting_date — GL accounting date for a wall-clock instant: the calendar
+-- date in the business TZ (GMT+7), rolled to the NEXT day at/after the cutoff.
+-- STABLE (one value per statement). v1 = calendar+1 (no weekend/holiday skip).
+CREATE OR REPLACE FUNCTION fn_accounting_date(p_ts timestamptz DEFAULT now())
+RETURNS DATE
+LANGUAGE sql STABLE AS $$
+  SELECT CASE
+           WHEN (p_ts AT TIME ZONE 'Asia/Ho_Chi_Minh')::time
+                >= (SELECT cutoff_time FROM WLT_GL_CONFIG WHERE singleton)
+           THEN ((p_ts AT TIME ZONE 'Asia/Ho_Chi_Minh')::date + 1)
+           ELSE  (p_ts AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+         END;
+$$;
+
 -- ─── WLT_GL_BATCH (GL feed) ──────────────────────────────────────────────────
 CREATE TABLE WLT_GL_BATCH (
   TRAN_KEY          BIGINT        NOT NULL,
@@ -459,8 +487,11 @@ CREATE TABLE WLT_GL_BATCH (
   CCY               VARCHAR(4)    NOT NULL,
   REFERENCE         VARCHAR(64),
   NARRATIVE         VARCHAR(200),
-  POST_DATE         DATE          NOT NULL,
+  POST_DATE         DATE          NOT NULL,                              -- ledger calendar date (24/7)
   VALUE_DATE        DATE          NOT NULL,
+  -- GL accounting/period date — cutoff-shifted; posting SPs do NOT set it, so the
+  -- DEFAULT applies (fn_accounting_date()). Period close + freeze key off this.
+  ACCOUNTING_DATE   DATE          NOT NULL DEFAULT fn_accounting_date(),
   SOURCE_MODULE     VARCHAR(8)    NOT NULL DEFAULT 'WLT',
   STATUS            VARCHAR(4)    NOT NULL DEFAULT 'P',
   TIME_STAMP        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
@@ -471,10 +502,11 @@ CREATE TABLE WLT_GL_BATCH (
   CONSTRAINT chk_gl_batch_amt   CHECK (AMOUNT >= 0),
   CONSTRAINT chk_gl_batch_status CHECK (STATUS IN ('P','S','F','R'))
 );
-CREATE INDEX idx_gl_batch_gl_date ON WLT_GL_BATCH(GL_CODE, POST_DATE);
-CREATE INDEX idx_gl_batch_ref     ON WLT_GL_BATCH(REFERENCE);
-CREATE INDEX idx_gl_batch_acct    ON WLT_GL_BATCH(ACCT_INTERNAL_KEY, POST_DATE);
-CREATE INDEX idx_gl_batch_pending ON WLT_GL_BATCH(POST_DATE) WHERE STATUS = 'P';
+CREATE INDEX idx_gl_batch_gl_date  ON WLT_GL_BATCH(GL_CODE, POST_DATE);
+CREATE INDEX idx_gl_batch_ref      ON WLT_GL_BATCH(REFERENCE);
+CREATE INDEX idx_gl_batch_acct     ON WLT_GL_BATCH(ACCT_INTERNAL_KEY, POST_DATE);
+CREATE INDEX idx_gl_batch_acctdate ON WLT_GL_BATCH(ACCOUNTING_DATE, CCY);            -- trial-balance scan
+CREATE INDEX idx_gl_batch_pending  ON WLT_GL_BATCH(ACCOUNTING_DATE) WHERE STATUS = 'P'; -- GL-feed scan
 
 -- ─── WLT_ACCT_BAL (daily snapshot per account) ────────────────────────────
 CREATE TABLE WLT_ACCT_BAL (

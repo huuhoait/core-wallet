@@ -134,15 +134,28 @@ func run(logger *slog.Logger) error {
 		}
 		defer eodPool.Close()
 
-		sched, err := eod.New(eodPool, cfg.EOD.RunAt, cfg.EOD.Timezone, cfg.EOD.RunTimeout, logger)
+		// Two daily jobs on the same direct pool (modern-core split):
+		//   customer EOD — run_eod for the PRIOR calendar day, overnight (RunAt)
+		//   GL close     — run_gl_close for TODAY's accounting day, at the cutoff
+		custEOD, err := eod.New(eodPool, "customer-eod", "run_eod", eod.PriorDay,
+			cfg.EOD.RunAt, cfg.EOD.Timezone, cfg.EOD.RunTimeout, logger)
 		if err != nil {
 			return fmt.Errorf("eod scheduler: %w", err)
 		}
+		glClose, err := eod.New(eodPool, "gl-close", "run_gl_close", eod.CurrentDay,
+			cfg.EOD.GLCutoff, cfg.EOD.Timezone, cfg.EOD.RunTimeout, logger)
+		if err != nil {
+			return fmt.Errorf("gl-close scheduler: %w", err)
+		}
 		eodDone := make(chan struct{})
-		go func() { defer close(eodDone); _ = sched.Start(rootCtx) }()
-		defer func() { <-eodDone }()
-		logger.Info("eod scheduler enabled",
-			slog.String("run_at", cfg.EOD.RunAt), slog.String("tz", cfg.EOD.Timezone))
+		go func() { defer close(eodDone); _ = custEOD.Start(rootCtx) }()
+		glDone := make(chan struct{})
+		go func() { defer close(glDone); _ = glClose.Start(rootCtx) }()
+		defer func() { <-eodDone; <-glDone }()
+		logger.Info("eod schedulers enabled",
+			slog.String("customer_eod_at", cfg.EOD.RunAt),
+			slog.String("gl_close_at", cfg.EOD.GLCutoff),
+			slog.String("tz", cfg.EOD.Timezone))
 	} else {
 		logger.Info("eod scheduler disabled (EOD_ENABLED unset)")
 	}
