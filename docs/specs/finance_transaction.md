@@ -872,10 +872,14 @@ Restraints are classified along **2 independent dimensions** (T24 convention):
 
 ### 8.3 Add restraint
 
+> **Implemented as** `POST /v1/finance/restraints` with `acct_no` in the body
+> (Finance group, Phase 2). SP `add_restraint` (wallet_sp_restraint.sql) validates
+> enums/conflict/amount/dates and rolls the hold onto `WLT_ACCT`. Role/maker-checker
+> + `X-Idempotency-Key` are gateway concerns (not yet enforced).
+
 ```json
-POST /v1/accounts/{acct_no}/restraints
-Authorization: Bearer <ops_token>           // role: OPS_RESTRAINT_MAKER
-Headers: X-Idempotency-Key: RSTR_20260528_xyz
+POST /v1/finance/restraints                  // body carries acct_no
+Authorization: Bearer <ops_token>           // role: OPS_RESTRAINT_MAKER (gateway)
 
 Request:
 {
@@ -917,9 +921,14 @@ Errors:
 
 ### 8.4 Remove restraint
 
+> **Implemented as** `POST /v1/finance/restraints/{restraint_id}/release`
+> (SP `release_restraint`). `reason` is mandatory for `COURT_ORDER`/`TAX_LIEN`
+> (→ `COURT_ORDER_REMOVE_REQUIRES_DOC`). Recomputes account aggregates from the
+> remaining active restraints.
+
 ```json
-DELETE /v1/accounts/{acct_no}/restraints/{restraint_id}
-Authorization: Bearer <ops_token>           // role: OPS_RESTRAINT_CHECKER
+POST /v1/finance/restraints/{restraint_id}/release
+Authorization: Bearer <ops_token>           // role: OPS_RESTRAINT_CHECKER (gateway)
 Headers: X-Idempotency-Key: RSTR_RM_20260828_xyz
 
 Request body:

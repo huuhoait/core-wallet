@@ -626,6 +626,179 @@
       ]
     },
     {
+      "name": "Restraints",
+      "item": [
+        {
+          "name": "POST add restraint (DEBIT hold)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"acct_no\":           \"{{acct_no_a}}\",\n  \"restraint_type\":    \"DEBIT\",\n  \"restraint_purpose\": \"DISPUTE_HOLD\",\n  \"pledged_amt\":       \"50000\",\n  \"narrative\":         \"Postman dispute hold\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/finance/restraints",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "restraints"
+              ]
+            },
+            "description": "Add a DEBIT hold (locks pledged_amt into available_bal). SP validates type/purpose/conflict/amount/dates. Captures {{restraint_id}} for release."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([201,404,409,422,423]));",
+                  "if (pm.response.code===201){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('restraint_id + available_bal_after', ()=>{",
+                  "    pm.expect(b.restraint_id).to.be.a('number');",
+                  "    pm.expect(b.available_bal_after).to.be.a('string');",
+                  "  });",
+                  "  pm.environment.set('restraint_id', b.restraint_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST release restraint",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Postman release\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/finance/restraints/{{restraint_id}}/release",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "restraints",
+                "{{restraint_id}}",
+                "release"
+              ]
+            },
+            "description": "Release the restraint captured into {{restraint_id}}. reason mandatory for COURT_ORDER/TAX_LIEN."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,404,409,422]));",
+                  "if (pm.response.code===200){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('status R', ()=>pm.expect(b.status).to.equal('R'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "422 — type/purpose conflict (COURT_ORDER+DEBIT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"acct_no\":           \"{{acct_no_a}}\",\n  \"restraint_type\":    \"DEBIT\",\n  \"restraint_purpose\": \"COURT_ORDER\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/finance/restraints",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "restraints"
+              ]
+            },
+            "description": "COURT_ORDER must be type ALL → conflict."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422', () => pm.response.to.have.status(422));",
+                  "pm.test('code RESTRAINT_TYPE_PURPOSE_CONFLICT', ()=>pm.expect(pm.response.json().code).to.equal('RESTRAINT_TYPE_PURPOSE_CONFLICT'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Accounts",
       "item": [
         {

@@ -175,6 +175,8 @@ Success responses additionally carry `transaction_status` (`ACSC` settled /
 | 504 | `TIMEOUT` | E9004 | — | `PDNG` | ctx deadline / 57014 (503 on 55P03 lock_timeout) |
 | 500 | `INTERNAL_ERROR` | E9001 | — | `PDNG` | unmapped fallback |
 
+> Restraint codes (`RESTRAINT_TYPE_INVALID`/`PURPOSE_INVALID`/`TYPE_PURPOSE_CONFLICT`/`AMT_EXCEEDS_BALANCE`/`DATE_INVALID` → 422, `RESTRAINT_ALREADY_REMOVED` → 409, `RESTRAINT_NOT_FOUND` → 404, `COURT_ORDER_REMOVE_REQUIRES_DOC` → 422) are now implemented too (SP `add_restraint`/`release_restraint`) — listed in §4.9.
+
 ### 4.1 Auth & rate limiting
 
 | HTTP | Code | Internal | Module | Caller action |

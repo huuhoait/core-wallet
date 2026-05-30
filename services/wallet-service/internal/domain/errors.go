@@ -65,6 +65,15 @@ const (
 	CodeInvalidDate          = "INVALID_DATE"
 	CodeGoneOnline           = "GONE_ONLINE"
 	CodeBatchSizeExceeded    = "BATCH_SIZE_EXCEEDED"
+	// Restraint management (§4.9)
+	CodeRestraintNotFound            = "RESTRAINT_NOT_FOUND"
+	CodeRestraintAlreadyRemoved      = "RESTRAINT_ALREADY_REMOVED"
+	CodeRestraintTypeInvalid         = "RESTRAINT_TYPE_INVALID"
+	CodeRestraintPurposeInvalid      = "RESTRAINT_PURPOSE_INVALID"
+	CodeRestraintTypePurposeConflict = "RESTRAINT_TYPE_PURPOSE_CONFLICT"
+	CodeRestraintAmtExceedsBalance   = "RESTRAINT_AMT_EXCEEDS_BALANCE"
+	CodeRestraintDateInvalid         = "RESTRAINT_DATE_INVALID"
+	CodeCourtOrderRemoveRequiresDoc  = "COURT_ORDER_REMOVE_REQUIRES_DOC"
 )
 
 // Helpers for constructing errors at boundaries.

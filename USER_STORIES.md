@@ -25,14 +25,14 @@ docs alone).
 | 1. Onboarding & Wallet Management | 0 | 1 | 6 |
 | 2. Transactions — Posting | 6 | 0 | 1 |
 | 3. Reversals & Refunds | 5 | 2 | 0 |
-| 4. Balance & Statements | 4 | 0 | 1 |
+| 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
 | 6. Accounting & GL Operations | 0 | 0 | 5 |
 | 7. Eventing & Integration | 1 | 0 | 2 |
-| 8. Audit, PII & Compliance | 2 | 2 | 1 |
+| 8. Audit, PII & Compliance | 3 | 1 | 1 |
 | 9. Platform / Infra / Observability | 9 | 0 | 3 |
 | 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **35** | **8** | **20** |
+| **Total** | **37** | **7** | **19** |
 
 ---
 
@@ -90,7 +90,7 @@ docs alone).
 | US-4.2 | As a customer, I view a historical balance (`as_of_date`) | ✅ | SP `get_balance_asof`; `?as_of_date=`. |
 | US-4.3 | As ops, I view the full balance breakdown for a wallet | ✅ | SP `get_balance_ops`; `GET /v1/ops/wallets/:acct_no/balance`. |
 | US-4.4 | As ops, I look up balances in batch | ✅ | SP `get_balance_batch`; `POST /v1/ops/wallets/balance/batch`. |
-| US-4.5 | As a customer, I retrieve a transaction history / account statement | ⬜ | Spec §7. No statement/history endpoint. |
+| US-4.5 | As a customer, I retrieve a transaction history / account statement | ✅ | `GET /v1/finance/transactions?acct_no=` (keyset-paged) + `GET /v1/finance/transactions/:tfr_key` (all legs) + `GET /v1/accounts/:acct_no` (profile). Direct SELECT on WLT_*. |
 
 ## Epic 5 — Withdrawal Disbursement / Theo dõi giải ngân rút tiền
 
@@ -126,7 +126,7 @@ docs alone).
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
 | US-8.1 | Capture every client change (OLD/NEW diff, maker-checker) in an audit log | ✅ | `WLT_CLIENT_AUDIT_LOG`; trigger fns `fn_audit_client_change`, `fn_set_audit_columns`. |
-| US-8.2 | Apply holds/restraints that block debits | 🟡 | `WLT_RESTRAINTS` referenced in posting SPs; full lifecycle (add/release endpoints) not exposed. |
+| US-8.2 | Apply holds/restraints (add/release) that block debits/credits | ✅ | SP `add_restraint`/`release_restraint`; `POST /v1/finance/restraints` (+ `/:id/release`); rolls up `TOTAL_RESTRAINED_AMT`/`CR_BLOCKED`, enforced in posting. Maker-checker/idempotency = gateway (deferred). |
 | US-8.3 | Record reconciliation breaks | 🟡 | `WLT_RECON_BREAK` table + `db/tests/wallet_reconciliation_check.sql`; no live recon engine. |
 | US-8.4 | PII protection: classification, encryption, masking, retention, access log | ⬜ | HLD §8.3 design. App-level controls/`WLT_PII_ACCESS_LOG` not built. |
 
@@ -163,7 +163,7 @@ docs alone).
 
 ## Next priorities (suggested) / Ưu tiên tiếp theo (gợi ý)
 
-1. **Account statement / history endpoint** (US-4.5) — last gap in the read API.
+1. **Account/client CRUD + getClient** (Epic 1) — onboarding write path; needs production SPs (getClient needs the masked view).
 2. **Outbox relay worker** (US-7.2) — events are written but never published.
 3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
 4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.

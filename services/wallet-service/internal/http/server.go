@@ -64,6 +64,8 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			finance.POST("/topup/reverse", h.ReverseTopup)         // topup reversal (reference in body)
 			finance.GET("/transactions", h.ListTransactions)       // account statement: ?acct_no=&limit=&before_seq=
 			finance.GET("/transactions/:tfr_key", h.GetTransaction) // all legs of one transaction
+			finance.POST("/restraints", h.AddRestraint)             // add a hold/lien
+			finance.POST("/restraints/:id/release", h.ReleaseRestraint)
 		}
 
 		// ── Accounts: profile + balance reads (Get Balance §9). Read-only. ──

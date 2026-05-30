@@ -119,6 +119,7 @@ for f in db/procedures/wallet_sp_balance.sql \
          db/procedures/wallet_sp_merchant.sql \
          db/procedures/wallet_sp_topup_reversal.sql \
          db/procedures/wallet_sp_transfer_reversal.sql \
+         db/procedures/wallet_sp_restraint.sql \
          db/seeds/wallet_coa_seed.sql \
          db/seeds/wallet_tran_type_ext.sql \
          db/seeds/wallet_seed.sql; do
@@ -161,6 +162,8 @@ and the Postman collection.
 | `POST` | `/v1/finance/merchant-withdraw` | Merchant settlement + hot-shard sweep |
 | `POST` | `/v1/finance/reverse` | Reverse an in-book transfer |
 | `POST` | `/v1/finance/topup/reverse` | Reverse a top-up |
+| `POST` | `/v1/finance/restraints` | Add a restraint / hold-lien on an account |
+| `POST` | `/v1/finance/restraints/:id/release` | Release a restraint |
 | `GET`  | `/v1/finance/transactions?acct_no=&limit=&before_seq=` | Account statement (transaction list, keyset-paged) |
 | `GET`  | `/v1/finance/transactions/:tfr_key` | Transaction detail (all legs of a `tfr_internal_key`) |
 | `GET`  | `/v1/accounts/:acct_no` | Account profile (no client PII) |

@@ -44,4 +44,8 @@ type WalletRepository interface {
 	ReverseTransfer(ctx context.Context, in domain.TransferReversalInput) (*domain.TransferReversalResult, error)
 	// Topup reversal (post_topup_reversal).
 	ReverseTopup(ctx context.Context, in domain.TopupReversalInput) (*domain.TopupReversalResult, error)
+
+	// Restraint management (add_restraint / release_restraint).
+	AddRestraint(ctx context.Context, in domain.RestraintInput) (*domain.RestraintResult, error)
+	ReleaseRestraint(ctx context.Context, in domain.ReleaseRestraintInput) (*domain.RestraintResult, error)
 }

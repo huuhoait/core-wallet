@@ -114,8 +114,16 @@ func httpStatusFor(code string) int {
 	case domain.CodeVersionConflict,
 		domain.CodeWDAlreadyCompleted,
 		domain.CodeWDAlreadyReversed,
-		domain.CodeWDInvalidState:
+		domain.CodeWDInvalidState,
+		domain.CodeRestraintAlreadyRemoved:
 		return http.StatusConflict
+	case domain.CodeRestraintTypeInvalid,
+		domain.CodeRestraintPurposeInvalid,
+		domain.CodeRestraintTypePurposeConflict,
+		domain.CodeRestraintAmtExceedsBalance,
+		domain.CodeRestraintDateInvalid,
+		domain.CodeCourtOrderRemoveRequiresDoc:
+		return http.StatusUnprocessableEntity
 	case domain.CodePIIDekNotSet:
 		return http.StatusInternalServerError
 	case domain.CodeInvalidDate, domain.CodeBatchSizeExceeded:

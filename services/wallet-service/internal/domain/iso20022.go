@@ -55,6 +55,15 @@ var codeMeta = map[string]CodeMeta{
 	CodeInvalidDate:        {"Invalid date", "E8003", "DT01", ""},
 	CodeGoneOnline:         {"Data no longer available online", "E8001", "", ""},
 	CodeBatchSizeExceeded:  {"Batch size exceeded", "E8004", "", ""},
+	// Restraint management (§4.9)
+	CodeRestraintNotFound:            {"Restraint not found", "E3020", "", ""},
+	CodeRestraintAlreadyRemoved:      {"Restraint already removed", "E3021", "", ""},
+	CodeRestraintTypeInvalid:         {"Invalid restraint type", "E3022", "", ""},
+	CodeRestraintPurposeInvalid:      {"Invalid restraint purpose", "E3023", "", ""},
+	CodeRestraintTypePurposeConflict: {"Restraint type/purpose conflict", "E3024", "", ""},
+	CodeRestraintAmtExceedsBalance:   {"Pledged amount exceeds balance", "E3025", "AM04", ""},
+	CodeRestraintDateInvalid:         {"Invalid restraint date range", "E3026", "DT01", ""},
+	CodeCourtOrderRemoveRequiresDoc:  {"Court/tax-lien removal requires a documented reason", "E3027", "RR04", ""},
 }
 
 // MetaFor returns the standards metadata for a canonical code. Unknown codes
