@@ -26,6 +26,16 @@ func (s *WalletService) UpdateClient(ctx context.Context, in domain.ClientUpdate
 	return res, nil
 }
 
+// GetClient returns the masked client profile (wallet_app path).
+func (s *WalletService) GetClient(ctx context.Context, clientNo string) (*domain.ClientView, error) {
+	return s.repo.GetClient(ctx, clientNo)
+}
+
+// GetClientFull returns the unmasked client profile (wallet_pii_ro path, ops only).
+func (s *WalletService) GetClientFull(ctx context.Context, clientNo string) (*domain.ClientFullView, error) {
+	return s.repo.GetClientFull(ctx, clientNo)
+}
+
 // LinkClientBank links a bank account to a client (optionally as default).
 func (s *WalletService) LinkClientBank(ctx context.Context, in domain.BankLinkInput) (*domain.BankLinkResult, error) {
 	res, err := s.repo.LinkClientBank(ctx, in)

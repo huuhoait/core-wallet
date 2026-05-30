@@ -87,8 +87,26 @@ func run(logger *slog.Logger) error {
 		logger.Info("db read pool = primary (DB_READ_DSN unset)")
 	}
 
+	// ---- PII pool (wallet_pii_ro) for the unmasked client read -------------
+	// Only GET /v1/ops/clients/:client_no uses this (see repo/client.go).
+	// Empty DB_PII_DSN → reuse the primary pool (dev superuser sees raw PII; in
+	// prod set a wallet_pii_ro DSN so wallet_app stays unable to read raw PII).
+	piiPool := pool
+	if cfg.DB.PIIDSN != "" {
+		piiCfg := cfg.DB
+		piiCfg.DSN = cfg.DB.PIIDSN
+		piiPool, err = db.NewPool(rootCtx, piiCfg)
+		if err != nil {
+			return fmt.Errorf("db pii pool: %w", err)
+		}
+		defer piiPool.Close()
+		logger.Info("db pii pool ready (wallet_pii_ro)")
+	} else {
+		logger.Info("db pii pool = primary (DB_PII_DSN unset)")
+	}
+
 	// ---- adapter → usecase → http -----------------------------------------
-	walletRepo := repo.NewPgWalletRepo(pool, readPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries)
+	walletRepo := repo.NewPgWalletRepo(pool, readPool, piiPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries)
 	walletSvc := usecase.NewWalletService(walletRepo, logger)
 
 	server, err := netHTTP.New(cfg.HTTP, walletSvc, logger)
