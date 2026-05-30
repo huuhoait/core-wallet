@@ -38,9 +38,9 @@ BEGIN
   -- ───── seed two "old" rows on v_hw BEFORE anything is sealed ─────
   INSERT INTO wlt_gl_batch(tran_key,seq_no,gl_code,amount,tran_nature,ccy,post_date,value_date,status)
   VALUES (-7000, 1, '201.01.001', 100, 'DR', 'VND', v_hw, v_hw, 'P');
-  INSERT INTO wlt_tran_hist(internal_key,tran_type,tran_date,effect_date,post_date,value_date,
+  INSERT INTO wlt_tran_hist(internal_key,tran_type,post_date,value_date,
                             tran_amt,cr_dr_maint_ind,previous_bal_amt,actual_bal_amt,reference,ccy)
-  VALUES (v_ik,'TEST',v_hw,v_hw,v_hw,v_hw,100,'DR',0,0,'FREEZE-OLD-HIST','VND');
+  VALUES (v_ik,'TEST',v_hw,v_hw,100,'DR',0,0,'FREEZE-OLD-HIST','VND');
 
   -- ───── seal CURRENT_DATE-30 and CURRENT_DATE-1; future date merely OPEN ─────
   INSERT INTO wlt_period(biz_date, status) VALUES
@@ -85,9 +85,9 @@ BEGIN
 
   -- ───── TC5: freeze guards the customer ledger too (WLT_TRAN_HIST) ─────
   BEGIN
-    INSERT INTO wlt_tran_hist(internal_key,tran_type,tran_date,effect_date,post_date,value_date,
+    INSERT INTO wlt_tran_hist(internal_key,tran_type,post_date,value_date,
                               tran_amt,cr_dr_maint_ind,previous_bal_amt,actual_bal_amt,reference,ccy)
-    VALUES (v_ik,'TEST',v_hw,v_hw,v_hw,v_hw,100,'DR',0,0,'FREEZE-NEW-HIST','VND');
+    VALUES (v_ik,'TEST',v_hw,v_hw,100,'DR',0,0,'FREEZE-NEW-HIST','VND');
     INSERT INTO _t(name,ok,detail) VALUES ('TC5 freeze rejects INSERT WLT_TRAN_HIST post_date = closed', false, 'no exception');
   EXCEPTION WHEN sqlstate 'P0092' THEN
     INSERT INTO _t(name,ok,detail) VALUES ('TC5 freeze rejects INSERT WLT_TRAN_HIST post_date = closed', true, SQLERRM);
