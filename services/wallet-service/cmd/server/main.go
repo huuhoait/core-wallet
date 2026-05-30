@@ -15,6 +15,7 @@ import (
 
 	"github.com/ewallet-pg/wallet-service/internal/config"
 	"github.com/ewallet-pg/wallet-service/internal/db"
+	"github.com/ewallet-pg/wallet-service/internal/eod"
 	netHTTP "github.com/ewallet-pg/wallet-service/internal/http"
 	"github.com/ewallet-pg/wallet-service/internal/repo"
 	"github.com/ewallet-pg/wallet-service/internal/telemetry"
@@ -93,6 +94,39 @@ func run(logger *slog.Logger) error {
 	server, err := netHTTP.New(cfg.HTTP, walletSvc, logger)
 	if err != nil {
 		return fmt.Errorf("http server: %w", err)
+	}
+
+	// ---- end-of-day scheduler (opt-in; one replica) ------------------------
+	// Runs on a SEPARATE direct pool as wallet_eod (bypassing PgBouncer) with
+	// statement_timeout disabled — run_eod is a long, resumable batch that
+	// COMMITs between chunks. Deferred in reverse order so the scheduler drains
+	// (eodDone) before its pool closes.
+	if cfg.EOD.Enabled {
+		if cfg.EOD.DSN == "" {
+			return fmt.Errorf("EOD_ENABLED=true but EOD_DSN is empty")
+		}
+		eodCfg := cfg.DB
+		eodCfg.DSN = cfg.EOD.DSN
+		eodCfg.MaxConns, eodCfg.MinConns = 2, 0
+		eodCfg.StatementTimeout = 0 // batch: no OLTP statement cap
+		eodCfg.LockTimeout = 0      // wait for locks rather than abort a chunk
+		eodPool, err := db.NewPool(rootCtx, eodCfg)
+		if err != nil {
+			return fmt.Errorf("eod pool: %w", err)
+		}
+		defer eodPool.Close()
+
+		sched, err := eod.New(eodPool, cfg.EOD.RunAt, cfg.EOD.Timezone, cfg.EOD.RunTimeout, logger)
+		if err != nil {
+			return fmt.Errorf("eod scheduler: %w", err)
+		}
+		eodDone := make(chan struct{})
+		go func() { defer close(eodDone); _ = sched.Start(rootCtx) }()
+		defer func() { <-eodDone }()
+		logger.Info("eod scheduler enabled",
+			slog.String("run_at", cfg.EOD.RunAt), slog.String("tz", cfg.EOD.Timezone))
+	} else {
+		logger.Info("eod scheduler disabled (EOD_ENABLED unset)")
 	}
 
 	// ---- block until signal -----------------------------------------------
