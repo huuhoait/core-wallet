@@ -35,6 +35,11 @@ type WalletRepository interface {
 	GetBalanceAsOf(ctx context.Context, acctNo string, asOf time.Time) (*domain.BalanceAsOf, error)
 	GetBalanceBatch(ctx context.Context, acctNos []string) ([]domain.BalanceBatchItem, error)
 
+	// Account profile + transaction reads (read-only, direct SELECT on WLT_*).
+	GetAccount(ctx context.Context, acctNo string) (*domain.AccountView, error)
+	ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error)
+	GetTransaction(ctx context.Context, tfrKey int64) ([]domain.TxLeg, error)
+
 	// In-book transfer reversal (post_transfer_reversal).
 	ReverseTransfer(ctx context.Context, in domain.TransferReversalInput) (*domain.TransferReversalResult, error)
 	// Topup reversal (post_topup_reversal).

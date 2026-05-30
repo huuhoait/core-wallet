@@ -74,7 +74,7 @@ sequenceDiagram
   participant DB as PostgreSQL 17 (plpgsql)
   participant K as Kafka
 
-  Caller->>GW: POST /v1/transactions/topup (s2s auth)
+  Caller->>GW: POST /v1/finance/topup (s2s auth)
   GW->>GO: forward + auth context
   
   GO->>GO: ctx, cancel := context.WithTimeout(parent, 3s)
@@ -97,7 +97,7 @@ sequenceDiagram
 
 ### 2.4 API spec
 ```json
-POST /v1/transactions/topup
+POST /v1/finance/topup
 Authorization: Bearer <service_token>          // service-to-service, not customer-invoked
 Request:
 {
@@ -188,7 +188,7 @@ sequenceDiagram
 
   Cust->>Agent: Hand over cash + phone/ACCT_NO
   Agent->>POS: Scan/enter ACCT_NO + amount
-  POS->>GW: POST /v1/transactions/deposit (auth agent token)
+  POS->>GW: POST /v1/finance/deposit (auth agent token)
   GW->>GO: forward
   GO->>GO: ctx, cancel := context.WithTimeout(parent, 3s)
   
@@ -207,7 +207,7 @@ sequenceDiagram
 
 ### 3.4 API spec
 ```json
-POST /v1/transactions/deposit
+POST /v1/finance/deposit
 Request:
 {
   "reference":      "DEP_20260528_agent42_001",
@@ -278,7 +278,7 @@ sequenceDiagram
   participant TRS as Treasury Service (out of scope)
 
   User->>App: Enter amount + receiving bank info
-  App->>GW: POST /v1/transactions/withdraw
+  App->>GW: POST /v1/finance/withdraw
   GW->>GO: forward + auth context
   
   GO->>GO: ctx, cancel := context.WithTimeout(parent, 3s)
@@ -308,7 +308,7 @@ sequenceDiagram
 
 ### 4.4 API spec
 ```json
-POST /v1/transactions/withdraw
+POST /v1/finance/withdraw
 Request:
 {
   "reference":     "WD_20260528_abc",
@@ -500,7 +500,7 @@ sequenceDiagram
   participant K as Kafka
 
   UserA->>App: Enter to_acct + amount + note
-  App->>GW: POST /v1/transactions/transfer
+  App->>GW: POST /v1/finance/transfer
   GW->>GO: forward
   GO->>GO: ctx, cancel := context.WithTimeout(parent, 3s)
   
@@ -522,7 +522,7 @@ sequenceDiagram
 
 ### 5.3 API spec
 ```json
-POST /v1/transactions/transfer
+POST /v1/finance/transfer
 Request:
 {
   "reference":  "TRF_20260528_xyz",
@@ -647,7 +647,7 @@ sequenceDiagram
   participant DB as PostgreSQL 17 (plpgsql)
   participant K as Kafka
 
-  Ops->>GW: POST /v1/transactions/{tran_id}/reverse
+  Ops->>GW: POST /v1/finance/{tran_id}/reverse
   GW->>GO: forward
   GO->>GO: ctx, cancel := context.WithTimeout(parent, 3s)
   
@@ -664,7 +664,7 @@ sequenceDiagram
 
 ### 6.6 API spec
 ```json
-POST /v1/transactions/{tran_id}/reverse
+POST /v1/finance/{tran_id}/reverse
 Request:
 {
   "reason":  "USER_DISPUTE",
@@ -725,7 +725,7 @@ Customer/Ops view the transaction history of a wallet, filter by time, type, sta
 
 #### 7.2.1 List transactions
 ```json
-GET /v1/wallets/{acct_no}/transactions
+GET /v1/accounts/{acct_no}/transactions
   ?from=2026-05-01
   &to=2026-05-28
   &type=TRFOUT,TRFIN,TOPUP            (CSV; empty = all)
@@ -765,7 +765,7 @@ Response 200:
 
 #### 7.2.2 Detail of one transaction
 ```json
-GET /v1/transactions/{tran_id}
+GET /v1/finance/{tran_id}
 
 Response 200:
 {
@@ -789,7 +789,7 @@ Response 200:
 
 #### 7.2.3 Statement PDF/CSV
 ```
-GET /v1/wallets/{acct_no}/statement
+GET /v1/accounts/{acct_no}/statement
   ?from=2026-05-01&to=2026-05-31
   &format=pdf       (pdf/csv/json)
 
@@ -873,7 +873,7 @@ Restraints are classified along **2 independent dimensions** (T24 convention):
 ### 8.3 Add restraint
 
 ```json
-POST /v1/wallets/{acct_no}/restraints
+POST /v1/accounts/{acct_no}/restraints
 Authorization: Bearer <ops_token>           // role: OPS_RESTRAINT_MAKER
 Headers: X-Idempotency-Key: RSTR_20260528_xyz
 
@@ -918,7 +918,7 @@ Errors:
 ### 8.4 Remove restraint
 
 ```json
-DELETE /v1/wallets/{acct_no}/restraints/{restraint_id}
+DELETE /v1/accounts/{acct_no}/restraints/{restraint_id}
 Authorization: Bearer <ops_token>           // role: OPS_RESTRAINT_CHECKER
 Headers: X-Idempotency-Key: RSTR_RM_20260828_xyz
 
@@ -952,7 +952,7 @@ Errors:
 ### 8.5 List restraints
 
 ```json
-GET /v1/wallets/{acct_no}/restraints
+GET /v1/accounts/{acct_no}/restraints
   ?status=A,E,R              (CSV; default A — active only)
   &type=DEBIT,ALL            (filter by RESTRAINT_TYPE)
   &purpose=AML_HOLD,COURT_ORDER (filter by RESTRAINT_PURPOSE)
@@ -1079,7 +1079,7 @@ Customer views realtime balance in the app; ops view balance for dispute/CSKH; d
 #### 9.3.1 Realtime balance (customer view)
 
 ```json
-GET /v1/wallets/{acct_no}/balance
+GET /v1/accounts/{acct_no}/balance
 Authorization: Bearer <customer_token>
 
 Response 200:
@@ -1102,7 +1102,7 @@ Errors:
 #### 9.3.2 Ops/internal balance (full view)
 
 ```json
-GET /v1/ops/wallets/{acct_no}/balance
+GET /v1/ops/accounts/{acct_no}/balance
 Authorization: Bearer <ops_token>          // role: OPS_VIEWER
 
 Response 200:
@@ -1132,7 +1132,7 @@ Response 200:
 #### 9.3.3 Balance as-of date (historical)
 
 ```json
-GET /v1/wallets/{acct_no}/balance?as_of_date=2026-04-30
+GET /v1/accounts/{acct_no}/balance?as_of_date=2026-04-30
 
 Response 200:
 {
@@ -1151,7 +1151,7 @@ Errors:
 #### 9.3.4 Batch balance (multiple wallets — for ops/DW)
 
 ```json
-POST /v1/ops/wallets/balance/batch
+POST /v1/ops/accounts/balance/batch
 Authorization: Bearer <ops_token>
 
 Request:

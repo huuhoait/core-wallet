@@ -142,32 +142,32 @@ export default function () {
 
   if (r < 18) {
     // topup
-    classify(http.post(`${BASE}/v1/transactions/topup`, JSON.stringify({
+    classify(http.post(`${BASE}/v1/finance/topup`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(10000, 1000000)), reference: ref('K6TU'),
     }), H));
 
   } else if (r < 36) {
     // transfer
     const a = randomIntBetween(1, NW); const b = (a % NW) + 1;
-    classify(http.post(`${BASE}/v1/transactions/transfer`, JSON.stringify({
+    classify(http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
       from_acct_no: acct(a), to_acct_no: acct(b), amount: String(randomIntBetween(1000, 500000)),
       reference: ref('K6TR'), tran_type: 'TRFOUT',
     }), H));
 
   } else if (r < 48) {
     // withdraw
-    classify(http.post(`${BASE}/v1/transactions/withdraw`, JSON.stringify({
+    classify(http.post(`${BASE}/v1/finance/withdraw`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(50000, 500000)),
       reference: ref('K6WD'), ext_payout_ref: ref('K6EXT'), beneficiary_bank: 'BIDV', beneficiary_acct: '9990000000',
     }), H));
 
   } else if (r < 58) {
     // balance read
-    classify(http.get(`${BASE}/v1/wallets/${acct(randomIntBetween(1, NW))}/balance`, H));
+    classify(http.get(`${BASE}/v1/accounts/${acct(randomIntBetween(1, NW))}/balance`, H));
 
   } else if (r < 70) {
     // merchant (hot-shard) withdraw from a random merchant group's settlement
-    classify(http.post(`${BASE}/v1/transactions/merchant-withdraw`, JSON.stringify({
+    classify(http.post(`${BASE}/v1/finance/merchant-withdraw`, JSON.stringify({
       group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(50000, 2000000)), reference: ref('K6MW'),
     }), H));
 
@@ -175,28 +175,28 @@ export default function () {
     // transfer + reversal
     const a = randomIntBetween(1, NW); const b = (a % NW) + 1;
     const reference = ref('K6RVT');
-    const orig = http.post(`${BASE}/v1/transactions/transfer`, JSON.stringify({
+    const orig = http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
       from_acct_no: acct(a), to_acct_no: acct(b), amount: String(randomIntBetween(1000, 100000)),
       reference, tran_type: 'TRFOUT',
     }), H);
-    reverseIfPosted(orig, () => http.post(`${BASE}/v1/transactions/reverse`, JSON.stringify({
+    reverseIfPosted(orig, () => http.post(`${BASE}/v1/finance/reverse`, JSON.stringify({
       reference, reason: 'k6 load-test reversal', initiator: 'OPS_MANUAL',
     }), H));
 
   } else if (r < 92) {
     // topup + reversal
     const reference = ref('K6RVU');
-    const orig = http.post(`${BASE}/v1/transactions/topup`, JSON.stringify({
+    const orig = http.post(`${BASE}/v1/finance/topup`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(10000, 500000)), reference,
     }), H);
-    reverseIfPosted(orig, () => http.post(`${BASE}/v1/transactions/topup/reverse`, JSON.stringify({
+    reverseIfPosted(orig, () => http.post(`${BASE}/v1/finance/topup/reverse`, JSON.stringify({
       reference, reason: 'k6 load-test topup reversal', initiator: 'OPS_MANUAL',
     }), H));
 
   } else {
     // withdraw + reversal (treasury-failed roll-back)
     const reference = ref('K6RVW'); const ext = ref('K6RVWEXT');
-    const orig = http.post(`${BASE}/v1/transactions/withdraw`, JSON.stringify({
+    const orig = http.post(`${BASE}/v1/finance/withdraw`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(50000, 300000)),
       reference, ext_payout_ref: ext, beneficiary_bank: 'BIDV', beneficiary_acct: '9990000000',
     }), H);

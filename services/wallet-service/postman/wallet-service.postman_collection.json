@@ -95,10 +95,10 @@
       ]
     },
     {
-      "name": "Transactions",
+      "name": "Finance",
       "item": [
         {
-          "name": "POST /v1/transactions/topup",
+          "name": "POST /v1/finance/topup",
           "request": {
             "method": "POST",
             "header": [
@@ -124,13 +124,13 @@
               "raw": "{\n  \"acct_no\":   \"{{acct_no_a}}\",\n  \"amount\":    \"5000000\",\n  \"reference\": \"{{reference}}\",\n  \"narrative\": \"Nap tien tu Treasury\",\n  \"metadata\":  {\n    \"channel\": \"TREASURY\",\n    \"partner_ref\": \"BANK-INGRESS-{{$timestamp}}\"\n  }\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/topup",
+              "raw": "{{base_url}}/v1/finance/topup",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "topup"
               ]
             },
@@ -156,7 +156,7 @@
           ]
         },
         {
-          "name": "POST /v1/transactions/transfer",
+          "name": "POST /v1/finance/transfer",
           "request": {
             "method": "POST",
             "header": [
@@ -182,13 +182,13 @@
               "raw": "{\n  \"from_acct_no\": \"{{acct_no_a}}\",\n  \"to_acct_no\":   \"{{acct_no_b}}\",\n  \"amount\":       \"100000\",\n  \"reference\":    \"{{reference}}\",\n  \"tran_type\":    \"TRFOUT\",\n  \"narrative\":    \"Chuyen tien dich vu\",\n  \"metadata\":     {\n    \"app_ver\":   \"1.0.0\",\n    \"device_fp_hash\": \"abc123\",\n    \"geo_country\":   \"VN\"\n  }\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/transfer",
+              "raw": "{{base_url}}/v1/finance/transfer",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "transfer"
               ]
             },
@@ -215,7 +215,7 @@
           ]
         },
         {
-          "name": "POST /v1/transactions/transfer (free, TRFOUTF)",
+          "name": "POST /v1/finance/transfer (free, TRFOUTF)",
           "request": {
             "method": "POST",
             "header": [
@@ -241,13 +241,13 @@
               "raw": "{\n  \"from_acct_no\": \"{{acct_no_a}}\",\n  \"to_acct_no\":   \"{{acct_no_b}}\",\n  \"amount\":       \"100000\",\n  \"reference\":    \"{{reference}}\",\n  \"tran_type\":    \"TRFOUTF\",\n  \"narrative\":    \"Chuyen tien mien phi\",\n  \"metadata\":     {\n    \"app_ver\":   \"1.0.0\",\n    \"device_fp_hash\": \"abc123\",\n    \"geo_country\":   \"VN\"\n  }\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/transfer",
+              "raw": "{{base_url}}/v1/finance/transfer",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "transfer"
               ]
             },
@@ -273,7 +273,7 @@
           ]
         },
         {
-          "name": "POST /v1/transactions/withdraw",
+          "name": "POST /v1/finance/withdraw",
           "request": {
             "method": "POST",
             "header": [
@@ -299,13 +299,13 @@
               "raw": "{\n  \"acct_no\":           \"{{acct_no_a}}\",\n  \"amount\":            \"200000\",\n  \"reference\":         \"{{reference}}\",\n  \"ext_payout_ref\":    \"{{last_ext_payout_ref}}\",\n  \"narrative\":         \"Rut tien ve ngan hang\",\n  \"beneficiary_bank\":  \"BIDV\",\n  \"beneficiary_acct\":  \"12345678901234\",\n  \"metadata\":          { \"app_ver\": \"1.0.0\" }\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/withdraw",
+              "raw": "{{base_url}}/v1/finance/withdraw",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "withdraw"
               ]
             },
@@ -342,7 +342,7 @@
           ]
         },
         {
-          "name": "POST /v1/transactions/merchant-withdraw",
+          "name": "POST /v1/finance/merchant-withdraw",
           "request": {
             "method": "POST",
             "header": [
@@ -368,13 +368,13 @@
               "raw": "{\n  \"group_id\":   \"{{group_id}}\",\n  \"amount\":     \"1000000\",\n  \"reference\":  \"{{reference}}\",\n  \"auto_sweep\": true\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/merchant-withdraw",
+              "raw": "{{base_url}}/v1/finance/merchant-withdraw",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "merchant-withdraw"
               ]
             },
@@ -396,6 +396,115 @@
               }
             }
           ]
+        },
+        {
+          "name": "GET transaction list (statement)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/finance/transactions?acct_no={{acct_no_a}}&limit=5",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "acct_no",
+                  "value": "{{acct_no_a}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            },
+            "description": "Account statement: ledger entries on {{acct_no_a}}, newest-first, keyset-paged (next_cursor → ?before_seq=). Captures a tfr_key for the detail request."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if (pm.response.code===200){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('items is array', ()=>pm.expect(b.items).to.be.an('array'));",
+                  "  if (b.items.length){ pm.environment.set('tfr_key', b.items[0].transaction_id); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET transaction detail (all legs)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/finance/transactions/{{tfr_key}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "transactions",
+                "{{tfr_key}}"
+              ]
+            },
+            "description": "All legs of one transaction by tfr_internal_key (run the list request first to populate {{tfr_key}})."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if (pm.response.code===200){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('legs array + transaction_id', ()=>{",
+                  "    pm.expect(b.legs).to.be.an('array');",
+                  "    pm.expect(b.transaction_id).to.be.a('number');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -403,7 +512,7 @@
       "name": "Reversals",
       "item": [
         {
-          "name": "POST /v1/transactions/reverse  (transfer reversal)",
+          "name": "POST /v1/finance/reverse  (transfer reversal)",
           "request": {
             "method": "POST",
             "header": [
@@ -429,13 +538,13 @@
               "raw": "{\n  \"reference\": \"{{last_transfer_reference}}\",\n  \"reason\":    \"Postman reversal test\",\n  \"initiator\": \"OPS_MANUAL\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/reverse",
+              "raw": "{{base_url}}/v1/finance/reverse",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "reverse"
               ]
             },
@@ -459,7 +568,7 @@
           ]
         },
         {
-          "name": "POST /v1/transactions/topup/reverse",
+          "name": "POST /v1/finance/topup/reverse",
           "request": {
             "method": "POST",
             "header": [
@@ -485,13 +594,13 @@
               "raw": "{\n  \"reference\": \"{{last_topup_reference}}\",\n  \"reason\":    \"Postman topup reversal test\",\n  \"initiator\": \"OPS_MANUAL\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/topup/reverse",
+              "raw": "{{base_url}}/v1/finance/topup/reverse",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "topup",
                 "reverse"
               ]
@@ -517,8 +626,58 @@
       ]
     },
     {
-      "name": "Balance",
+      "name": "Accounts",
       "item": [
+        {
+          "name": "GET account profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/accounts/{{acct_no_a}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "accounts",
+                "{{acct_no_a}}"
+              ]
+            },
+            "description": "Account profile (no client PII)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if (pm.response.code===200){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('acct_no + available_bal present', ()=>{",
+                  "    pm.expect(b.acct_no).to.be.a('string');",
+                  "    pm.expect(b.available_bal).to.be.a('string');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
         {
           "name": "GET customer balance",
           "request": {
@@ -538,13 +697,13 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/v1/wallets/{{acct_no_a}}/balance",
+              "raw": "{{base_url}}/v1/accounts/{{acct_no_a}}/balance",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "wallets",
+                "accounts",
                 "{{acct_no_a}}",
                 "balance"
               ]
@@ -582,13 +741,13 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/v1/wallets/{{acct_no_a}}/balance?as_of_date=2026-05-28",
+              "raw": "{{base_url}}/v1/accounts/{{acct_no_a}}/balance?as_of_date=2026-05-28",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "wallets",
+                "accounts",
                 "{{acct_no_a}}",
                 "balance"
               ],
@@ -632,14 +791,14 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/v1/ops/wallets/{{acct_no_merchant}}/balance",
+              "raw": "{{base_url}}/v1/ops/accounts/{{acct_no_merchant}}/balance",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
                 "ops",
-                "wallets",
+                "accounts",
                 "{{acct_no_merchant}}",
                 "balance"
               ]
@@ -685,14 +844,14 @@
               "raw": "{\n  \"acct_nos\": [\n    \"{{acct_no_a}}\",\n    \"{{acct_no_b}}\",\n    \"{{acct_no_merchant}}\"\n  ]\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/ops/wallets/balance/batch",
+              "raw": "{{base_url}}/v1/ops/accounts/balance/batch",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
                 "ops",
-                "wallets",
+                "accounts",
                 "balance",
                 "batch"
               ]
@@ -967,13 +1126,13 @@
               "raw": "{\n  \"acct_no\":   \"bad\",\n  \"amount\":    \"abc\",\n  \"reference\": \"short\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/topup",
+              "raw": "{{base_url}}/v1/finance/topup",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "topup"
               ]
             }
@@ -1016,13 +1175,13 @@
               "raw": "{\n  \"acct_no\":   \"9999999999999999\",\n  \"amount\":    \"1000\",\n  \"reference\": \"PM-NOTFOUND-{{$timestamp}}\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/topup",
+              "raw": "{{base_url}}/v1/finance/topup",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "topup"
               ]
             }
@@ -1065,13 +1224,13 @@
               "raw": "{\n  \"from_acct_no\": \"{{acct_no_a}}\",\n  \"to_acct_no\":   \"{{acct_no_b}}\",\n  \"amount\":       \"99999999\",\n  \"reference\":    \"PM-OVER-{{$timestamp}}\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/transfer",
+              "raw": "{{base_url}}/v1/finance/transfer",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "transfer"
               ]
             }
@@ -1122,13 +1281,13 @@
               "raw": "{\n  \"acct_no\":   \"{{acct_no_a}}\",\n  \"amount\":    \"100\",\n  \"reference\": \"PM-IDEMPOT-FIXED-001\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/v1/transactions/topup",
+              "raw": "{{base_url}}/v1/finance/topup",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "v1",
-                "transactions",
+                "finance",
                 "topup"
               ]
             },

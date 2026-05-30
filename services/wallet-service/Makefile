@@ -47,7 +47,7 @@ docker-build: ## Build the docker image
 .PHONY: smoke
 smoke: ## Quick smoke test (requires running stack — wallet_schema.sql + wallet_sp.sql deployed)
 	@echo "--- topup ---"; \
-	curl -sS -X POST http://localhost:8080/v1/transactions/topup \
+	curl -sS -X POST http://localhost:8080/v1/finance/topup \
 	  -H 'Content-Type: application/json' \
 	  -H 'X-Caller-Subject: smoke_test' -H 'X-Channel: TREASURY' \
 	  -d '{"acct_no":"9701000000000001","amount":"1000000","reference":"SMOKE-TOPUP-001"}' \

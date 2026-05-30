@@ -155,15 +155,18 @@ and the Postman collection.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET`  | `/healthz` | Liveness probe |
-| `POST` | `/v1/transactions/topup` | Internal credit (Treasury → wallet) |
-| `POST` | `/v1/transactions/transfer` | Wallet → wallet transfer |
-| `POST` | `/v1/transactions/withdraw` | Withdraw (DR wallet / CR nostro) |
-| `POST` | `/v1/transactions/merchant-withdraw` | Merchant settlement + hot-shard sweep |
-| `POST` | `/v1/transactions/reverse` | Reverse an in-book transfer |
-| `POST` | `/v1/transactions/topup/reverse` | Reverse a top-up |
-| `GET`  | `/v1/wallets/:acct_no/balance` | Customer balance (realtime / `?as_of_date=`) |
-| `GET`  | `/v1/ops/wallets/:acct_no/balance` | Ops full balance view |
-| `POST` | `/v1/ops/wallets/balance/batch` | Ops batch balance lookup |
+| `POST` | `/v1/finance/topup` | Internal credit (Treasury → wallet) |
+| `POST` | `/v1/finance/transfer` | Wallet → wallet transfer |
+| `POST` | `/v1/finance/withdraw` | Withdraw (DR wallet / CR nostro) |
+| `POST` | `/v1/finance/merchant-withdraw` | Merchant settlement + hot-shard sweep |
+| `POST` | `/v1/finance/reverse` | Reverse an in-book transfer |
+| `POST` | `/v1/finance/topup/reverse` | Reverse a top-up |
+| `GET`  | `/v1/finance/transactions?acct_no=&limit=&before_seq=` | Account statement (transaction list, keyset-paged) |
+| `GET`  | `/v1/finance/transactions/:tfr_key` | Transaction detail (all legs of a `tfr_internal_key`) |
+| `GET`  | `/v1/accounts/:acct_no` | Account profile (no client PII) |
+| `GET`  | `/v1/accounts/:acct_no/balance` | Customer balance (realtime / `?as_of_date=`) |
+| `GET`  | `/v1/ops/accounts/:acct_no/balance` | Ops full balance view |
+| `POST` | `/v1/ops/accounts/balance/batch` | Ops batch balance lookup |
 | `POST` | `/v1/treasury/withdrawals/:ref/acked` | Mark withdrawal acknowledged |
 | `POST` | `/v1/treasury/withdrawals/:ref/disbursing` | Mark withdrawal disbursing |
 | `POST` | `/v1/treasury/withdrawals/:ref/completed` | Mark withdrawal completed |

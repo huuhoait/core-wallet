@@ -53,28 +53,32 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 	v1 := r.Group("/v1")
 	v1.Use(middleware.WithTimeout(cfg.RequestTimeout))
 	{
-		txs := v1.Group("/transactions")
+		// ── Finance: money movement + ledger reads ──
+		finance := v1.Group("/finance")
 		{
-			txs.POST("/topup", h.Topup)
-			txs.POST("/transfer", h.Transfer)
-			txs.POST("/withdraw", h.Withdraw)
-			txs.POST("/merchant-withdraw", h.MerchantWithdraw) // settlement withdraw + hot-shard sweep
-			txs.POST("/reverse", h.ReverseTransfer)            // in-book transfer reversal (reference in body)
-			txs.POST("/topup/reverse", h.ReverseTopup)         // topup reversal (reference in body)
+			finance.POST("/topup", h.Topup)
+			finance.POST("/transfer", h.Transfer)
+			finance.POST("/withdraw", h.Withdraw)
+			finance.POST("/merchant-withdraw", h.MerchantWithdraw) // settlement withdraw + hot-shard sweep
+			finance.POST("/reverse", h.ReverseTransfer)            // in-book transfer reversal (reference in body)
+			finance.POST("/topup/reverse", h.ReverseTopup)         // topup reversal (reference in body)
+			finance.GET("/transactions", h.ListTransactions)       // account statement: ?acct_no=&limit=&before_seq=
+			finance.GET("/transactions/:tfr_key", h.GetTransaction) // all legs of one transaction
 		}
 
-		// Balance queries (Get Balance §9): customer realtime + historical
-		// (?as_of_date=), ops full view, ops batch. Read-only.
-		wallets := v1.Group("/wallets")
+		// ── Accounts: profile + balance reads (Get Balance §9). Read-only. ──
+		accounts := v1.Group("/accounts")
 		{
-			wallets.GET("/:acct_no/balance", h.GetBalance)
+			accounts.GET("/:acct_no", h.GetAccount)              // account profile (no client PII)
+			accounts.GET("/:acct_no/balance", h.GetBalance)      // realtime + historical (?as_of_date=)
 		}
-		ops := v1.Group("/ops/wallets")
+		ops := v1.Group("/ops/accounts")
 		{
 			ops.GET("/:acct_no/balance", h.GetBalanceOps)
 			ops.POST("/balance/batch", h.GetBalanceBatch)
 		}
 
+		// ── Treasury: withdrawal disbursement state machine (S2S callbacks) ──
 		treasury := v1.Group("/treasury/withdrawals/:ext_payout_ref")
 		{
 			treasury.POST("/acked", h.MarkAcked)
