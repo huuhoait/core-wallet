@@ -3,6 +3,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
+	"github.com/ewallet-pg/wallet-service/internal/http/dto"
 )
 
 // Context keys (gin-stored values, exported for handler use)
@@ -121,22 +123,30 @@ func WithTimeout(d time.Duration) gin.HandlerFunc {
 		// If the deadline fired and the handler didn't already write a body,
 		// emit a uniform timeout response so the client always sees a code.
 		if ctx.Err() == context.DeadlineExceeded && !c.Writer.Written() {
-			c.JSON(http.StatusGatewayTimeout, gin.H{
-				"code":       domain.CodeTimeout,
-				"message":    "request deadline exceeded",
-				"request_id": c.GetString(CtxKeyRequestID),
-			})
+			writeProblem(c, dto.NewProblem(domain.CodeTimeout, http.StatusGatewayTimeout,
+				"request deadline exceeded", c.Request.URL.Path, c.GetString(CtxKeyRequestID)))
 		}
 	}
 }
 
-// Recovery converts panics into 500 responses with a stable envelope.
+// Recovery converts panics into 500 responses with the canonical envelope.
 func Recovery() gin.HandlerFunc {
 	return gin.CustomRecovery(func(c *gin.Context, _ any) {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"code":       domain.CodeInternal,
-			"message":    "internal server error",
-			"request_id": c.GetString(CtxKeyRequestID),
-		})
+		writeProblem(c, dto.NewProblem(domain.CodeInternal, http.StatusInternalServerError,
+			"internal server error", c.Request.URL.Path, c.GetString(CtxKeyRequestID)))
 	})
+}
+
+// writeProblem renders an RFC 7807 problem+json body. Mirrors the handler's
+// writer so timeout / panic responses use the same envelope as the handlers.
+func writeProblem(c *gin.Context, p dto.ProblemDetails) {
+	body, err := json.Marshal(p)
+	if err != nil {
+		c.AbortWithStatus(p.Status)
+		return
+	}
+	c.Header("Content-Type", "application/problem+json")
+	c.Status(p.Status)
+	_, _ = c.Writer.Write(body)
+	c.Abort()
 }

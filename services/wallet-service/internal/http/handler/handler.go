@@ -4,10 +4,13 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
 	"github.com/ewallet-pg/wallet-service/internal/http/dto"
@@ -200,29 +203,61 @@ func (h *Wallet) Healthz(c *gin.Context) {
 
 // ---- helpers --------------------------------------------------------------
 
+// renderValidationError emits a 400 problem+json with field-level details.
 func renderValidationError(c *gin.Context, err error) {
-	c.AbortWithStatusJSON(http.StatusBadRequest, dto.ErrorResponse{
-		Code:      domain.CodeInvalidRequest,
-		Message:   err.Error(),
-		RequestID: c.GetString(middleware.CtxKeyRequestID),
-	})
+	p := dto.NewProblem(
+		domain.CodeInvalidRequest,
+		http.StatusBadRequest,
+		"request validation failed",
+		c.Request.URL.Path,
+		c.GetString(middleware.CtxKeyRequestID),
+	)
+	p.Errors = fieldErrors(err)
+	abortProblem(c, p)
 }
 
+// renderError maps any error to the canonical problem+json envelope. Non-domain
+// errors collapse to INTERNAL_ERROR so internals (stack/SQL) never leak (§3.3).
 func renderError(c *gin.Context, err error) {
 	var de *domain.Error
-	if errors.As(err, &de) {
-		c.AbortWithStatusJSON(de.HTTPStatus, dto.ErrorResponse{
-			Code:      de.Code,
-			Message:   de.Detail,
-			RequestID: c.GetString(middleware.CtxKeyRequestID),
-		})
+	if !errors.As(err, &de) {
+		de = domain.Internal(err)
+	}
+	p := dto.NewProblem(de.Code, de.HTTPStatus, de.Detail, c.Request.URL.Path,
+		c.GetString(middleware.CtxKeyRequestID))
+	p.Retry = &dto.RetryInfo{Retryable: de.IsRetriable()}
+	abortProblem(c, p)
+}
+
+// abortProblem writes p as application/problem+json and stops the chain.
+// (gin's JSON renderer forces application/json, so we marshal+write directly.)
+func abortProblem(c *gin.Context, p dto.ProblemDetails) {
+	body, err := json.Marshal(p)
+	if err != nil { // ProblemDetails is plain data — marshalling cannot realistically fail
+		c.AbortWithStatus(p.Status)
 		return
 	}
-	c.AbortWithStatusJSON(http.StatusInternalServerError, dto.ErrorResponse{
-		Code:      domain.CodeInternal,
-		Message:   err.Error(),
-		RequestID: c.GetString(middleware.CtxKeyRequestID),
-	})
+	c.Header("Content-Type", "application/problem+json")
+	c.Status(p.Status)
+	_, _ = c.Writer.Write(body)
+	c.Abort()
+}
+
+// fieldErrors converts go-playground validator errors into problem entries.
+func fieldErrors(err error) []dto.FieldError {
+	var ve validator.ValidationErrors
+	if !errors.As(err, &ve) {
+		return nil
+	}
+	out := make([]dto.FieldError, 0, len(ve))
+	for _, fe := range ve {
+		out = append(out, dto.FieldError{
+			Path:    fe.Field(),
+			Code:    fe.Tag(),
+			Message: fmt.Sprintf("failed '%s' validation", fe.Tag()),
+		})
+	}
+	return out
 }
 
 func statusFor(s string) int {

@@ -58,8 +58,8 @@ func mapPgError(err error) error {
 		return domain.NewError(domain.CodeTimeout, http.StatusGatewayTimeout,
 			"statement timeout: "+detail, err)
 	case "23505": // unique_violation — usually idempotency-key race
-		return domain.NewError("DUPLICATE_REQUEST", http.StatusConflict,
-			"duplicate request: "+detail, err)
+		return domain.NewError(domain.CodeDuplicateReference, http.StatusConflict,
+			"duplicate reference: "+detail, err)
 	case "23503": // foreign_key_violation
 		return domain.NewError(domain.CodeInvalidRequest, http.StatusBadRequest,
 			"foreign key violation: "+detail, err)
@@ -100,14 +100,17 @@ func httpStatusFor(code string) int {
 		domain.CodeTranTypeInactive,
 		domain.CodeInvalidRequest:
 		return http.StatusBadRequest
-	case domain.CodeDRRestraintActive,
-		domain.CodeCRRestraintActive,
-		domain.CodeTierInsufficient:
+	case domain.CodeTierInsufficient:
+		// KYC tier too low — auth/permission failure.
 		return http.StatusForbidden
-	case domain.CodeInsufficientFunds:
-		return http.StatusPaymentRequired
-	case domain.CodeTierLimitExceeded:
-		return http.StatusTooManyRequests
+	case domain.CodeDRRestraintActive,
+		domain.CodeCRRestraintActive:
+		// Account is restrained/held → 423 Locked (error_management.md §2.1).
+		return http.StatusLocked
+	case domain.CodeInsufficientFunds,
+		domain.CodeTierLimitExceeded:
+		// Schema valid, business rule fails → 422 Unprocessable Entity.
+		return http.StatusUnprocessableEntity
 	case domain.CodeVersionConflict,
 		domain.CodeWDAlreadyCompleted,
 		domain.CodeWDAlreadyReversed,

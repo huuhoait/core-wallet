@@ -60,6 +60,7 @@ const (
 	CodeUnauthorized         = "UNAUTHORIZED"
 	CodeForbidden            = "FORBIDDEN"
 	CodeInvalidRequest       = "INVALID_REQUEST"
+	CodeDuplicateReference   = "DUPLICATE_REFERENCE"
 	// Balance query (Get Balance §9)
 	CodeInvalidDate          = "INVALID_DATE"
 	CodeGoneOnline           = "GONE_ONLINE"

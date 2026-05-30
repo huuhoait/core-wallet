@@ -4,6 +4,8 @@
 package dto
 
 import (
+	"time"
+
 	"github.com/ewallet-pg/wallet-service/internal/domain"
 )
 
@@ -18,18 +20,20 @@ type TopupRequest struct {
 }
 
 type TopupResponse struct {
-	TFRInternalKey int64  `json:"tfr_internal_key"`
-	Status         string `json:"status"`
-	NewBalance     string `json:"new_balance"`
-	EventUUID      string `json:"event_uuid"`
+	TFRInternalKey    int64  `json:"tfr_internal_key"`
+	Status            string `json:"status"`
+	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
+	NewBalance        string `json:"new_balance"`
+	EventUUID         string `json:"event_uuid"`
 }
 
 func TopupRespFrom(r *domain.TopupResult) TopupResponse {
 	return TopupResponse{
-		TFRInternalKey: r.TFRInternalKey,
-		Status:         r.Status,
-		NewBalance:     r.NewBalance,
-		EventUUID:      r.EventUUID.String(),
+		TFRInternalKey:    r.TFRInternalKey,
+		Status:            r.Status,
+		TransactionStatus: domain.TxStatusSettled, // internal credit settles immediately
+		NewBalance:        r.NewBalance,
+		EventUUID:         r.EventUUID.String(),
 	}
 }
 
@@ -46,24 +50,26 @@ type TransferRequest struct {
 }
 
 type TransferResponse struct {
-	TFRInternalKey int64  `json:"tfr_internal_key"`
-	Status         string `json:"status"`
-	NewBalanceFrom string `json:"new_balance_from"`
-	NewBalanceTo   string `json:"new_balance_to"`
-	FeeGross       string `json:"fee_gross"`
-	VATAmount      string `json:"vat_amount"`
-	EventUUID      string `json:"event_uuid"`
+	TFRInternalKey    int64  `json:"tfr_internal_key"`
+	Status            string `json:"status"`
+	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
+	NewBalanceFrom    string `json:"new_balance_from"`
+	NewBalanceTo      string `json:"new_balance_to"`
+	FeeGross          string `json:"fee_gross"`
+	VATAmount         string `json:"vat_amount"`
+	EventUUID         string `json:"event_uuid"`
 }
 
 func TransferRespFrom(r *domain.TransferResult) TransferResponse {
 	return TransferResponse{
-		TFRInternalKey: r.TFRInternalKey,
-		Status:         r.Status,
-		NewBalanceFrom: r.NewBalanceFrom,
-		NewBalanceTo:   r.NewBalanceTo,
-		FeeGross:       r.FeeGross,
-		VATAmount:      r.VATAmount,
-		EventUUID:      r.EventUUID.String(),
+		TFRInternalKey:    r.TFRInternalKey,
+		Status:            r.Status,
+		TransactionStatus: domain.TxStatusSettled, // in-book transfer settles immediately
+		NewBalanceFrom:    r.NewBalanceFrom,
+		NewBalanceTo:      r.NewBalanceTo,
+		FeeGross:          r.FeeGross,
+		VATAmount:         r.VATAmount,
+		EventUUID:         r.EventUUID.String(),
 	}
 }
 
@@ -81,22 +87,26 @@ type WithdrawRequest struct {
 }
 
 type WithdrawResponse struct {
-	TFRInternalKey int64  `json:"tfr_internal_key"`
-	Status         string `json:"status"`
-	NewBalance     string `json:"new_balance"`
-	FeeGross       string `json:"fee_gross"`
-	VATAmount      string `json:"vat_amount"`
-	EventUUID      string `json:"event_uuid"`
+	TFRInternalKey    int64  `json:"tfr_internal_key"`
+	Status            string `json:"status"`
+	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
+	NewBalance        string `json:"new_balance"`
+	FeeGross          string `json:"fee_gross"`
+	VATAmount         string `json:"vat_amount"`
+	EventUUID         string `json:"event_uuid"`
 }
 
 func WithdrawRespFrom(r *domain.WithdrawResult) WithdrawResponse {
 	return WithdrawResponse{
 		TFRInternalKey: r.TFRInternalKey,
 		Status:         r.Status,
-		NewBalance:     r.NewBalance,
-		FeeGross:       r.FeeGross,
-		VATAmount:      r.VATAmount,
-		EventUUID:      r.EventUUID.String(),
+		// Ledger committed; external disbursement still pending (Treasury). The
+		// status advances via the treasury state machine (ACSP → ACSC).
+		TransactionStatus: domain.TxStatusAcceptedTechnical,
+		NewBalance:        r.NewBalance,
+		FeeGross:          r.FeeGross,
+		VATAmount:         r.VATAmount,
+		EventUUID:         r.EventUUID.String(),
 	}
 }
 
@@ -114,6 +124,7 @@ type MerchantWithdrawRequest struct {
 type MerchantWithdrawResponse struct {
 	TFRInternalKey         int64  `json:"tfr_internal_key,omitempty"`
 	Status                 string `json:"status"`
+	TransactionStatus      string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	Amount                 string `json:"amount"`
 	FeeGross               string `json:"fee_gross"`
 	VATAmount              string `json:"vat_amount"`
@@ -126,11 +137,15 @@ func MerchantWithdrawRespFrom(r *domain.MerchantWithdrawResult) MerchantWithdraw
 	out := MerchantWithdrawResponse{
 		TFRInternalKey:         r.TFRInternalKey,
 		Status:                 r.Status,
+		TransactionStatus:      domain.TxStatusAcceptedTechnical, // disbursement pending (Treasury)
 		Amount:                 r.Amount,
 		FeeGross:               r.FeeGross,
 		VATAmount:              r.VATAmount,
 		TotalDeducted:          r.TotalDeducted,
 		SettlementBalanceAfter: r.SettlementBalanceAfter,
+	}
+	if r.Status == "SETTLEMENT_SWEEP_REQUIRED" {
+		out.TransactionStatus = domain.TxStatusPending // caller must sweep shards first
 	}
 	if r.EventUUID.String() != "00000000-0000-0000-0000-000000000000" {
 		out.EventUUID = r.EventUUID.String()
@@ -155,13 +170,18 @@ type ReversalRequest struct {
 }
 
 type MarkResponse struct {
-	AcctNo    string `json:"acct_no"`
-	Status    string `json:"status"`
-	EventUUID string `json:"event_uuid,omitempty"`
+	AcctNo            string `json:"acct_no"`
+	Status            string `json:"status"`
+	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
+	EventUUID         string `json:"event_uuid,omitempty"`
 }
 
 func MarkRespFrom(r *domain.MarkResult) MarkResponse {
-	out := MarkResponse{AcctNo: r.AcctNo, Status: r.Status}
+	out := MarkResponse{
+		AcctNo:            r.AcctNo,
+		Status:            r.Status,
+		TransactionStatus: domain.TxStatusForMark(r.Status),
+	}
 	if r.EventUUID.String() != "00000000-0000-0000-0000-000000000000" {
 		out.EventUUID = r.EventUUID.String()
 	}
@@ -185,11 +205,69 @@ func ReversalRespFrom(r *domain.ReversalResult) ReversalResponse {
 	return out
 }
 
-// ----- error envelope -------------------------------------------------------
+// ----- error envelope (RFC 7807 / RFC 9457 + bank extensions, §13.5) ---------
 
-type ErrorResponse struct {
-	Code      string         `json:"code"`
-	Message   string         `json:"message"`
-	RequestID string         `json:"request_id,omitempty"`
-	Details   map[string]any `json:"details,omitempty"`
+// ProblemTypeBase is the documentation base for the RFC 7807 `type` URI.
+// Placeholder host — point it at the real error-docs site when published.
+const ProblemTypeBase = "https://docs.wallet.example/errors/"
+
+// ProblemDetails is the canonical error body, served as
+// `application/problem+json`. The first five fields are RFC 7807; the rest are
+// bank extensions documented in error_management.md §3 / §13.
+type ProblemDetails struct {
+	Type     string `json:"type,omitempty"`     // RFC7807: URI to error doc
+	Title    string `json:"title"`              // RFC7807: short human title
+	Status   int    `json:"status"`             // RFC7807: HTTP status code
+	Detail   string `json:"detail,omitempty"`   // RFC7807: human-readable detail
+	Instance string `json:"instance,omitempty"` // RFC7807: request path
+
+	Code              string         `json:"code"`                           // business code (canonical contract)
+	InternalCode      string         `json:"internal_code,omitempty"`        // E#### for log/alert (§5)
+	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty"` // ISO 20022 External Status Reason (§13.2)
+	TransactionStatus string         `json:"transaction_status,omitempty"`   // pain.002 status (§13.3)
+	TraceID           string         `json:"trace_id,omitempty"`             // = X-Request-Id
+	Timestamp         string         `json:"timestamp,omitempty"`            // RFC 3339
+	Retry             *RetryInfo     `json:"retry,omitempty"`
+	Details           map[string]any `json:"details,omitempty"`
+	Errors            []FieldError   `json:"errors,omitempty"` // field-level (Berlin Group / OBIE style)
+}
+
+// RetryInfo tells the caller whether/when a retry is permitted.
+type RetryInfo struct {
+	Retryable bool   `json:"retryable"`
+	AfterMs   *int64 `json:"after_ms"`
+}
+
+// FieldError is one field-level validation failure.
+type FieldError struct {
+	Path    string `json:"path,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// nowRFC3339 is overridable in tests.
+var nowRFC3339 = func() string { return time.Now().Format(time.RFC3339) }
+
+// NewProblem builds a ProblemDetails from a canonical code, enriching it from
+// the domain standards registry (title, internal code, ISO 20022 reason, tx
+// status). Used by both the handler and middleware so the envelope is uniform.
+func NewProblem(code string, status int, detail, instance, traceID string) ProblemDetails {
+	m := domain.MetaFor(code)
+	title := m.Title
+	if title == "" {
+		title = code
+	}
+	return ProblemDetails{
+		Type:              ProblemTypeBase + code,
+		Title:             title,
+		Status:            status,
+		Detail:            detail,
+		Instance:          instance,
+		Code:              code,
+		InternalCode:      m.InternalCode,
+		ISO20022Reason:    m.ISOReason,
+		TransactionStatus: m.TxStatus,
+		TraceID:           traceID,
+		Timestamp:         nowRFC3339(),
+	}
 }

@@ -31,8 +31,8 @@ docs alone).
 | 7. Eventing & Integration | 1 | 0 | 2 |
 | 8. Audit, PII & Compliance | 2 | 2 | 1 |
 | 9. Platform / Infra / Observability | 9 | 0 | 3 |
-| 10. Quality — Testing & Load | 6 | 0 | 1 |
-| **Total** | **35** | **7** | **21** |
+| 10. Quality — Testing & Load | 6 | 1 | 0 |
+| **Total** | **35** | **8** | **20** |
 
 ---
 
@@ -157,7 +157,7 @@ docs alone).
 | US-10.4 | Reversal test | ✅ | `db/tests/wallet_transfer_reversal_test.sql`. |
 | US-10.5 | k6 HTTP load test + ledger-row attribution | ✅ | `deploy/loadtest/k6.sh`, `k6_wallet.js`, `k6_sweep.sh`. |
 | US-10.6 | pgbench DB/SP load + TPS saturation sweep | ✅ | `deploy/loadtest/run.sh`, `stress.sh`. |
-| US-10.7 | Go unit / integration tests | ⬜ | `make test` target exists; no `*_test.go` files yet. |
+| US-10.7 | Go unit / integration tests | 🟡 | Error-envelope + ISO-20022 mapping covered (`internal/domain/iso20022_test.go`, `internal/http/handler/errors_test.go`); posting paths still only via SQL. |
 
 ---
 
