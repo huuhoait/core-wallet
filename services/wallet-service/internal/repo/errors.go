@@ -145,7 +145,10 @@ func httpStatusFor(code string) int {
 		domain.CodeInvalidAcctType,
 		domain.CodeAcctCloseNonzeroBal:
 		return http.StatusUnprocessableEntity
-	case domain.CodePIIDekNotSet:
+	case domain.CodePIIDekNotSet,
+		domain.CodeBatchUnbalanced:
+		// Internal invariant violations (key not set / unbalanced posting): the
+		// client did nothing wrong and the TX is aborted → 500, no detail leak.
 		return http.StatusInternalServerError
 	case domain.CodeInvalidDate, domain.CodeBatchSizeExceeded:
 		return http.StatusUnprocessableEntity

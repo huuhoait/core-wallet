@@ -44,6 +44,7 @@ const (
 	CodeAcctNotFound         = "ACCT_NOT_FOUND"
 	CodeAcctNotActive        = "ACCT_NOT_ACTIVE"
 	CodeAcctRoleInvalid      = "ACCT_ROLE_INVALID" // posting targeted a non-STANDALONE (SHARD/SETTLEMENT) wallet
+	CodeBatchUnbalanced      = "BATCH_UNBALANCED"  // double-entry invariant ΣDR≠ΣCR (constraint trigger) — internal bug, never client
 	CodeTierInsufficient     = "TIER_INSUFFICIENT"
 	CodeAmountOutOfRange     = "AMOUNT_OUT_OF_RANGE"
 	CodeDRRestraintActive    = "DR_RESTRAINT_ACTIVE"
