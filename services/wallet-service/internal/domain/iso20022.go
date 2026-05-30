@@ -55,6 +55,7 @@ var codeMeta = map[string]CodeMeta{
 	CodeInvalidDate:        {"Invalid date", "E8003", "DT01", ""},
 	CodeGoneOnline:         {"Data no longer available online", "E8001", "", ""},
 	CodeBatchSizeExceeded:  {"Batch size exceeded", "E8004", "", ""},
+	CodePeriodClosed:       {"Posting period is closed", "E8005", "DT01", TxStatusRejected},
 	// Restraint management (§4.9)
 	CodeRestraintNotFound:            {"Restraint not found", "E3020", "", ""},
 	CodeRestraintAlreadyRemoved:      {"Restraint already removed", "E3021", "", ""},

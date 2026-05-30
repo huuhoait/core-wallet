@@ -86,6 +86,9 @@ const (
 	CodeInvalidAcctType     = "INVALID_ACCT_TYPE"
 	CodeMaxWalletExceeded   = "MAX_WALLET_PER_CLIENT_EXCEEDED"
 	CodeAcctCloseNonzeroBal = "ACCT_CLOSE_NONZERO_BAL"
+	// EOD period locking (US-6.1) — a posting/reversal dated into a closed
+	// business period is rejected by the write-freeze trigger (SQLSTATE P0092).
+	CodePeriodClosed = "PERIOD_CLOSED"
 )
 
 // Helpers for constructing errors at boundaries.

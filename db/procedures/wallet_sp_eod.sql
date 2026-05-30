@@ -22,7 +22,14 @@
 --                                index), depends on T1.
 --   eod_expire_restraints(D) T5  Auto-expire WLT_RESTRAINTS past END_DATE and
 --                                recompute the few affected WLT_ACCT aggregates.
---   run_eod(D)                   Orchestrator: T1 → T2 → T5 in dependency order.
+--   eod_gl_feed_post(D)      T3  Finalise the GL feed: WLT_BATCH 'P' → 'S' for D,
+--                                chunked + restart-safe. Hand-off-ready journal.
+--   eod_trial_balance(D)     T6  Daily GL trial balance + tamper-evident hash
+--                                chain proof (US-6.3).
+--   eod_close_period(D)      T7  Seal D in WLT_PERIOD (D < CURRENT_DATE only),
+--                                advancing the high-water mark the freeze
+--                                triggers enforce — the write-freeze (US-6.1).
+--   run_eod(D)                   Orchestrator: T1 → T2 → T5 → T3 → T6 → T7.
 --
 -- These are PROCEDURES (not functions) because they COMMIT between chunks. Call
 -- them at TOP LEVEL only (psql -c / external scheduler / pg_cron >= 1.4), never
@@ -69,6 +76,82 @@ CREATE TABLE IF NOT EXISTS WLT_EOD_AUDIT_LOG (
   CONSTRAINT chk_eod_log_st CHECK (status IN ('DONE','FAILED'))
 );
 CREATE INDEX IF NOT EXISTS idx_eod_log_date ON WLT_EOD_AUDIT_LOG (biz_date, task, started_at DESC);
+
+-- ── period control + write-freeze (US-6.1) ───────────────────────────────────
+-- One row per CLOSED business date — the accounting-period high-water mark. The
+-- freeze triggers below reject any ledger/GL row whose POST_DATE falls on or
+-- before the latest closed date, so a sealed day's trial balance + hash chain
+-- (US-6.3) stay immutable and a cross-period reversal (US-3.7) provably lands in
+-- the OPEN period (reversals use POST_DATE = CURRENT_DATE, always > the
+-- high-water mark once a day is closed AFTER its midnight roll).
+--   NOTE: the freeze triggers attach to base-schema tables (WLT_BATCH,
+--   WLT_TRAN_HIST). They are mirrored — byte-identical — in the tracked migration
+--   db/migrations/2026-05-30_eod_period_locking_gl_feed.sql (the prod artifact,
+--   which also hardens grants onto wallet_eod). Keep both copies in sync.
+CREATE TABLE IF NOT EXISTS WLT_PERIOD (
+  biz_date   DATE         NOT NULL,
+  status     VARCHAR(8)   NOT NULL DEFAULT 'CLOSED',   -- OPEN | CLOSED
+  closed_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  closed_by  VARCHAR(64)  NOT NULL DEFAULT 'EOD',
+  note       TEXT,
+  CONSTRAINT pk_period     PRIMARY KEY (biz_date),
+  CONSTRAINT chk_period_st CHECK (status IN ('OPEN','CLOSED'))
+);
+-- The freeze probes the most-recent CLOSED date on every posting → keep it cheap.
+CREATE INDEX IF NOT EXISTS idx_period_closed ON WLT_PERIOD (biz_date DESC) WHERE status = 'CLOSED';
+
+-- fn_period_closed_through — period high-water mark: the latest CLOSED business
+-- date (NULL if none). STABLE (evaluated once per statement). A POST_DATE d is
+-- frozen ⇔ d <= fn_period_closed_through().
+CREATE OR REPLACE FUNCTION fn_period_closed_through()
+RETURNS DATE
+LANGUAGE sql STABLE AS $$
+  SELECT max(biz_date) FROM WLT_PERIOD WHERE status = 'CLOSED';
+$$;
+
+-- fn_freeze_closed_period — full-immutability guard on the books (WLT_TRAN_HIST,
+-- WLT_BATCH). Once a day is sealed (POST_DATE <= high-water) its rows can no
+-- longer be INSERTed, UPDATEd, or DELETEd — so a sealed day's trial balance +
+-- hash chain (US-6.3) are tamper-proof and a cross-period reversal (US-3.7)
+-- provably lands in the OPEN period. The write-freeze holds regardless of which
+-- SP (or ad-hoc statement) attempts the change. It catches:
+--   INSERT / UPDATE landing a row INTO a closed period  (NEW.POST_DATE)
+--   UPDATE / DELETE of a row already IN a closed period  (OLD.POST_DATE)
+-- Normal postings (POST_DATE = CURRENT_DATE > high-water) never trip it. The EOD
+-- GL-feed post UPDATEs status P→S while the day is still OPEN (T3 runs BEFORE the
+-- T7 close), so that legitimate UPDATE is not blocked — which is exactly why the
+-- close runs LAST. SQLSTATE P0092. NOTE: TRUNCATE bypasses row triggers (use it
+-- for a full test-data reset); a row-level DELETE of a sealed day is blocked.
+CREATE OR REPLACE FUNCTION fn_freeze_closed_period()
+RETURNS TRIGGER
+LANGUAGE plpgsql SET search_path = public, pg_catalog AS $fn$
+DECLARE
+  v_through DATE := fn_period_closed_through();
+BEGIN
+  IF v_through IS NULL THEN
+    RETURN COALESCE(NEW, OLD);                       -- nothing sealed yet
+  END IF;
+  IF TG_OP IN ('UPDATE','DELETE') AND OLD.POST_DATE <= v_through THEN
+    RAISE EXCEPTION 'PERIOD_CLOSED: % blocked — row is in a closed period (post_date %, closed through %)',
+      TG_OP, OLD.POST_DATE, v_through USING ERRCODE = 'P0092';
+  END IF;
+  IF TG_OP IN ('INSERT','UPDATE') AND NEW.POST_DATE <= v_through THEN
+    RAISE EXCEPTION 'PERIOD_CLOSED: post_date % is in a closed period (closed through %)',
+      NEW.POST_DATE, v_through USING ERRCODE = 'P0092';
+  END IF;
+  RETURN COALESCE(NEW, OLD);
+END
+$fn$;
+
+DROP TRIGGER IF EXISTS trg_freeze_batch ON WLT_BATCH;
+CREATE TRIGGER trg_freeze_batch
+  BEFORE INSERT OR UPDATE OR DELETE ON WLT_BATCH
+  FOR EACH ROW EXECUTE FUNCTION fn_freeze_closed_period();
+
+DROP TRIGGER IF EXISTS trg_freeze_hist ON WLT_TRAN_HIST;
+CREATE TRIGGER trg_freeze_hist
+  BEFORE INSERT OR UPDATE OR DELETE ON WLT_TRAN_HIST
+  FOR EACH ROW EXECUTE FUNCTION fn_freeze_closed_period();
 
 -- eod_log — append one audit-trail row. Plain SQL (no transaction control), so
 -- it is callable via PERFORM from inside the COMMIT-looping procedures.
@@ -452,6 +535,131 @@ END;
 $$;
 
 -- =============================================================================
+-- T3 — GL-feed post: finalise the day's GL journal  (WLT_BATCH 'P' → 'S')
+-- =============================================================================
+-- Every posting writes its GL legs to WLT_BATCH (the GL feed) as PENDING ('P').
+-- At close we mark the day's legs POSTED ('S') — the GL feed for D is finalised
+-- and ready for downstream hand-off (the bank core GL / T24, out of scope here).
+-- Chunked short-TX (COMMIT per chunk → no xmin pinning, never blocks posting's
+-- Phase-2) and restart-safe: the WLT_EOD_RUN cursor advances on tran_key and the
+-- UPDATE is idempotent (only 'P' rows flip), so a re-run resumes cleanly. Runs
+-- for a past business date (D < CURRENT_DATE under the after-midnight close), so
+-- its pending set is already complete and stable.
+CREATE OR REPLACE PROCEDURE eod_gl_feed_post(p_biz_date DATE, p_step BIGINT DEFAULT 50000)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_lo      BIGINT;
+  v_max     BIGINT;
+  v_n       BIGINT;
+  v_tot     BIGINT := 0;
+  v_started TIMESTAMPTZ := clock_timestamp();
+BEGIN
+  IF p_biz_date IS NULL OR p_biz_date > CURRENT_DATE THEN
+    RAISE EXCEPTION 'EOD_INVALID_DATE: %', p_biz_date USING ERRCODE = 'P0090';
+  END IF;
+  PERFORM set_config('audit.actor', 'EOD', false);   -- session-scoped: survives COMMITs
+
+  INSERT INTO WLT_EOD_RUN(biz_date, task, status, last_key, started_at)
+       VALUES (p_biz_date, 'GL_FEED', 'RUNNING', 0, now())
+  ON CONFLICT (biz_date, task)
+       DO UPDATE SET status = 'RUNNING', started_at = now(), message = NULL;
+
+  SELECT last_key, rows_done INTO v_lo, v_tot
+    FROM WLT_EOD_RUN WHERE biz_date = p_biz_date AND task = 'GL_FEED';
+  SELECT COALESCE(max(tran_key), 0) INTO v_max FROM WLT_BATCH WHERE post_date = p_biz_date;
+
+  WHILE v_lo <= v_max LOOP
+    UPDATE WLT_BATCH
+       SET status = 'S', time_stamp = now()
+     WHERE post_date = p_biz_date
+       AND status    = 'P'
+       AND tran_key  >  v_lo
+       AND tran_key  <= v_lo + p_step;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    v_tot := v_tot + v_n;
+    v_lo  := v_lo + p_step;
+    UPDATE WLT_EOD_RUN SET last_key = v_lo, rows_done = v_tot
+      WHERE biz_date = p_biz_date AND task = 'GL_FEED';
+    COMMIT;                                          -- short TX: release + advance xmin
+  END LOOP;
+
+  UPDATE WLT_EOD_RUN SET status = 'DONE', finished_at = now()
+    WHERE biz_date = p_biz_date AND task = 'GL_FEED';
+  PERFORM eod_log(p_biz_date, 'GL_FEED', 'DONE', v_tot, v_started);
+  COMMIT;
+END;
+$$;
+
+-- =============================================================================
+-- T7 — close the business period  (engage the write-freeze for D)
+-- =============================================================================
+-- The final close step: mark D CLOSED in WLT_PERIOD, advancing the period
+-- high-water mark so the freeze triggers reject any later write dated <= D. Runs
+-- LAST, only once every prerequisite task is DONE and the trial balance sealed,
+-- so a day is frozen only after it is fully finalised and proven. A date can be
+-- closed only when strictly in the past (D < CURRENT_DATE): you cannot freeze
+-- "today" while live postings legitimately use POST_DATE = CURRENT_DATE. Does
+-- NOT block on an unbalanced trial balance (recorded in the proof, not hidden —
+-- US-6.3), but warns. Idempotent: re-close is a no-op.
+CREATE OR REPLACE PROCEDURE eod_close_period(p_biz_date DATE)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_started TIMESTAMPTZ := clock_timestamp();
+  v_missing TEXT;
+  v_unbal   INTEGER;
+BEGIN
+  IF p_biz_date IS NULL THEN
+    RAISE EXCEPTION 'EOD_INVALID_DATE' USING ERRCODE = 'P0090';
+  END IF;
+  IF p_biz_date >= CURRENT_DATE THEN
+    RAISE EXCEPTION 'EOD_PERIOD_NOT_PAST: cannot close % — not strictly before CURRENT_DATE (%)',
+      p_biz_date, CURRENT_DATE USING ERRCODE = 'P0090';
+  END IF;
+  PERFORM set_config('audit.actor', 'EOD', false);
+
+  -- already closed → idempotent no-op
+  IF EXISTS (SELECT 1 FROM WLT_PERIOD WHERE biz_date = p_biz_date AND status = 'CLOSED') THEN
+    PERFORM eod_log(p_biz_date, 'CLOSE_PERIOD', 'DONE', 0, v_started, 'already closed');
+    COMMIT;
+    RETURN;
+  END IF;
+
+  -- every prerequisite task must be DONE before the period may be sealed
+  SELECT string_agg(t.task, ', ') INTO v_missing
+    FROM (VALUES ('SNAPSHOT'),('PREV_DAY_ROLL'),('EXPIRE_RESTRAINTS'),('GL_FEED'),('TRIAL_BALANCE'))
+           AS t(task)
+   WHERE NOT EXISTS (SELECT 1 FROM WLT_EOD_RUN r
+                      WHERE r.biz_date = p_biz_date AND r.task = t.task AND r.status = 'DONE');
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'EOD_PERIOD_INCOMPLETE: task(s) not DONE for %: %', p_biz_date, v_missing
+      USING ERRCODE = 'P0091';
+  END IF;
+
+  -- record (never block on) an unbalanced trial balance — see US-6.3
+  SELECT count(*) INTO v_unbal FROM WLT_TRIAL_BALANCE_PROOF
+   WHERE biz_date = p_biz_date AND is_balanced = false;
+  IF v_unbal > 0 THEN
+    RAISE WARNING 'CLOSE_PERIOD %: % currency proof(s) NOT balanced — sealing anyway (recorded in proof)',
+      p_biz_date, v_unbal;
+  END IF;
+
+  INSERT INTO WLT_PERIOD(biz_date, status, closed_at, closed_by)
+       VALUES (p_biz_date, 'CLOSED', now(), 'EOD')
+  ON CONFLICT (biz_date) DO UPDATE
+       SET status = 'CLOSED', closed_at = now(), closed_by = 'EOD';
+
+  INSERT INTO WLT_EOD_RUN(biz_date, task, status, last_key, started_at, finished_at)
+       VALUES (p_biz_date, 'CLOSE_PERIOD', 'DONE', 0, v_started, now())
+  ON CONFLICT (biz_date, task)
+       DO UPDATE SET status = 'DONE', finished_at = now(), message = NULL;
+  PERFORM eod_log(p_biz_date, 'CLOSE_PERIOD', 'DONE', 1, v_started);
+  COMMIT;
+END;
+$$;
+
+-- =============================================================================
 -- eod_mark_failed — record a failure (scheduler error path)
 -- =============================================================================
 -- A COMMIT-looping procedure cannot wrap its work in a BEGIN..EXCEPTION block
@@ -533,7 +741,9 @@ BEGIN
   CALL eod_snapshot(p_biz_date);          -- T1
   CALL eod_prev_day_roll(p_biz_date);     -- T2 (depends on T1)
   CALL eod_expire_restraints(p_biz_date); -- T5
+  CALL eod_gl_feed_post(p_biz_date);      -- T3  WLT_BATCH 'P' → 'S' (GL feed finalised)
   CALL eod_trial_balance(p_biz_date);     -- T6 (US-6.3)
+  CALL eod_close_period(p_biz_date);      -- T7  seal D → engage write-freeze (US-6.1)
 END;
 $$;
 
@@ -550,3 +760,12 @@ GRANT EXECUTE ON PROCEDURE eod_expire_restraints(DATE)       TO wallet_app;
 GRANT EXECUTE ON PROCEDURE eod_trial_balance(DATE)           TO wallet_app;
 GRANT EXECUTE ON PROCEDURE eod_mark_failed(DATE, VARCHAR, TEXT) TO wallet_app;
 GRANT EXECUTE ON PROCEDURE run_eod(DATE)                     TO wallet_app;
+-- period control + GL feed (US-6.1/6.2). Local stack runs EOD as wallet_app; the
+-- tracked migration hardens these onto wallet_eod and revokes them from wallet_app.
+-- wallet_app keeps SELECT WLT_PERIOD + EXECUTE fn_period_closed_through() because
+-- the freeze trigger reads them on the (wallet_app) posting path.
+GRANT SELECT, INSERT, UPDATE ON WLT_PERIOD                   TO wallet_app;
+GRANT UPDATE (STATUS, TIME_STAMP) ON WLT_BATCH               TO wallet_app;
+GRANT EXECUTE ON FUNCTION  fn_period_closed_through()        TO wallet_app;
+GRANT EXECUTE ON PROCEDURE eod_gl_feed_post(DATE, BIGINT)    TO wallet_app;
+GRANT EXECUTE ON PROCEDURE eod_close_period(DATE)            TO wallet_app;

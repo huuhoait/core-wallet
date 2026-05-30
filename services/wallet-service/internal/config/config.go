@@ -39,6 +39,11 @@ type DB struct {
 	// list) at a read replica. Empty → those reads use the primary DSN (no
 	// replica; strong consistency). Balance-realtime/tx-detail/ops stay on DSN.
 	ReadDSN         string        `env:"DB_READ_DSN"         envExpand:"true"`
+	// PIIDSN connects as the wallet_pii_ro role for the unmasked client read
+	// (GET /v1/ops/clients/:client_no). Empty → that read uses the primary DSN
+	// (fine in dev where DSN is a superuser; in prod set this to a wallet_pii_ro
+	// connection so least-privilege holds — wallet_app cannot read raw PII).
+	PIIDSN          string        `env:"DB_PII_DSN"          envExpand:"true"`
 	MaxConns        int32         `env:"DB_MAX_CONNS"        envDefault:"50"`
 	MinConns        int32         `env:"DB_MIN_CONNS"        envDefault:"5"`
 	MaxConnLifetime time.Duration `env:"DB_MAX_CONN_LIFETIME" envDefault:"30m"`
@@ -73,7 +78,7 @@ type Otel struct {
 type EOD struct {
 	Enabled    bool          `env:"EOD_ENABLED"     envDefault:"false"`
 	DSN        string        `env:"EOD_DSN"         envExpand:"true"`        // direct PG conn as wallet_eod (e.g. port 5432, not 6432)
-	RunAt      string        `env:"EOD_RUN_AT"      envDefault:"23:59:59"`  // HH:MM:SS local wall-clock
+	RunAt      string        `env:"EOD_RUN_AT"      envDefault:"00:30:00"`  // HH:MM:SS local; fire after midnight → closes the prior (now past) day
 	Timezone   string        `env:"EOD_TIMEZONE"    envDefault:"Asia/Ho_Chi_Minh"`
 	RunTimeout time.Duration `env:"EOD_RUN_TIMEOUT" envDefault:"30m"`        // hard cap on one close
 }

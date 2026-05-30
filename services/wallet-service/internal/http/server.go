@@ -74,6 +74,7 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 		clients := v1.Group("/clients")
 		{
 			clients.POST("", h.CreateClient)
+			clients.GET("/:client_no", h.GetClient)                                  // MASKED profile (PII masked)
 			clients.PATCH("/:client_no", h.UpdateClient)
 			clients.POST("/:client_no/banks", h.LinkClientBank)                      // link a bank account
 			clients.PUT("/:client_no/banks/:link_id/default", h.SetDefaultClientBank) // set default bank
@@ -91,6 +92,10 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 		{
 			ops.GET("/:acct_no/balance", h.GetBalanceOps)
 			ops.POST("/balance/batch", h.GetBalanceBatch)
+		}
+		opsClients := v1.Group("/ops/clients")
+		{
+			opsClients.GET("/:client_no", h.GetClientFull) // UNMASKED profile (privileged, wallet_pii_ro)
 		}
 
 		// ── Treasury: withdrawal disbursement state machine (S2S callbacks) ──

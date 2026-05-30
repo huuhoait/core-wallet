@@ -27,21 +27,27 @@ import (
 type PgWalletRepo struct {
 	pool             *pgxpool.Pool
 	readPool         *pgxpool.Pool // replica for lag-tolerant reads (no TX, no retry); == pool when no DB_READ_DSN
+	piiPool          *pgxpool.Pool // wallet_pii_ro conn for unmasked PII reads; == pool when no DB_PII_DSN
 	statementTimeoutMs int64
 	lockTimeoutMs      int64
 	txMaxRetries       int // retries of a RETRYABLE write conflict; 0 = no retry
 }
 
-// NewPgWalletRepo wires the write pool (primary) and a read pool. Pass the same
-// pool for both when there is no replica; a nil readPool also falls back to pool.
-// Only the designated lag-tolerant reads use readPool (see transaction.go).
+// NewPgWalletRepo wires the write pool (primary), a read pool, and a PII pool.
+// Pass the same pool when there is no replica / no dedicated PII role; a nil
+// readPool or piiPool falls back to pool. readPool serves lag-tolerant reads
+// (see transaction.go); piiPool (role wallet_pii_ro) serves the unmasked client
+// read (see client.go).
 //
 // txMaxRetries bounds the server-side retry of serialization/deadlock conflicts
 // (SQLSTATE 40001 / 40P01). 0 = no retry (the conflict is returned to the
 // caller as a retryable 409). A negative value is clamped to 0.
-func NewPgWalletRepo(pool, readPool *pgxpool.Pool, statementTimeout, lockTimeout time.Duration, txMaxRetries int) *PgWalletRepo {
+func NewPgWalletRepo(pool, readPool, piiPool *pgxpool.Pool, statementTimeout, lockTimeout time.Duration, txMaxRetries int) *PgWalletRepo {
 	if readPool == nil {
 		readPool = pool
+	}
+	if piiPool == nil {
+		piiPool = pool
 	}
 	if txMaxRetries < 0 {
 		txMaxRetries = 0
@@ -49,6 +55,7 @@ func NewPgWalletRepo(pool, readPool *pgxpool.Pool, statementTimeout, lockTimeout
 	return &PgWalletRepo{
 		pool:               pool,
 		readPool:           readPool,
+		piiPool:            piiPool,
 		statementTimeoutMs: statementTimeout.Milliseconds(),
 		lockTimeoutMs:      lockTimeout.Milliseconds(),
 		txMaxRetries:       txMaxRetries,

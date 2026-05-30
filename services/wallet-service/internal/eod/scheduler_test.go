@@ -68,3 +68,29 @@ func TestNextFire(t *testing.T) {
 		t.Errorf("at time: got %v, want %v", got, want)
 	}
 }
+
+func TestCloseDate(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Ho_Chi_Minh")
+	if err != nil {
+		t.Fatalf("load tz: %v", err)
+	}
+	cases := []struct {
+		name string
+		now  time.Time
+		want string
+	}{
+		// Firing just after midnight closes the day that just ended.
+		{"after midnight", time.Date(2026, 5, 30, 0, 30, 0, 0, loc), "2026-05-29"},
+		// Month boundary: rolls back into the prior month.
+		{"month start", time.Date(2026, 6, 1, 0, 30, 0, 0, loc), "2026-05-31"},
+		// Year boundary.
+		{"year start", time.Date(2026, 1, 1, 0, 5, 0, 0, loc), "2025-12-31"},
+		// Leap-day boundary (2028 is a leap year).
+		{"leap day", time.Date(2028, 3, 1, 0, 30, 0, 0, loc), "2028-02-29"},
+	}
+	for _, tc := range cases {
+		if got := closeDate(tc.now); got != tc.want {
+			t.Errorf("%s: closeDate(%v) = %q, want %q", tc.name, tc.now, got, tc.want)
+		}
+	}
+}

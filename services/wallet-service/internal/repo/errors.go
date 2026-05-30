@@ -154,6 +154,10 @@ func httpStatusFor(code string) int {
 		return http.StatusUnprocessableEntity
 	case domain.CodeGoneOnline:
 		return http.StatusGone
+	case domain.CodePeriodClosed:
+		// Backdated posting into a sealed business period — request conflicts with
+		// the closed state of the ledger; re-post against an open date.
+		return http.StatusConflict
 	}
 	// Family-based fallbacks for from/to-prefixed variants.
 	switch {

@@ -68,3 +68,57 @@ type BankLinkResult struct {
 	Status    string
 	Timestamp time.Time // created_at (link) | updated_at (set-default)
 }
+
+// ClientView is the MASKED client profile (GET /v1/clients/:client_no), read
+// from v_client_masked via wallet_app. Name and CCCD/passport are masked; raw
+// PII is never exposed on this path. Nullable columns are pointers.
+type ClientView struct {
+	ClientNo         string
+	ClientNameMasked string
+	ClientType       *string
+	GlobalIDType     *string
+	GlobalIDMasked   *string
+	CountryLoc       *string
+	CountryCitizen   *string
+	ClientGrp        *string
+	AcctExec         *string
+	Status           string
+	BirthDate        *time.Time
+	Sex              *string
+	ResidentStatus   *string
+	KycTier          *string
+	KycStatus        *string
+	RiskLevel        *string
+	PhoneMasked      *string
+	VerifiedAt       *time.Time
+}
+
+// ClientFullView is the UNMASKED client profile (GET /v1/ops/clients/:client_no),
+// read from the raw tables via the wallet_pii_ro role. Every read of this view is
+// a P1 (PII) access and SHOULD be appended to WLT_PII_ACCESS_LOG (not yet built —
+// see US-8.4). Phone/email stay encrypted at rest and are not decrypted here.
+type ClientFullView struct {
+	ClientNo       string
+	ClientName     string
+	ClientType     *string
+	GlobalID       *string
+	GlobalIDType   *string
+	CountryLoc     *string
+	CountryCitizen *string
+	ClientGrp      *string
+	AcctExec       *string
+	Status         string
+	RegisteredDate *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	Surname        *string
+	GivenName      *string
+	BirthDate      *time.Time
+	Sex            *string
+	ResidentStatus *string
+	MaritalStatus  *string
+	KycTier        *string
+	KycStatus      *string
+	RiskLevel      *string
+	VerifiedAt     *time.Time
+}

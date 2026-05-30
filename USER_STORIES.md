@@ -81,7 +81,7 @@ docs alone).
 | US-3.4 | As ops, I reverse a merchant withdrawal | ✅ | SP `post_merchant_withdraw_reversal`. |
 | US-3.5 | Reversals are idempotent and refund fee + VAT legs | ✅ | Reversal SPs write outbox + refund all legs. |
 | US-3.6 | Reversal is rejected outside the allowed time window | ⬜ | Spec §6.4 defines the window, but **no reversal SP enforces it** (no `WINDOW_EXPIRED` / time check in any `*_reversal` SP). |
-| US-3.7 | VAT reversal across a closed period is handled correctly | 🟡 | Spec §6.8 — depends on period close (Epic 6, not built). |
+| US-3.7 | VAT reversal across a closed period is handled correctly | ✅ | Period locking (US-6.1) now makes a closed day immutable, so the closed VAT period (e.g. May) cannot be mutated; a reversal posts `POST_DATE = CURRENT_DATE` into the open period (June) per spec §6.8. Guaranteed by the write-freeze (`fn_freeze_closed_period`), proved in `db/tests/wallet_eod_period_lock_test.sql`. |
 
 ## Epic 4 — Balance & Statements / Số dư & sao kê
 
@@ -103,15 +103,16 @@ docs alone).
 
 ## Epic 6 — Accounting & GL Operations / Kế toán & vận hành sổ cái
 
-> Subsystem §9b. The **EOD-close batch** (write-DB, posting-safe) is now implemented
-> in `db/procedures/wallet_sp_eod.sql` — US-6.1 (partial) + US-6.3 + US-6.6–6.9. The
-> suspense/clearing GL framework, e-invoice and manual-JE workflows (US-6.2/6.4/6.5)
+> Subsystem §9b. The **EOD-close batch** (write-DB, posting-safe) is implemented
+> in `db/procedures/wallet_sp_eod.sql` — US-6.1 (incl. period locking) + US-6.3 +
+> US-6.6–6.9, plus the GL-feed post of US-6.2. The full suspense/clearing GL
+> framework, e-invoice and manual-JE workflows (US-6.2 remainder / 6.4 / 6.5)
 > remain HLD design only.
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-6.1 | EOD close & period locking | 🟡 | Close batch orchestrated by `run_eod` (T1→T2→T5→T6), `wallet_sp_eod.sql`; verified end-to-end on local stack. **Period locking** (write-freeze on closed business dates) still ⬜ — so US-3.7 stays blocked. |
-| US-6.2 | Suspense / clearing GL framework | ⬜ | HLD §9b. Design only. |
+| US-6.1 | EOD close & period locking | ✅ | Close batch `run_eod` (T1→T2→T5→T3→T6→**T7 close**), `wallet_sp_eod.sql`. **Period locking** done: `eod_close_period(D)` seals each past day in `WLT_PERIOD` (D < CURRENT_DATE; runs last, only after all tasks DONE), advancing the high-water mark; `fn_freeze_closed_period` triggers on `WLT_BATCH`/`WLT_TRAN_HIST` make a closed day **fully immutable** (no INSERT/UPDATE/DELETE, SQLSTATE P0092 → `PERIOD_CLOSED`/409). Verified end-to-end + `db/tests/wallet_eod_period_lock_test.sql` (10/10). Unblocks US-3.7. |
+| US-6.2 | Suspense / clearing GL framework | 🟡 | **GL-feed post** built: `eod_gl_feed_post(D)` (T3) finalises the day's GL journal `WLT_BATCH` `'P'`→`'S'`, chunked + restart-safe. Full suspense/clearing GL framework (HLD §9b) still design only. |
 | US-6.3 | Daily trial-balance materialization + signed proof | ✅ | SP `eod_trial_balance` (`wallet_sp_eod.sql`, T6 in `run_eod`). Per-`(gl_code,ccy)` from `WLT_BATCH` → `WLT_TRIAL_BALANCE` (opening carry-forward + period DR/CR + closing); proves ΣDR=ΣCR ∧ Σclosing=0; seals each day in `WLT_TRIAL_BALANCE_PROOF` via a `sha256` **hash chain** (`chain=H(totals‖content‖prev)`). `eod_verify_chain()` re-derives & detects tampering (verified: editing a sealed line flips `chain_ok`→false). |
 | US-6.4 | E-invoice integration (Decree 123/2020, Circular 78/2021) | ⬜ | HLD §9b. Design only. |
 | US-6.5 | Maker-checker manual journal entry workflow | ⬜ | HLD §9b. Design only. |
@@ -176,7 +177,7 @@ docs alone).
 3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
 4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
 5. **Onboarding service** (Epic 1) — currently seed-only; no production path.
-6. **EOD period-locking + GL feed** (US-6.1/6.2) — close batch runs (snapshot/roll/expire); add the write-freeze on closed business dates (unblocks US-3.7) and the chunked GL-feed post.
+6. ~~**EOD period-locking + GL feed** (US-6.1/6.2)~~ — ✅ done: `eod_close_period` write-freeze (full immutability) on closed business dates (unblocks US-3.7) + chunked `eod_gl_feed_post` (`WLT_BATCH` P→S). Remaining Epic-6 gaps: full suspense/clearing GL (US-6.2), e-invoice (US-6.4), maker-checker JE (US-6.5), reversal time-window (US-3.6).
 
 > These are suggestions based on the gap analysis above — confirm against the
 > product roadmap before scheduling. / Đây là gợi ý dựa trên phân tích khoảng

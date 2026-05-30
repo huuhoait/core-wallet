@@ -38,6 +38,28 @@ func (h *Wallet) CreateClient(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.ClientRespFrom(res))
 }
 
+// GET /v1/clients/:client_no — MASKED client profile (wallet_app via
+// v_client_masked). Name + CCCD/passport masked; unknown client_no → 404.
+func (h *Wallet) GetClient(c *gin.Context) {
+	res, err := h.svc.GetClient(c.Request.Context(), c.Param("client_no"))
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.ClientProfileRespFrom(res))
+}
+
+// GET /v1/ops/clients/:client_no — UNMASKED client profile (privileged,
+// wallet_pii_ro pool). Returns raw name + CCCD/passport; unknown client_no → 404.
+func (h *Wallet) GetClientFull(c *gin.Context) {
+	res, err := h.svc.GetClientFull(c.Request.Context(), c.Param("client_no"))
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.ClientFullRespFrom(res))
+}
+
 // PATCH /v1/clients/:client_no — update mutable client fields.
 func (h *Wallet) UpdateClient(c *gin.Context) {
 	var req dto.UpdateClientRequest
