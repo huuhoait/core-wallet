@@ -456,7 +456,7 @@ Every column in WLT and FM tables is tagged with one of four tiers. Classificati
 
 | Tier | Definition | Examples in this system |
 |------|-----------|-------------------------|
-| **P1 — Direct identifiers** | Identify an individual on their own | `FM_CLIENT_IDENTIFIERS.GLOBAL_ID` (CCCD, passport), `WLT_CLIENT_KYC.PHONE_NO`, `WLT_CLIENT_KYC.EMAIL`, `FM_CLIENT.CLIENT_NAME`, `FM_CLIENT_BANKS.ACCT_NO` |
+| **P1 — Direct identifiers** | Identify an individual on their own | `FM_CLIENT_IDENTIFIERS.GLOBAL_ID` (CCCD, passport), `WLT_CLIENT_KYC.PHONE_NO`, `WLT_CLIENT_KYC.EMAIL`, `FM_CLIENT.CLIENT_NAME`, `FM_CLIENT_BANKS.ACCT_NO_ENC` |
 | **P2 — Quasi-identifiers** | Identifying when combined with other data | `FM_CLIENT_INDVL.BIRTH_DATE`, `FM_CLIENT_CONTACT.ADDR_*`, device fingerprint, IP, `TERMINAL_ID` |
 | **P3 — Sensitive financial** | Financial activity bound to identity | `WLT_ACCT.ACTUAL_BAL`, `WLT_TRAN_HIST.*`, `WLT_STMT_DETAIL.*`, `WLT_BATCH.*` |
 | **P4 — Authentication secrets** | Credentials and crypto material | API client secrets, signing keys, OTP, session tokens, eKYC face-match templates |
