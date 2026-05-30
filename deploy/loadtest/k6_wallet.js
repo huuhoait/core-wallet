@@ -33,6 +33,11 @@ const NW   = parseInt(__ENV.NWALLET || '10000');
 const NG   = parseInt(__ENV.NGROUP  || '20');    // merchant groups (LTG01..LTGnn)
 const PEAK = parseInt(__ENV.PEAK    || '100');   // peak target TPS
 
+// Business outcomes (409 conflict, 422 insufficient/limit, 423 restrained) are
+// valid fast responses, not infra failures — mark them "expected" so
+// http_req_failed and the latency threshold reflect only real errors.
+http.setResponseCallback(http.expectedStatuses(200, 201, 409, 422, 423));
+
 // outcome counts every response tagged by its business code (success status
 // field, e.g. SUCCESS/DUPLICATE, or the error envelope `code`). The end-of-test
 // summary renders a per-code breakdown (see handleSummary below).
@@ -49,7 +54,8 @@ const KNOWN_OUTCOMES = [
   'VERSION_CONFLICT', 'VERSION_CONFLICT_FROM', 'VERSION_CONFLICT_TO',
   'INSUFFICIENT_FUNDS', 'TIER_LIMIT_EXCEEDED',
   'WD_INVALID_STATE', 'WD_ALREADY_REVERSED', 'WD_ALREADY_COMPLETED', 'WD_NOT_FOUND',
-  'DUPLICATE_REQUEST', 'ACCT_NOT_FOUND', 'INVALID_REQUEST', 'TIMEOUT', 'INTERNAL_ERROR',
+  'DR_RESTRAINT_ACTIVE', 'CR_RESTRAINT_ACTIVE',
+  'DUPLICATE_REFERENCE', 'ACCT_NOT_FOUND', 'INVALID_REQUEST', 'TIMEOUT', 'INTERNAL_ERROR',
 ];
 
 export const options = {
@@ -107,10 +113,18 @@ function recordOutcome(res) {
 }
 
 // classify a write/read response: SUCCESS(201) | DUPLICATE(200) | balance(200) |
-// conflict(409) | insufficient(402) are all "handled" business outcomes.
+// conflict(409) | insufficient/limit(422) | restrained(423) are all "handled"
+// business outcomes (not infra failures).
 function classify(res) {
   recordOutcome(res);
-  return check(res, { 'handled': (r) => [200, 201, 402, 409].includes(r.status) });
+  const ok = check(res, { 'handled': (r) => [200, 201, 409, 422, 423].includes(r.status) });
+  // Fresh writes (201) must carry the ISO 20022 transaction_status (errors §13.3).
+  if (res.status === 201) {
+    check(res, { 'tx_status present': (r) => {
+      try { return typeof r.json().transaction_status === 'string'; } catch (_) { return false; }
+    } });
+  }
+  return ok;
 }
 
 // reverse an original only if it actually SUCCESS (201); a 409/402 original is a
@@ -213,7 +227,8 @@ export function handleSummary(data) {
   const ERR = new Set([
     'VERSION_CONFLICT', 'VERSION_CONFLICT_FROM', 'VERSION_CONFLICT_TO', 'INSUFFICIENT_FUNDS',
     'TIER_LIMIT_EXCEEDED', 'WD_INVALID_STATE', 'WD_ALREADY_REVERSED', 'WD_ALREADY_COMPLETED',
-    'WD_NOT_FOUND', 'DUPLICATE_REQUEST', 'ACCT_NOT_FOUND', 'INVALID_REQUEST', 'TIMEOUT', 'INTERNAL_ERROR',
+    'WD_NOT_FOUND', 'DR_RESTRAINT_ACTIVE', 'CR_RESTRAINT_ACTIVE',
+    'DUPLICATE_REFERENCE', 'ACCT_NOT_FOUND', 'INVALID_REQUEST', 'TIMEOUT', 'INTERNAL_ERROR',
   ]);
 
   let t = `\n  █ RESPONSE CODE BREAKDOWN  (${total} responses)\n\n`;
