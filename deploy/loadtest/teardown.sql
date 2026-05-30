@@ -1,26 +1,84 @@
 -- =============================================================================
--- loadtest/teardown.sql — remove all load-test data (LT*/PB* prefixed)
+-- loadtest/teardown.sql — remove ONLY load-test-generated data.
+--
+-- Load-test data is created by setup.sql + the run scripts and is uniquely
+-- marked:  accounts 'LT%' / 'LTGS%' / 'LTGH%',  groups 'LTG%',
+-- clients 'LTC%' / 'LTGC%',  ledger refs 'LT-OPEN-%' / 'PB-%' / 'PBEXT-%'.
+-- Everything else (baseline C* clients, master/reference tables) is preserved.
+--
+-- Idempotent and safe to re-run. Invoked by run.sh / stress.sh with TEARDOWN=1,
+-- or manually:  psql -U postgres -d wallet -f teardown.sql
 -- =============================================================================
 \set ON_ERROR_STOP on
+SET statement_timeout = 0;
+
+\echo '--- load-test rows BEFORE teardown ---'
+SELECT 'wlt_acct (LT)'   AS scope, count(*) AS rows FROM wlt_acct      WHERE acct_no  LIKE 'LT%'
+UNION ALL SELECT 'fm_client (LT)',         count(*) FROM fm_client     WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%'
+UNION ALL SELECT 'wlt_tran_hist (PB/LT)',  count(*) FROM wlt_tran_hist WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%'
+UNION ALL SELECT 'wlt_batch (PB/LT)',      count(*) FROM wlt_batch     WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
+
 BEGIN;
--- ledger rows: run traffic (PB-*), seed funding (LT-OPEN-*), sweeps (SWEEP-*),
--- reversals (RV*). MUST also clear the LT-OPEN-* idempotency keys, else a re-seed
--- post_topup returns DUPLICATE and wallets stay at 0.
 /*
-DELETE FROM WLT_BATCH      WHERE reference LIKE 'PB-%' OR reference LIKE 'LT-%' OR reference LIKE 'SWEEP-%' OR reference LIKE 'RV%';
-DELETE FROM WLT_TRAN_HIST  WHERE reference LIKE 'PB-%' OR reference LIKE 'LT-%' OR reference LIKE 'SWEEP-%' OR reference LIKE 'RV%';
-DELETE FROM WLT_OUTBOX     WHERE partition_key LIKE 'LT%';
-DELETE FROM WLT_API_MESSAGE WHERE object_ref_id LIKE 'PB-%' OR object_ref_id LIKE 'LT-%' OR object_ref_id LIKE 'RV%';
-DELETE FROM WLT_SWEEP_LOG  WHERE group_id LIKE 'LTG%';
--- accounts → groups → clients (FK order)
-DELETE FROM WLT_ACCT_BAL   WHERE internal_key IN (SELECT internal_key FROM WLT_ACCT WHERE acct_no LIKE 'LT%');
-DELETE FROM WLT_ACCT       WHERE acct_no LIKE 'LT%';
-DELETE FROM WLT_ACCT_GROUP WHERE group_id LIKE 'LTG%';
-DELETE FROM WLT_CLIENT_KYC        WHERE client_no LIKE 'LTC%'  OR client_no LIKE 'LTGC%';
-DELETE FROM FM_CLIENT_INDVL       WHERE client_no LIKE 'LTC%'  OR client_no LIKE 'LTGC%';
-DELETE FROM FM_CLIENT_IDENTIFIERS WHERE client_no LIKE 'LTC%'  OR client_no LIKE 'LTGC%';
-DELETE FROM FM_CLIENT             WHERE client_no LIKE 'LTC%'  OR client_no LIKE 'LTGC%';
-*/
+-- Snapshot the load-test entity keys before deleting their parent rows.
+CREATE TEMP TABLE _lt_acct ON COMMIT DROP AS
+  SELECT internal_key FROM wlt_acct  WHERE acct_no  LIKE 'LT%';
+CREATE TEMP TABLE _lt_client ON COMMIT DROP AS
+  SELECT client_no   FROM fm_client WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%';
+
+-- 1) Ledger / event / tracking rows (no FK to accounts → free order).
+--    Matched by load-test account/client linkage AND by unambiguous LT/PB
+--    references — the GL/nostro legs of a posting carry the reference but are
+--    not tied to an LT account, so the reference filter is required to catch them.
+DELETE FROM wlt_tran_hist
+ WHERE internal_key IN (SELECT internal_key FROM _lt_acct)
+    OR reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
+
+DELETE FROM wlt_batch
+ WHERE acct_internal_key IN (SELECT internal_key FROM _lt_acct)
+    OR client_no IN (SELECT client_no FROM _lt_client)
+    OR reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
+
+DELETE FROM wlt_outbox       WHERE partition_key LIKE 'LT%';
+
+DELETE FROM wlt_api_message
+ WHERE object_ref_id LIKE 'PB-%' OR object_ref_id LIKE 'PBEXT-%' OR object_ref_id LIKE 'LT-%';
+
+DELETE FROM wlt_client_audit_log
+ WHERE client_no IN (SELECT client_no FROM _lt_client)
+    OR client_no LIKE 'LT%'
+    OR change_source = 'LOADTEST' OR changed_by = 'loadtest';
+
+DELETE FROM wlt_withdraw_track
+ WHERE acct_no LIKE 'LT%'
+    OR client_no IN (SELECT client_no FROM _lt_client)
+    OR ext_payout_ref LIKE 'PBEXT-%';
+
+-- 2) Account graph, in FK order. fk_group_settlement (group→acct) is
+--    DEFERRABLE INITIALLY DEFERRED, so deleting accounts before groups is OK
+--    (validated at COMMIT, by which point both sides are gone).
+DELETE FROM wlt_sweep_log    WHERE group_id LIKE 'LTG%';
+DELETE FROM wlt_restraints   WHERE internal_key IN (SELECT internal_key FROM _lt_acct);
+DELETE FROM wlt_acct_bal     WHERE internal_key IN (SELECT internal_key FROM _lt_acct);
+DELETE FROM wlt_acct         WHERE acct_no  LIKE 'LT%';
+DELETE FROM wlt_acct_group   WHERE group_id LIKE 'LTG%';
+
+-- 3) Client master & its child tables.
+DELETE FROM wlt_client_kyc        WHERE client_no IN (SELECT client_no FROM _lt_client);
+DELETE FROM fm_client_indvl       WHERE client_no IN (SELECT client_no FROM _lt_client);
+DELETE FROM fm_client_identifiers WHERE client_no IN (SELECT client_no FROM _lt_client);
+DELETE FROM fm_client_contact     WHERE client_no IN (SELECT client_no FROM _lt_client);
+DELETE FROM fm_client_banks       WHERE client_no IN (SELECT client_no FROM _lt_client);
+DELETE FROM fm_client             WHERE client_no IN (SELECT client_no FROM _lt_client);
+
 COMMIT;
-SELECT 'teardown done' AS status,
-  (SELECT count(*) FROM WLT_ACCT WHERE acct_no LIKE 'LT%') AS remaining_lt_accts;
+
+-- NOTE: wlt_nostro_bal is intentionally NOT touched — it holds system nostro
+-- reconciliation snapshots, not load-test-generated rows.
+*/
+\echo '--- remaining load-test rows AFTER teardown (expect all 0) ---'
+SELECT 'wlt_acct (LT)'   AS scope, count(*) AS rows FROM wlt_acct      WHERE acct_no  LIKE 'LT%'
+UNION ALL SELECT 'fm_client (LT)',         count(*) FROM fm_client     WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%'
+UNION ALL SELECT 'wlt_tran_hist (PB/LT)',  count(*) FROM wlt_tran_hist WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%'
+UNION ALL SELECT 'wlt_batch (PB/LT)',      count(*) FROM wlt_batch     WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
+SELECT 'baseline fm_client (C*) preserved' AS check, count(*) AS rows FROM fm_client WHERE client_no NOT LIKE 'LT%';
