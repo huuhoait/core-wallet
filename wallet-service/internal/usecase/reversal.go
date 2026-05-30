@@ -1,0 +1,38 @@
+package usecase
+
+import (
+	"context"
+	"log/slog"
+
+	"github.com/ewallet-pg/wallet-service/internal/domain"
+)
+
+// ReverseTransfer reverses an in-book transfer (refund sender, claw back receiver).
+func (s *WalletService) ReverseTransfer(ctx context.Context, in domain.TransferReversalInput) (*domain.TransferReversalResult, error) {
+	res, err := s.repo.ReverseTransfer(ctx, in)
+	if err != nil {
+		s.logFailure(ctx, "transfer_reversal", in.OrigReference, err)
+		return nil, err
+	}
+	s.log.InfoContext(ctx, "transfer reversed",
+		slog.String("orig_reference", in.OrigReference),
+		slog.Int64("reversal_tfr_key", res.ReversalTFRKey),
+		slog.Bool("was_already_reversed", res.WasAlreadyReversed),
+		slog.String("event_uuid", res.EventUUID.String()))
+	return res, nil
+}
+
+// ReverseTopup reverses a topup (claw back the credited funds from the wallet).
+func (s *WalletService) ReverseTopup(ctx context.Context, in domain.TopupReversalInput) (*domain.TopupReversalResult, error) {
+	res, err := s.repo.ReverseTopup(ctx, in)
+	if err != nil {
+		s.logFailure(ctx, "topup_reversal", in.OrigReference, err)
+		return nil, err
+	}
+	s.log.InfoContext(ctx, "topup reversed",
+		slog.String("orig_reference", in.OrigReference),
+		slog.Int64("reversal_tfr_key", res.ReversalTFRKey),
+		slog.Bool("was_already_reversed", res.WasAlreadyReversed),
+		slog.String("event_uuid", res.EventUUID.String()))
+	return res, nil
+}

@@ -1,0 +1,14 @@
+; PgBouncer userlist — local dev only.
+; In production: passwords stored as SCRAM-SHA-256 hashes, never plaintext.
+;
+; Format: "username" "password_or_hash"
+;
+; To regenerate SCRAM hashes from PG, run:
+;   docker compose exec postgres psql -U postgres -c "SELECT rolname, rolpassword FROM pg_authid WHERE rolname IN ('wallet_app','wallet_pii_ro','postgres');"
+; and paste the SCRAM-SHA-256 values here.
+;
+; For local dev, plaintext is acceptable because the network is internal.
+"postgres" "postgres_dev_only"
+"wallet_app" "wallet_app_dev"
+"wallet_pii_ro" "wallet_pii_dev"
+"wallet_admin" "wallet_admin_dev"

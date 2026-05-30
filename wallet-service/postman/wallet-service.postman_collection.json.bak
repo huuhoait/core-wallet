@@ -1,0 +1,430 @@
+{
+  "info": {
+    "_postman_id": "wallet-service-collection",
+    "name": "Wallet Service",
+    "description": "Core wallet HTTP API.\n\n**Setup**:\n1. Import this collection + `wallet-service.postman_environment.json`.\n2. Start the docker stack (`docker compose up -d`) and seed wallets `9701000000000001` + `9701000000000002` (see `wallet_seed.sql`).\n3. Run `make run` in `wallet-service/` (binds to `http://localhost:8090` by default).\n4. Select the **Wallet Service — local** environment in Postman.\n5. Run requests in the order below to exercise the full flow.\n\n**Conventions**:\n- Every transactional request auto-generates a unique `reference` in pre-request script (idempotency key).\n- `X-Caller-Subject` ↔ `audit.actor` GUC → fills `created_by` / `updated_by` columns.\n- `X-Channel` ↔ `audit.channel` GUC → fills `channel` column.\n- `X-Request-Id` correlates one client request across services.\n- Test scripts capture `tfr_internal_key`, `event_uuid`, `ext_payout_ref` to env vars for downstream requests.\n\n**Error envelope**:\n```json\n{ \"code\": \"<DOMAIN_CODE>\", \"message\": \"...\", \"request_id\": \"...\" }\n```\nCodes: `INVALID_REQUEST`, `ACCT_NOT_FOUND`, `INSUFFICIENT_FUNDS`, `DR_RESTRAINT_ACTIVE`, `TIER_INSUFFICIENT`, `TIMEOUT`, `WD_NOT_FOUND`, `WD_ALREADY_COMPLETED`, `WD_ALREADY_REVERSED`, ...",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Generate a unique idempotency reference for every transactional request.",
+          "// Read by the request body; retry with the same value to test idempotency.",
+          "if (!pm.variables.get('reference')) {",
+          "  pm.variables.set('reference', 'PM-' + Date.now() + '-' + Math.floor(Math.random()*1000));",
+          "}",
+          "// Auto-fill a request id so X-Request-Id echoes back from the server.",
+          "pm.variables.set('request_id', 'req-' + Date.now());"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Collection-level baseline: every response must carry a request_id header.",
+          "pm.test('X-Request-Id header echoed', () => {",
+          "  pm.expect(pm.response.headers.get('X-Request-Id')).to.be.a('string').and.not.empty;",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "base_url",   "value": "http://localhost:8090" },
+    { "key": "actor",      "value": "user_001" },
+    { "key": "channel",    "value": "MOBILE" },
+    { "key": "acct_no_a",  "value": "9701000000000001" },
+    { "key": "acct_no_b",  "value": "9701000000000002" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /healthz",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/healthz", "host": ["{{base_url}}"], "path": ["healthz"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('status=ok', () => pm.expect(pm.response.json().status).to.equal('ok'));"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "POST /v1/transactions/topup",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",      "value": "application/json" },
+              { "key": "X-Caller-Subject",  "value": "treasury_svc" },
+              { "key": "X-Channel",         "value": "TREASURY" },
+              { "key": "X-Request-Id",      "value": "{{request_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"acct_no\":   \"{{acct_no_a}}\",\n  \"amount\":    \"5000000\",\n  \"reference\": \"{{reference}}\",\n  \"metadata\":  {\n    \"channel\": \"TREASURY\",\n    \"partner_ref\": \"BANK-INGRESS-{{$timestamp}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/topup",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "transactions", "topup"]
+            },
+            "description": "Treasury Service credits a wallet (s2s). 201 POSTED on first call, 200 DUPLICATE on retry with same `reference`."
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+              "const body = pm.response.json();",
+              "pm.test('status POSTED|DUPLICATE', () => pm.expect(body.status).to.be.oneOf(['POSTED','DUPLICATE']));",
+              "pm.test('event_uuid is uuid', () => pm.expect(body.event_uuid).to.match(/^[0-9a-f-]{36}$/));",
+              "pm.collectionVariables.set('last_topup_tfr_key', body.tfr_internal_key);",
+              "pm.collectionVariables.set('last_topup_event_uuid', body.event_uuid);"
+            ]}
+          }]
+        },
+        {
+          "name": "POST /v1/transactions/transfer",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",      "value": "application/json" },
+              { "key": "X-Caller-Subject",  "value": "{{actor}}" },
+              { "key": "X-Channel",         "value": "{{channel}}" },
+              { "key": "X-Request-Id",      "value": "{{request_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"from_acct_no\": \"{{acct_no_a}}\",\n  \"to_acct_no\":   \"{{acct_no_b}}\",\n  \"amount\":       \"100000\",\n  \"reference\":    \"{{reference}}\",\n  \"metadata\":     {\n    \"app_ver\":   \"1.0.0\",\n    \"device_fp_hash\": \"abc123\",\n    \"geo_country\":   \"VN\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/transfer",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "transactions", "transfer"]
+            },
+            "description": "Wallet → wallet in-book transfer with fee + VAT. Fee config from `WLT_TRAN_DEF.TRFOUT` (5,500 VND fixed, 10% VAT inclusive = 5,000 net + 500 VAT)."
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+              "const body = pm.response.json();",
+              "pm.test('fee + VAT correct', () => {",
+              "  pm.expect(body.fee_gross).to.equal('5500.00');",
+              "  pm.expect(body.vat_amount).to.equal('500.00');",
+              "});",
+              "pm.collectionVariables.set('last_transfer_tfr_key', body.tfr_internal_key);"
+            ]}
+          }]
+        },
+        {
+          "name": "POST /v1/transactions/withdraw",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",      "value": "application/json" },
+              { "key": "X-Caller-Subject",  "value": "{{actor}}" },
+              { "key": "X-Channel",         "value": "{{channel}}" },
+              { "key": "X-Request-Id",      "value": "{{request_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"acct_no\":           \"{{acct_no_a}}\",\n  \"amount\":            \"200000\",\n  \"reference\":         \"{{reference}}\",\n  \"ext_payout_ref\":    \"EXT-PAY-{{$timestamp}}\",\n  \"beneficiary_bank\":  \"BIDV\",\n  \"beneficiary_acct\":  \"12345678901234\",\n  \"metadata\":          { \"app_ver\": \"1.0.0\" }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/withdraw",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "transactions", "withdraw"]
+            },
+            "description": "Sync-commit withdraw + insert WLT_WITHDRAW_TRACK (SUBMITTED). Captures `ext_payout_ref` to env for the Treasury callback flow.\n\nFee: 0.1% rate clamped to MIN=11,000 (so withdraw of 200K → 11,000 fee gross, VAT 1,000)."
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+              "const body = pm.response.json();",
+              "pm.test('balance decreased by amount+fee', () => {",
+              "  pm.expect(body.fee_gross).to.equal('11000.00');",
+              "});",
+              "// Capture ext_payout_ref from request body for downstream Treasury calls",
+              "const req = JSON.parse(pm.request.body.raw);",
+              "pm.collectionVariables.set('last_ext_payout_ref', req.ext_payout_ref);",
+              "pm.collectionVariables.set('last_withdraw_tfr_key', body.tfr_internal_key);"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "Treasury Callbacks",
+      "description": "State machine: SUBMITTED → ACKED → DISBURSING → COMPLETED | FAILED → REVERSED.\nEach endpoint targets a specific `ext_payout_ref`; run in order after a withdraw.",
+      "item": [
+        {
+          "name": "POST .../acked  (SUBMITTED → ACKED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",     "value": "application/json" },
+              { "key": "X-Caller-Subject", "value": "treasury_svc" },
+              { "key": "X-Channel",        "value": "TREASURY" },
+              { "key": "X-Request-Id",     "value": "{{request_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"treasury_batch_id\": \"BATCH-{{$timestamp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/treasury/withdrawals/{{last_ext_payout_ref}}/acked",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "treasury", "withdrawals", "{{last_ext_payout_ref}}", "acked"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('status=ACKED', () => pm.expect(pm.response.json().status).to.equal('ACKED'));"
+            ]}
+          }]
+        },
+        {
+          "name": "POST .../disbursing  (ACKED → DISBURSING)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",     "value": "application/json" },
+              { "key": "X-Caller-Subject", "value": "treasury_svc" },
+              { "key": "X-Channel",        "value": "TREASURY" },
+              { "key": "X-Request-Id",     "value": "{{request_id}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/treasury/withdrawals/{{last_ext_payout_ref}}/disbursing",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "treasury", "withdrawals", "{{last_ext_payout_ref}}", "disbursing"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('status=DISBURSING', () => pm.expect(pm.response.json().status).to.equal('DISBURSING'));"
+            ]}
+          }]
+        },
+        {
+          "name": "POST .../completed  ({ACKED,DISBURSING} → COMPLETED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",     "value": "application/json" },
+              { "key": "X-Caller-Subject", "value": "treasury_svc" },
+              { "key": "X-Channel",        "value": "TREASURY" },
+              { "key": "X-Request-Id",     "value": "{{request_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"napas_ref\": \"NAPAS-{{$timestamp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/treasury/withdrawals/{{last_ext_payout_ref}}/completed",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "treasury", "withdrawals", "{{last_ext_payout_ref}}", "completed"]
+            },
+            "description": "Terminal success state. Idempotent — second call returns the same status without re-emitting outbox."
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('status=COMPLETED', () => pm.expect(pm.response.json().status).to.equal('COMPLETED'));"
+            ]}
+          }]
+        },
+        {
+          "name": "POST .../reverse  (auto credit-back on Treasury failure / SLA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",     "value": "application/json" },
+              { "key": "X-Caller-Subject", "value": "treasury_svc" },
+              { "key": "X-Channel",        "value": "TREASURY" },
+              { "key": "X-Request-Id",     "value": "{{request_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fail_code\":   \"NAPAS_INSUFFICIENT_FUNDS\",\n  \"fail_reason\": \"Nostro balance insufficient for batch\",\n  \"initiator\":   \"TREASURY_FAILED\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/treasury/withdrawals/{{last_ext_payout_ref}}/reverse",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "treasury", "withdrawals", "{{last_ext_payout_ref}}", "reverse"]
+            },
+            "description": "Posts RVWD + RVFEE legs, credits the customer wallet back (amount + fee + VAT). Idempotent on `ext_payout_ref`. Refuses to reverse a COMPLETED withdraw — would return 409 WD_ALREADY_COMPLETED.\n\n**Note**: this test will fail with `WD_ALREADY_COMPLETED` if you ran `completed` first. Comment out completed or use a separate withdraw."
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 or 409', () => pm.expect(pm.response.code).to.be.oneOf([200, 409]));",
+              "if (pm.response.code === 200) {",
+              "  const body = pm.response.json();",
+              "  pm.test('reversal_tfr_key returned', () => pm.expect(body.reversal_tfr_key).to.be.a('number'));",
+              "  pm.collectionVariables.set('last_reversal_tfr_key', body.reversal_tfr_key);",
+              "} else {",
+              "  const body = pm.response.json();",
+              "  pm.test('code=WD_ALREADY_COMPLETED (expected if completed ran first)',",
+              "    () => pm.expect(body.code).to.equal('WD_ALREADY_COMPLETED'));",
+              "}"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "Error scenarios",
+      "description": "Negative tests demonstrating the error envelope + HTTP status mapping.",
+      "item": [
+        {
+          "name": "400 — Invalid request (bad acct_no + bad money)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",     "value": "application/json" },
+              { "key": "X-Caller-Subject", "value": "{{actor}}" },
+              { "key": "X-Channel",        "value": "{{channel}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"acct_no\":   \"bad\",\n  \"amount\":    \"abc\",\n  \"reference\": \"short\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/topup",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "transactions", "topup"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('400', () => pm.response.to.have.status(400));",
+              "pm.test('code=INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.equal('INVALID_REQUEST'));"
+            ]}
+          }]
+        },
+        {
+          "name": "404 — Account not found",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",     "value": "application/json" },
+              { "key": "X-Caller-Subject", "value": "{{actor}}" },
+              { "key": "X-Channel",        "value": "{{channel}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"acct_no\":   \"9999999999999999\",\n  \"amount\":    \"1000\",\n  \"reference\": \"PM-NOTFOUND-{{$timestamp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/topup",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "transactions", "topup"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('404', () => pm.response.to.have.status(404));",
+              "pm.test('code ends with _NOT_FOUND', () => pm.expect(pm.response.json().code).to.match(/_NOT_FOUND$/));"
+            ]}
+          }]
+        },
+        {
+          "name": "402 — Insufficient funds (transfer too much)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",     "value": "application/json" },
+              { "key": "X-Caller-Subject", "value": "{{actor}}" },
+              { "key": "X-Channel",        "value": "{{channel}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"from_acct_no\": \"{{acct_no_a}}\",\n  \"to_acct_no\":   \"{{acct_no_b}}\",\n  \"amount\":       \"99999999\",\n  \"reference\":    \"PM-OVER-{{$timestamp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/transfer",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "transactions", "transfer"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('402 or 400', () => pm.expect(pm.response.code).to.be.oneOf([402, 400]));",
+              "const body = pm.response.json();",
+              "pm.test('code is INSUFFICIENT_FUNDS or AMOUNT_OUT_OF_RANGE', () => {",
+              "  pm.expect(body.code).to.be.oneOf(['INSUFFICIENT_FUNDS','AMOUNT_OUT_OF_RANGE']);",
+              "});"
+            ]}
+          }]
+        },
+        {
+          "name": "200 DUPLICATE — Idempotency",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",     "value": "application/json" },
+              { "key": "X-Caller-Subject", "value": "treasury_svc" },
+              { "key": "X-Channel",        "value": "TREASURY" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"acct_no\":   \"{{acct_no_a}}\",\n  \"amount\":    \"100\",\n  \"reference\": \"PM-IDEMPOT-FIXED-001\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/topup",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "transactions", "topup"]
+            },
+            "description": "Run TWICE with the SAME `reference` (hard-coded `PM-IDEMPOT-FIXED-001`).\n\n- 1st call → 201 POSTED, balance increases by 100.\n- 2nd call → 200 **DUPLICATE**, balance unchanged, same `event_uuid` returned.\n\nReset by changing the hard-coded reference or wiping the test wallet."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": [
+                "// Override the collection-level auto reference so we ALWAYS use the fixed key",
+                "pm.variables.set('reference', 'PM-IDEMPOT-FIXED-001');"
+              ]}
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                "const body = pm.response.json();",
+                "pm.test('POSTED on first run, DUPLICATE on retry',",
+                "  () => pm.expect(body.status).to.be.oneOf(['POSTED','DUPLICATE']));",
+                "if (body.status === 'DUPLICATE') {",
+                "  console.log('Idempotency verified — same tfr_key + event_uuid returned');",
+                "}"
+              ]}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

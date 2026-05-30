@@ -1,0 +1,146 @@
+# =============================================================================
+# Core Wallet — Local Dev Stack (PostgreSQL 17 + PgBouncer transaction mode)
+#
+# Quickstart:
+#   cp .env.example .env          # adjust passwords if needed
+#   docker compose up -d
+#   docker compose logs -f postgres
+#   # Wait for "database system is ready to accept connections" + schema init done
+#   docker compose exec postgres psql -U postgres -d wallet -c "\dt"
+#
+# Connect from app (via PgBouncer, transaction mode):
+#   host=localhost port=6432 dbname=wallet user=wallet_app
+#
+# Direct PG (for admin / migrations / pgTAP):
+#   host=localhost port=5432 dbname=wallet user=postgres
+#
+# Tear down:
+#   docker compose down              # keep volumes
+#   docker compose down -v           # nuke data
+# =============================================================================
+
+name: core-wallet
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: wallet-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wallet}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_dev_only}
+      # Application role passwords (read by init-roles.sh)
+      WALLET_APP_PASSWORD: ${WALLET_APP_PASSWORD:-wallet_app_dev}
+      WALLET_PII_RO_PASSWORD: ${WALLET_PII_RO_PASSWORD:-wallet_pii_dev}
+      WALLET_ADMIN_PASSWORD: ${WALLET_ADMIN_PASSWORD:-wallet_admin_dev}
+      # PG runtime
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: Asia/Ho_Chi_Minh
+      LANG: en_US.UTF-8
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      # Init scripts run in alphabetical order on first start
+      - ./docker/postgres/init/00-set-passwords.sh:/docker-entrypoint-initdb.d/00-set-passwords.sh:ro
+      - ./wallet_schema.sql:/docker-entrypoint-initdb.d/01-wallet-schema.sql:ro
+      - ./wallet_sp.sql:/docker-entrypoint-initdb.d/02-wallet-sp.sql:ro
+      - ./docker/postgres/init/03-update-role-passwords.sh:/docker-entrypoint-initdb.d/03-update-role-passwords.sh:ro
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "hba_file=/etc/postgresql/pg_hba.conf"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wallet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 16G
+        reservations:
+          cpus: "1"
+          memory: 4G
+    shm_size: 1g       # PG shared memory (avoid "could not resize shared memory")
+    networks:
+      - wallet-net
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.1-p0
+    container_name: wallet-pgbouncer
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-wallet}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres_dev_only}
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: 16
+      MAX_CLIENT_CONN: 500
+      RESERVE_POOL_SIZE: 10
+      RESERVE_POOL_TIMEOUT: 5
+      SERVER_IDLE_TIMEOUT: 600
+      MAX_PREPARED_STATEMENTS: 200
+      AUTH_TYPE: scram-sha-256
+      ADMIN_USERS: postgres
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,application_name,search_path
+      # Enable verbose stats endpoint for monitoring
+      STATS_PERIOD: 60
+    ports:
+      - "${PGBOUNCER_PORT:-6432}:5432"
+    volumes:
+      - ./docker/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./docker/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -p 5432 -U postgres -d pgbouncer -c 'SHOW POOLS' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+    networks:
+      - wallet-net
+
+  # Optional: Adminer for browsing DB during development. Comment out for prod-like dev.
+  adminer:
+    image: adminer:4.8.1
+    container_name: wallet-adminer
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha-dark
+    networks:
+      - wallet-net
+    profiles:
+      - dev          # only starts with `docker compose --profile dev up`
+
+volumes:
+  pg_data:
+    name: wallet_pg_data
+    driver: local
+
+networks:
+  wallet-net:
+    name: wallet-net
+    driver: bridge

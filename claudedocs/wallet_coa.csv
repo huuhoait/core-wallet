@@ -1,0 +1,63 @@
+gl_code,gl_code_desc,gl_code_type,bspl_type,gl_type,coalesce,status
+101,Cash & equivalents (parent),A,B,CASH,"",A
+101.01,Settlement accounts — TKĐBTT (parent),A,B,CASH,101,A
+101.01.001,TKĐBTT — Partner Bank A (escrow),A,B,TKDBTT,101.01,A
+101.01.002,TKĐBTT — Partner Bank B (escrow),A,B,TKDBTT,101.01,A
+101.02,Nostro accounts (parent),A,B,CASH,101,A
+101.02.001,Nostro @ Partner Bank — TKĐBTT,A,B,NOSTRO,101.02,A
+101.03,Operating bank accounts (parent),A,B,CASH,101,A
+101.03.001,Operating account — Bank A,A,B,OPER,101.03,A
+102,Receivables (parent),A,B,RECV,"",A
+102.01,Cash-in receivable (parent),A,B,RECV,102,A
+102.01.001,Cash-in receivable — NAPAS / IBFT,A,B,RECV,102.01,A
+102.01.002,Cash-in receivable — Card (Visa/MC/JCB),A,B,RECV,102.01,A
+102.01.003,Cash-in receivable — Bank-linked account,A,B,RECV,102.01,A
+102.02,Partner / biller receivable (parent),A,B,RECV,102,A
+102.02.001,Receivable — biller settlement,A,B,RECV,102.02,A
+103,Prepaid & advances (parent),A,B,PREPAID,"",A
+103.01,Prepaid float (parent),A,B,PREPAID,103,A
+103.01.001,Prepaid float to biller / partner,A,B,PREPAID,103.01,A
+109,Clearing & suspense (parent),A,B,CLEAR,"",A
+109.01,Cash-in clearing (parent),A,B,CLEAR,109,A
+109.01.001,Cash-in clearing,A,B,CLEAR,109.01,A
+109.02,Cash-out clearing (parent),A,B,CLEAR,109,A
+109.02.001,Cash-out / disbursement clearing,A,B,CLEAR,109.02,A
+109.03,Payment clearing (parent),A,B,CLEAR,109,A
+109.03.001,Payment & settlement clearing,A,B,CLEAR,109.03,A
+109.04,Suspense (parent),A,B,SUSP,109,A
+109.04.001,Reversal / failed-txn suspense,A,B,SUSP,109.04,A
+109.04.002,Unidentified receipts,A,B,SUSP,109.04,A
+109.04.009,Reconciliation difference,A,B,SUSP,109.04,A
+201,Customer liabilities (parent),L,B,LIAB,"",A
+201.01,Customer wallets (parent),L,B,LIAB,201,A
+201.01.001,Customer Wallet — Consumer,L,B,LIAB,201.01,A
+201.02,Merchant wallets (parent),L,B,LIAB,201,A
+201.02.001,Merchant Wallet,L,B,LIAB,201.02,A
+201.03,"Promotional balance (parent, NOT escrow-backed)",L,B,PROMO,201,A
+201.03.001,Promotional / bonus wallet balance,L,B,PROMO,201.03,A
+202,Settlement payables (parent),L,B,SETTLE,"",A
+202.01,Merchant settlement payable (parent),L,B,SETTLE,202,A
+202.01.001,Payable to merchant — settlement,L,B,SETTLE,202.01,A
+202.02,Biller / partner payable (parent),L,B,SETTLE,202,A
+202.02.001,Payable to biller / service partner,L,B,SETTLE,202.02,A
+203,Tax payable (parent),L,B,TAX,"",A
+203.01,VAT output payable,L,B,TAX,203,A
+204,Dormant / unclaimed balances (parent),L,B,LIAB,"",A
+204.01,Dormant balances (parent),L,B,LIAB,204,A
+204.01.001,Dormant wallet liability,L,B,LIAB,204.01,A
+205,Provisions (parent),L,B,PROV,"",A
+205.01,Promotion provision (parent),L,B,PROV,205,A
+205.01.001,Cashback / promotion payable reserve,L,B,PROV,205.01,A
+401,Fee revenue (parent),I,P,REV,"",A
+401.01,Transfer/withdraw fee revenue,I,P,REV,401,A
+401.02,Merchant withdraw fee revenue,I,P,REV,401,A
+401.03,Merchant discount rate (MDR),I,P,REV,401,A
+401.04,Bill-payment / top-up commission income,I,P,COMM,401,A
+402,Financial income (parent),I,P,INTINC,"",A
+402.01,Float interest income on TKĐBTT,I,P,INTINC,402,A
+501,Channel & processing cost (parent),E,P,EXP,"",A
+501.01,Bank / channel fee (cash-in & cash-out),E,P,EXP,501,A
+501.02,Card scheme / switching fee (NAPAS/Visa/MC),E,P,EXP,501,A
+502,Marketing & partner cost (parent),E,P,EXP,"",A
+502.01,Cashback / promotion expense,E,P,EXP,502,A
+502.02,Partner commission expense,E,P,EXP,502,A

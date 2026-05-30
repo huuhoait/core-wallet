@@ -1,0 +1,560 @@
+[
+    {
+        "gl_code": "101",
+        "desc": "Cash & equivalents (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CASH",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "101.01",
+        "desc": "Settlement accounts \u2014 TK\u0110BTT (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CASH",
+        "parent": "101",
+        "status": "A"
+    },
+    {
+        "gl_code": "101.01.001",
+        "desc": "TK\u0110BTT \u2014 Partner Bank A (escrow)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "TKDBTT",
+        "parent": "101.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "101.01.002",
+        "desc": "TK\u0110BTT \u2014 Partner Bank B (escrow)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "TKDBTT",
+        "parent": "101.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "101.02",
+        "desc": "Nostro accounts (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CASH",
+        "parent": "101",
+        "status": "A"
+    },
+    {
+        "gl_code": "101.02.001",
+        "desc": "Nostro @ Partner Bank \u2014 TK\u0110BTT",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "NOSTRO",
+        "parent": "101.02",
+        "status": "A"
+    },
+    {
+        "gl_code": "101.03",
+        "desc": "Operating bank accounts (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CASH",
+        "parent": "101",
+        "status": "A"
+    },
+    {
+        "gl_code": "101.03.001",
+        "desc": "Operating account \u2014 Bank A",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "OPER",
+        "parent": "101.03",
+        "status": "A"
+    },
+    {
+        "gl_code": "102",
+        "desc": "Receivables (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "RECV",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "102.01",
+        "desc": "Cash-in receivable (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "RECV",
+        "parent": "102",
+        "status": "A"
+    },
+    {
+        "gl_code": "102.01.001",
+        "desc": "Cash-in receivable \u2014 NAPAS / IBFT",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "RECV",
+        "parent": "102.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "102.01.002",
+        "desc": "Cash-in receivable \u2014 Card (Visa/MC/JCB)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "RECV",
+        "parent": "102.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "102.01.003",
+        "desc": "Cash-in receivable \u2014 Bank-linked account",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "RECV",
+        "parent": "102.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "102.02",
+        "desc": "Partner / biller receivable (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "RECV",
+        "parent": "102",
+        "status": "A"
+    },
+    {
+        "gl_code": "102.02.001",
+        "desc": "Receivable \u2014 biller settlement",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "RECV",
+        "parent": "102.02",
+        "status": "A"
+    },
+    {
+        "gl_code": "103",
+        "desc": "Prepaid & advances (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "PREPAID",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "103.01",
+        "desc": "Prepaid float (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "PREPAID",
+        "parent": "103",
+        "status": "A"
+    },
+    {
+        "gl_code": "103.01.001",
+        "desc": "Prepaid float to biller / partner",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "PREPAID",
+        "parent": "103.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "109",
+        "desc": "Clearing & suspense (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CLEAR",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "109.01",
+        "desc": "Cash-in clearing (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CLEAR",
+        "parent": "109",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.01.001",
+        "desc": "Cash-in clearing",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CLEAR",
+        "parent": "109.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.02",
+        "desc": "Cash-out clearing (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CLEAR",
+        "parent": "109",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.02.001",
+        "desc": "Cash-out / disbursement clearing",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CLEAR",
+        "parent": "109.02",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.03",
+        "desc": "Payment clearing (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CLEAR",
+        "parent": "109",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.03.001",
+        "desc": "Payment & settlement clearing",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "CLEAR",
+        "parent": "109.03",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.04",
+        "desc": "Suspense (parent)",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "SUSP",
+        "parent": "109",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.04.001",
+        "desc": "Reversal / failed-txn suspense",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "SUSP",
+        "parent": "109.04",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.04.002",
+        "desc": "Unidentified receipts",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "SUSP",
+        "parent": "109.04",
+        "status": "A"
+    },
+    {
+        "gl_code": "109.04.009",
+        "desc": "Reconciliation difference",
+        "type": "A",
+        "bspl": "B",
+        "gl_type": "SUSP",
+        "parent": "109.04",
+        "status": "A"
+    },
+    {
+        "gl_code": "201",
+        "desc": "Customer liabilities (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "LIAB",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "201.01",
+        "desc": "Customer wallets (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "LIAB",
+        "parent": "201",
+        "status": "A"
+    },
+    {
+        "gl_code": "201.01.001",
+        "desc": "Customer Wallet \u2014 Consumer",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "LIAB",
+        "parent": "201.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "201.02",
+        "desc": "Merchant wallets (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "LIAB",
+        "parent": "201",
+        "status": "A"
+    },
+    {
+        "gl_code": "201.02.001",
+        "desc": "Merchant Wallet",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "LIAB",
+        "parent": "201.02",
+        "status": "A"
+    },
+    {
+        "gl_code": "201.03",
+        "desc": "Promotional balance (parent, NOT escrow-backed)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "PROMO",
+        "parent": "201",
+        "status": "A"
+    },
+    {
+        "gl_code": "201.03.001",
+        "desc": "Promotional / bonus wallet balance",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "PROMO",
+        "parent": "201.03",
+        "status": "A"
+    },
+    {
+        "gl_code": "202",
+        "desc": "Settlement payables (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "SETTLE",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "202.01",
+        "desc": "Merchant settlement payable (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "SETTLE",
+        "parent": "202",
+        "status": "A"
+    },
+    {
+        "gl_code": "202.01.001",
+        "desc": "Payable to merchant \u2014 settlement",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "SETTLE",
+        "parent": "202.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "202.02",
+        "desc": "Biller / partner payable (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "SETTLE",
+        "parent": "202",
+        "status": "A"
+    },
+    {
+        "gl_code": "202.02.001",
+        "desc": "Payable to biller / service partner",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "SETTLE",
+        "parent": "202.02",
+        "status": "A"
+    },
+    {
+        "gl_code": "203",
+        "desc": "Tax payable (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "TAX",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "203.01",
+        "desc": "VAT output payable",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "TAX",
+        "parent": "203",
+        "status": "A"
+    },
+    {
+        "gl_code": "204",
+        "desc": "Dormant / unclaimed balances (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "LIAB",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "204.01",
+        "desc": "Dormant balances (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "LIAB",
+        "parent": "204",
+        "status": "A"
+    },
+    {
+        "gl_code": "204.01.001",
+        "desc": "Dormant wallet liability",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "LIAB",
+        "parent": "204.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "205",
+        "desc": "Provisions (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "PROV",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "205.01",
+        "desc": "Promotion provision (parent)",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "PROV",
+        "parent": "205",
+        "status": "A"
+    },
+    {
+        "gl_code": "205.01.001",
+        "desc": "Cashback / promotion payable reserve",
+        "type": "L",
+        "bspl": "B",
+        "gl_type": "PROV",
+        "parent": "205.01",
+        "status": "A"
+    },
+    {
+        "gl_code": "401",
+        "desc": "Fee revenue (parent)",
+        "type": "I",
+        "bspl": "P",
+        "gl_type": "REV",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "401.01",
+        "desc": "Transfer/withdraw fee revenue",
+        "type": "I",
+        "bspl": "P",
+        "gl_type": "REV",
+        "parent": "401",
+        "status": "A"
+    },
+    {
+        "gl_code": "401.02",
+        "desc": "Merchant withdraw fee revenue",
+        "type": "I",
+        "bspl": "P",
+        "gl_type": "REV",
+        "parent": "401",
+        "status": "A"
+    },
+    {
+        "gl_code": "401.03",
+        "desc": "Merchant discount rate (MDR)",
+        "type": "I",
+        "bspl": "P",
+        "gl_type": "REV",
+        "parent": "401",
+        "status": "A"
+    },
+    {
+        "gl_code": "401.04",
+        "desc": "Bill-payment / top-up commission income",
+        "type": "I",
+        "bspl": "P",
+        "gl_type": "COMM",
+        "parent": "401",
+        "status": "A"
+    },
+    {
+        "gl_code": "402",
+        "desc": "Financial income (parent)",
+        "type": "I",
+        "bspl": "P",
+        "gl_type": "INTINC",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "402.01",
+        "desc": "Float interest income on TK\u0110BTT",
+        "type": "I",
+        "bspl": "P",
+        "gl_type": "INTINC",
+        "parent": "402",
+        "status": "A"
+    },
+    {
+        "gl_code": "501",
+        "desc": "Channel & processing cost (parent)",
+        "type": "E",
+        "bspl": "P",
+        "gl_type": "EXP",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "501.01",
+        "desc": "Bank / channel fee (cash-in & cash-out)",
+        "type": "E",
+        "bspl": "P",
+        "gl_type": "EXP",
+        "parent": "501",
+        "status": "A"
+    },
+    {
+        "gl_code": "501.02",
+        "desc": "Card scheme / switching fee (NAPAS/Visa/MC)",
+        "type": "E",
+        "bspl": "P",
+        "gl_type": "EXP",
+        "parent": "501",
+        "status": "A"
+    },
+    {
+        "gl_code": "502",
+        "desc": "Marketing & partner cost (parent)",
+        "type": "E",
+        "bspl": "P",
+        "gl_type": "EXP",
+        "parent": null,
+        "status": "A"
+    },
+    {
+        "gl_code": "502.01",
+        "desc": "Cashback / promotion expense",
+        "type": "E",
+        "bspl": "P",
+        "gl_type": "EXP",
+        "parent": "502",
+        "status": "A"
+    },
+    {
+        "gl_code": "502.02",
+        "desc": "Partner commission expense",
+        "type": "E",
+        "bspl": "P",
+        "gl_type": "EXP",
+        "parent": "502",
+        "status": "A"
+    }
+]

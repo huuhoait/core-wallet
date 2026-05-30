@@ -1,0 +1,26 @@
+# ---- Secrets / env ----------------------------------------------------------
+.env
+*.local
+!.env.example
+
+# ---- Go build artifacts -----------------------------------------------------
+bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# ---- OS / editor ------------------------------------------------------------
+.DS_Store
+*~
+.idea/
+.vscode/
+*.swp
+
+# ---- Legacy / archived material (kept locally, out of the tracked project) --
+.archive/
+Archive/
+
+# ---- Load-test scratch ------------------------------------------------------
+loadtest/*.tmp
+*.k6-summary.json
