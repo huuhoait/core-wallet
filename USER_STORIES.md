@@ -22,7 +22,7 @@ docs alone).
 
 | Epic | ✅ | 🟡 | ⬜ |
 |------|:--:|:--:|:--:|
-| 1. Onboarding & Wallet Management | 4 | 0 | 4 |
+| 1. Onboarding & Wallet Management | 5 | 0 | 4 |
 | 2. Transactions — Posting | 6 | 0 | 0 |
 | 3. Reversals & Refunds | 5 | 1 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
@@ -32,7 +32,7 @@ docs alone).
 | 8. Audit, PII & Compliance | 2 | 1 | 1 |
 | 9. Platform / Infra / Observability | 10 | 0 | 3 |
 | 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **46** | **4** | **15** |
+| **Total** | **47** | **4** | **15** |
 
 ---
 
@@ -53,6 +53,7 @@ docs alone).
 | US-1.6 | As compliance, KYC downgrade & 12-month re-KYC | ⬜ | Spec §5.2, §13 (open item). |
 | US-1.7 | As a corporate customer, I onboard (CORP, legal rep / UBO) | ⬜ | Spec §13 — schema gaps noted; not designed. |
 | US-1.8 | As ops, I create/update a **client master record** (identity only, no KYC/onboarding flow) | ✅ | SP `create_client`/`update_client` (SECURITY DEFINER); `POST /v1/clients` + `PATCH /v1/clients/:client_no`. FM_CLIENT (+FM_CLIENT_INDVL). Wallet opening/KYC still out of scope. |
+| US-1.9 | As ops/portal, I read a client profile — **masked** (general) or **unmasked** (privileged) | ✅ | `GET /v1/clients/:client_no` → MASKED via view `v_client_masked` (wallet_app; name + CCCD/passport masked) + `GET /v1/ops/clients/:client_no` → UNMASKED via the `wallet_pii_ro` pool (`DB_PII_DSN`, falls back to primary). Repo `GetClient`/`GetClientFull` (read-only, CQRS). Phone/email stay encrypted at rest (not decrypted); per-read `WLT_PII_ACCESS_LOG` = US-8.4 follow-up. |
 
 ## Epic 2 — Transactions (Posting) / Giao dịch ghi sổ
 
@@ -173,7 +174,7 @@ docs alone).
 
 ## Next priorities (suggested) / Ưu tiên tiếp theo (gợi ý)
 
-1. **getClient** (Epic 1) — `GET /v1/clients/:id` needs the masked PII view (`v_kyc_masked`). (client CRUD + account open/block/close already done — US-1.3/1.4/1.5/1.8.)
+1. ~~**getClient** (Epic 1)~~ — ✅ done (US-1.9): `GET /v1/clients/:client_no` MASKED (`v_client_masked`) + `GET /v1/ops/clients/:client_no` UNMASKED (`wallet_pii_ro`).
 2. **Outbox relay worker** (US-7.2) — events are written but never published.
 3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
 4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
