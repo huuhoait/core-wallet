@@ -1,5 +1,7 @@
 # Báo cáo đối chiếu cột & thứ tự cột giữa 2 file DDL
 
+> **✅ ĐÃ CHỐT (2026-05-30):** Giữ `db/ddl/wallet_schema.sql` làm source of truth duy nhất; `db/ddl/wallet_ddl.sql` đã **bị xoá** (không port lại bảng/cột nào). Tài liệu dưới đây giữ lại làm hồ sơ lý do quyết định — file `wallet_ddl.sql` không còn tồn tại.
+
 **Ngày:** 2026-05-30
 **Phạm vi:** `db/ddl/wallet_ddl.sql` (1525 dòng) vs `db/ddl/wallet_schema.sql` (1209 dòng)
 **Nguồn thứ 3:** khối ERD mermaid trong comment đầu `wallet_ddl.sql` (dòng 72–391)

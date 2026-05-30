@@ -100,7 +100,7 @@ PG `lock_timeout` 1.5s → PG `statement_timeout` 2.5s → pgx → HTTP request 
 
 The DB is the source of truth for the ledger.
 
-- `db/ddl/` — `wallet_schema.sql` is the docker-init schema; `wallet_ddl.sql` the full DDL.
+- `db/ddl/` — `wallet_schema.sql` is the docker-init schema and the single source of truth for the DDL.
 - `db/procedures/wallet_sp*.sql` — posting SPs. Posting uses a **deferred-locking** pattern: Phase 1 validates with no lock, Phase 2 does the atomic balance UPDATE.
 - `db/seeds/` — chart of accounts (`coa/`), tran-type extensions, fixtures.
 - `db/tests/` — SQL assertion suites (accounting balance, merchant flow, reconciliation, reversal).
