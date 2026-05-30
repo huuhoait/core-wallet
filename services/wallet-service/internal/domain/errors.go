@@ -74,6 +74,10 @@ const (
 	CodeRestraintAmtExceedsBalance   = "RESTRAINT_AMT_EXCEEDS_BALANCE"
 	CodeRestraintDateInvalid         = "RESTRAINT_DATE_INVALID"
 	CodeCourtOrderRemoveRequiresDoc  = "COURT_ORDER_REMOVE_REQUIRES_DOC"
+	// Client master CRUD
+	CodeInvalidClientType   = "INVALID_CLIENT_TYPE"
+	CodeClientAlreadyExists = "CLIENT_ALREADY_EXISTS"
+	CodeClientNotFound      = "CLIENT_NOT_FOUND"
 )
 
 // Helpers for constructing errors at boundaries.

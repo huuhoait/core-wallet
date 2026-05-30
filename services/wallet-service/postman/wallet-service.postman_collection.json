@@ -95,6 +95,169 @@
       ]
     },
     {
+      "name": "Clients",
+      "item": [
+        {
+          "name": "POST create client (IND)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_name\":    \"Tran Thi B\",\n  \"client_type\":    \"IND\",\n  \"global_id\":      \"079{{$timestamp}}\",\n  \"global_id_type\": \"CCCD\",\n  \"surname\":        \"Tran\",\n  \"given_name\":     \"Thi B\",\n  \"birth_date\":     \"1992-03-04\",\n  \"sex\":            \"F\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/clients",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients"
+              ]
+            },
+            "description": "Create a client master record (identity only; no KYC). global_id uses {{$timestamp}} to stay unique. Captures {{client_no}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([201,409,422]));",
+                  "if (pm.response.code===201){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('client_no returned', ()=>pm.expect(b.client_no).to.be.a('string'));",
+                  "  pm.environment.set('client_no', b.client_no);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH update client",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_name\": \"Tran Thi Bich\",\n  \"given_name\":  \"Thi Bich\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/clients/{{client_no}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients",
+                "{{client_no}}"
+              ]
+            },
+            "description": "Update mutable client fields (uses {{client_no}} from the create request)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if (pm.response.code===200){ pm.test('client_no echoed', ()=>pm.expect(pm.response.json().client_no).to.eql(pm.environment.get('client_no'))); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "422 — invalid client_type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "OPSUI"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_name\": \"X\",\n  \"client_type\": \"PERSON\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/clients",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients"
+              ]
+            },
+            "description": "client_type must be IND or CORP."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422', () => pm.response.to.have.status(422));",
+                  "pm.test('code INVALID_CLIENT_TYPE', ()=>pm.expect(pm.response.json().code).to.equal('INVALID_CLIENT_TYPE'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Finance",
       "item": [
         {

@@ -115,14 +115,16 @@ func httpStatusFor(code string) int {
 		domain.CodeWDAlreadyCompleted,
 		domain.CodeWDAlreadyReversed,
 		domain.CodeWDInvalidState,
-		domain.CodeRestraintAlreadyRemoved:
+		domain.CodeRestraintAlreadyRemoved,
+		domain.CodeClientAlreadyExists:
 		return http.StatusConflict
 	case domain.CodeRestraintTypeInvalid,
 		domain.CodeRestraintPurposeInvalid,
 		domain.CodeRestraintTypePurposeConflict,
 		domain.CodeRestraintAmtExceedsBalance,
 		domain.CodeRestraintDateInvalid,
-		domain.CodeCourtOrderRemoveRequiresDoc:
+		domain.CodeCourtOrderRemoveRequiresDoc,
+		domain.CodeInvalidClientType:
 		return http.StatusUnprocessableEntity
 	case domain.CodePIIDekNotSet:
 		return http.StatusInternalServerError

@@ -48,4 +48,8 @@ type WalletRepository interface {
 	// Restraint management (add_restraint / release_restraint).
 	AddRestraint(ctx context.Context, in domain.RestraintInput) (*domain.RestraintResult, error)
 	ReleaseRestraint(ctx context.Context, in domain.ReleaseRestraintInput) (*domain.RestraintResult, error)
+
+	// Client master CRUD (create_client / update_client).
+	CreateClient(ctx context.Context, in domain.ClientCreateInput) (*domain.ClientResult, error)
+	UpdateClient(ctx context.Context, in domain.ClientUpdateInput) (*domain.ClientResult, error)
 }

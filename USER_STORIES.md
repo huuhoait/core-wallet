@@ -22,7 +22,7 @@ docs alone).
 
 | Epic | ✅ | 🟡 | ⬜ |
 |------|:--:|:--:|:--:|
-| 1. Onboarding & Wallet Management | 0 | 1 | 6 |
+| 1. Onboarding & Wallet Management | 1 | 1 | 6 |
 | 2. Transactions — Posting | 6 | 0 | 1 |
 | 3. Reversals & Refunds | 5 | 2 | 0 |
 | 4. Balance & Statements | 5 | 0 | 0 |
@@ -32,7 +32,7 @@ docs alone).
 | 8. Audit, PII & Compliance | 3 | 1 | 1 |
 | 9. Platform / Infra / Observability | 9 | 0 | 3 |
 | 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **37** | **7** | **19** |
+| **Total** | **38** | **7** | **19** |
 
 ---
 
@@ -51,6 +51,7 @@ docs alone).
 | US-1.5 | As ops, I block / close a wallet (close requires balance = 0) | ⬜ | Spec §6.2, AC-08. `WLT_ACCT.ACCT_STATUS` exists; no endpoint. |
 | US-1.6 | As compliance, KYC downgrade & 12-month re-KYC | ⬜ | Spec §5.2, §13 (open item). |
 | US-1.7 | As a corporate customer, I onboard (CORP, legal rep / UBO) | ⬜ | Spec §13 — schema gaps noted; not designed. |
+| US-1.8 | As ops, I create/update a **client master record** (identity only, no KYC/onboarding flow) | ✅ | SP `create_client`/`update_client` (SECURITY DEFINER); `POST /v1/clients` + `PATCH /v1/clients/:client_no`. FM_CLIENT (+FM_CLIENT_INDVL). Wallet opening/KYC still out of scope. |
 
 ## Epic 2 — Transactions (Posting) / Giao dịch ghi sổ
 

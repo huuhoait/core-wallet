@@ -68,6 +68,13 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			finance.POST("/restraints/:id/release", h.ReleaseRestraint)
 		}
 
+		// ── Clients: master CRUD (identity only — no KYC/onboarding flow) ──
+		clients := v1.Group("/clients")
+		{
+			clients.POST("", h.CreateClient)
+			clients.PATCH("/:client_no", h.UpdateClient)
+		}
+
 		// ── Accounts: profile + balance reads (Get Balance §9). Read-only. ──
 		accounts := v1.Group("/accounts")
 		{

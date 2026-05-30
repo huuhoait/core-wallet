@@ -64,6 +64,10 @@ var codeMeta = map[string]CodeMeta{
 	CodeRestraintAmtExceedsBalance:   {"Pledged amount exceeds balance", "E3025", "AM04", ""},
 	CodeRestraintDateInvalid:         {"Invalid restraint date range", "E3026", "DT01", ""},
 	CodeCourtOrderRemoveRequiresDoc:  {"Court/tax-lien removal requires a documented reason", "E3027", "RR04", ""},
+	// Client master CRUD
+	CodeInvalidClientType:   {"Invalid client type", "E2010", "", ""},
+	CodeClientAlreadyExists: {"Client already exists", "E2009", "AM05", ""},
+	CodeClientNotFound:      {"Client not found", "E2011", "", ""},
 }
 
 // MetaFor returns the standards metadata for a canonical code. Unknown codes

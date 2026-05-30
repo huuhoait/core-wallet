@@ -176,6 +176,8 @@ Success responses additionally carry `transaction_status` (`ACSC` settled /
 | 500 | `INTERNAL_ERROR` | E9001 | — | `PDNG` | unmapped fallback |
 
 > Restraint codes (`RESTRAINT_TYPE_INVALID`/`PURPOSE_INVALID`/`TYPE_PURPOSE_CONFLICT`/`AMT_EXCEEDS_BALANCE`/`DATE_INVALID` → 422, `RESTRAINT_ALREADY_REMOVED` → 409, `RESTRAINT_NOT_FOUND` → 404, `COURT_ORDER_REMOVE_REQUIRES_DOC` → 422) are now implemented too (SP `add_restraint`/`release_restraint`) — listed in §4.9.
+>
+> Client master CRUD (SP `create_client`/`update_client`): `INVALID_CLIENT_TYPE` (E2010) → 422, `CLIENT_ALREADY_EXISTS` (E2009, ISO `AM05`) → 409, `CLIENT_NOT_FOUND` (E2011) → 404.
 
 ### 4.1 Auth & rate limiting
 

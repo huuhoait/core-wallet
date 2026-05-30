@@ -120,6 +120,7 @@ for f in db/procedures/wallet_sp_balance.sql \
          db/procedures/wallet_sp_topup_reversal.sql \
          db/procedures/wallet_sp_transfer_reversal.sql \
          db/procedures/wallet_sp_restraint.sql \
+         db/procedures/wallet_sp_client.sql \
          db/seeds/wallet_coa_seed.sql \
          db/seeds/wallet_tran_type_ext.sql \
          db/seeds/wallet_seed.sql; do
@@ -166,6 +167,8 @@ and the Postman collection.
 | `POST` | `/v1/finance/restraints/:id/release` | Release a restraint |
 | `GET`  | `/v1/finance/transactions?acct_no=&limit=&before_seq=` | Account statement (transaction list, keyset-paged) |
 | `GET`  | `/v1/finance/transactions/:tfr_key` | Transaction detail (all legs of a `tfr_internal_key`) |
+| `POST` | `/v1/clients` | Create a client master record (identity only; no KYC/onboarding) |
+| `PATCH`| `/v1/clients/:client_no` | Update client info |
 | `GET`  | `/v1/accounts/:acct_no` | Account profile (no client PII) |
 | `GET`  | `/v1/accounts/:acct_no/balance` | Customer balance (realtime / `?as_of_date=`) |
 | `GET`  | `/v1/ops/accounts/:acct_no/balance` | Ops full balance view |
