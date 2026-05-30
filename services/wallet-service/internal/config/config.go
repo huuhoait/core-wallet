@@ -78,7 +78,7 @@ type Otel struct {
 type EOD struct {
 	Enabled    bool          `env:"EOD_ENABLED"     envDefault:"false"`
 	DSN        string        `env:"EOD_DSN"         envExpand:"true"`        // direct PG conn as wallet_eod (e.g. port 5432, not 6432)
-	RunAt      string        `env:"EOD_RUN_AT"      envDefault:"23:59:59"`  // HH:MM:SS local wall-clock
+	RunAt      string        `env:"EOD_RUN_AT"      envDefault:"00:30:00"`  // HH:MM:SS local; fire after midnight → closes the prior (now past) day
 	Timezone   string        `env:"EOD_TIMEZONE"    envDefault:"Asia/Ho_Chi_Minh"`
 	RunTimeout time.Duration `env:"EOD_RUN_TIMEOUT" envDefault:"30m"`        // hard cap on one close
 }

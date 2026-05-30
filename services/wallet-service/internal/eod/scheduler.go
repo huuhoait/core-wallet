@@ -9,8 +9,12 @@
 // pool built from EOD_DSN with statement_timeout disabled.
 //
 // This is a fixed-daily-time scheduler (one fire per local wall-clock day), not
-// a general cron — adequate for a once-a-day close. It closes the business day
-// that is ending (the local calendar date at fire time).
+// a general cron — adequate for a once-a-day close. It fires shortly AFTER the
+// local midnight roll (default 00:30) and closes the PRIOR business day — the one
+// that just ended. Closing yesterday (strictly < the server's CURRENT_DATE) is
+// required by the period write-freeze: a date can only be sealed once no posting
+// can still legitimately target it (live postings use POST_DATE = CURRENT_DATE).
+// This matches the pg_cron schedule in the ledger-integrity migration.
 package eod
 
 import (
@@ -82,11 +86,21 @@ func (s *Scheduler) nextFire(now time.Time) time.Time {
 	return today
 }
 
-// runOnce closes the business day that is ending (the current local date).
-// run_eod is resumable, so a mid-run shutdown (ctx cancel) leaves committed
-// chunks intact and the next run continues from the resume cursor.
+// closeDate returns the business date run_eod should close at fire time: the
+// prior local calendar day (the day that just ended). The scheduler fires after
+// the local midnight roll, so "now" is already the new day and the returned date
+// is strictly in the past — required by the period write-freeze (a date can only
+// be sealed once no posting can still target it). Date-only, so DST/offset shifts
+// within a day don't change the result.
+func closeDate(now time.Time) string {
+	return now.AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+// runOnce closes the prior business day (the one that just ended). run_eod is
+// resumable, so a mid-run shutdown (ctx cancel) leaves committed chunks intact
+// and the next run continues from the resume cursor.
 func (s *Scheduler) runOnce(parent context.Context) {
-	bizDate := time.Now().In(s.loc).Format("2006-01-02")
+	bizDate := closeDate(time.Now().In(s.loc))
 	ctx, cancel := context.WithTimeout(parent, s.runTimeout)
 	defer cancel()
 

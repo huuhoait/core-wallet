@@ -122,12 +122,19 @@ for f in db/procedures/wallet_sp_balance.sql \
          db/procedures/wallet_sp_restraint.sql \
          db/procedures/wallet_sp_client.sql \
          db/procedures/wallet_sp_account.sql \
+         db/procedures/wallet_sp_eod.sql \
          db/seeds/wallet_coa_seed.sql \
          db/seeds/wallet_tran_type_ext.sql \
          db/seeds/wallet_seed.sql; do
   docker compose exec -T postgres psql -U postgres -d wallet -f "/dev/stdin" < "$f"
 done
 ```
+
+`wallet_sp_eod.sql` is self-contained (it creates the EOD tables, the
+`WLT_PERIOD` period lock + write-freeze triggers, and grants for the local
+`wallet_app` role), so loading it activates period locking locally. For tracked
+deploys, also apply the incremental migrations in `db/migrations/` (they harden
+the EOD writes onto the dedicated `wallet_eod` role).
 
 > 🇻🇳 Docker chỉ tự nạp `wallet_schema.sql` + `wallet_sp.sql` khi khởi tạo lần
 > đầu. Các stored function còn lại và seed phải nạp thủ công như trên.
