@@ -10,6 +10,16 @@ Core Wallet is a double-entry e-wallet **ledger**. The defining architectural de
 
 Tech: Go 1.23 (Gin) + PostgreSQL 17 (plpgsql) + PgBouncer (transaction-mode pooling) + OpenTelemetry.
 
+## Git workflow (HARD RULE)
+
+**Never merge directly into `master`. Every change reaches `master` only through a reviewed Pull Request.**
+
+1. Branch off `master`: `git checkout -b feature/<name>` (never commit on `master`).
+2. Commit on the feature branch, then push it: `git push -u origin feature/<name>`.
+3. Open a PR into `master`: `gh pr create --base master`. Merge only after review + green CI.
+
+Do **NOT** run `git merge <branch>` into a local `master`, and do **NOT** `git push origin master` directly. `master` advances exclusively by merging an approved PR. If a local `master` ever gets ahead of `origin/master` outside this flow, reset it (`git reset --hard origin/master`) and redo the change as a PR.
+
 ## Common commands
 
 All Go commands run from `services/wallet-service/`:
