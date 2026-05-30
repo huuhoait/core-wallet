@@ -23,7 +23,7 @@ docs alone).
 | Epic | ✅ | 🟡 | ⬜ |
 |------|:--:|:--:|:--:|
 | 1. Onboarding & Wallet Management | 4 | 0 | 4 |
-| 2. Transactions — Posting | 6 | 0 | 1 |
+| 2. Transactions — Posting | 6 | 0 | 0 |
 | 3. Reversals & Refunds | 5 | 1 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
@@ -32,7 +32,7 @@ docs alone).
 | 8. Audit, PII & Compliance | 2 | 1 | 1 |
 | 9. Platform / Infra / Observability | 9 | 0 | 3 |
 | 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **40** | **3** | **18** |
+| **Total** | **40** | **3** | **17** |
 
 ---
 
@@ -66,7 +66,6 @@ docs alone).
 | US-2.3 | As a user, I withdraw to bank (DR wallet / CR nostro, fee + VAT) | ✅ | SP `post_withdraw`; `POST /v1/finance/withdraw`. |
 | US-2.4 | As a merchant, I withdraw with hot-shard sweep + settlement | ✅ | SP `post_merchant_withdraw`, `post_sweep_shard`, `fn_resolve_shard_acct_no`; `POST /v1/finance/merchant-withdraw`. |
 | US-2.5 | As finance, fees + VAT are computed and posted as separate legs | ✅ | Fee/VAT engine inside posting SPs; GL revenue + VAT payable. |
-| US-2.6 | As an agent, I process a cash-in **deposit** (fee + VAT variant) | ⬜ | Spec §3. No `post_deposit` SP / route. |
 | US-2.7 | As risk/ops, each posting carries metadata + a client-info snapshot | ✅ | SP `fn_validate_metadata`, `fn_build_client_info`; `WLT_TRAN_HIST.METADATA` / `CLIENT_INFO`. |
 
 > **Cross-cutting (✅):** posting is **idempotent** by `reference` (`ON CONFLICT` /
