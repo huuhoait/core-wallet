@@ -96,7 +96,7 @@ END $$;
 -- fn_open_wallet: Open a wallet with an optional initial fund balance.
 -- Returns: (internal_key, acct_no)
 --
--- Note: when p_initial_fund > 0 we do NOT create a full GL batch (WLT_BATCH) —
+-- Note: when p_initial_fund > 0 we do NOT create a full GL batch (WLT_GL_BATCH) —
 -- we only set the balance + a single "OPEN" history row so the test data can
 -- transact immediately. Production must go through the Posting Engine to
 -- balance the GL against nostro funding.
@@ -222,7 +222,7 @@ BEGIN
   END IF;
 
   TRUNCATE
-    WLT_BATCH,
+    WLT_GL_BATCH,
     WLT_TRAN_HIST,
     WLT_MEMO_TRAN,
     WLT_API_MESSAGE,

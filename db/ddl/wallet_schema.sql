@@ -447,8 +447,8 @@ BEGIN
   END LOOP;
 END $$;
 
--- ─── WLT_BATCH (GL feed) ──────────────────────────────────────────────────
-CREATE TABLE WLT_BATCH (
+-- ─── WLT_GL_BATCH (GL feed) ──────────────────────────────────────────────────
+CREATE TABLE WLT_GL_BATCH (
   TRAN_KEY          BIGINT        NOT NULL,
   SEQ_NO            BIGINT        NOT NULL,
   GL_CODE           VARCHAR(32)   NOT NULL,
@@ -465,16 +465,16 @@ CREATE TABLE WLT_BATCH (
   STATUS            VARCHAR(4)    NOT NULL DEFAULT 'P',
   TIME_STAMP        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
   PRIMARY KEY (TRAN_KEY, SEQ_NO),
-  CONSTRAINT fk_batch_gl     FOREIGN KEY (GL_CODE)   REFERENCES FM_GL_MAST(GL_CODE),
-  CONSTRAINT fk_batch_ccy    FOREIGN KEY (CCY)       REFERENCES FM_CURRENCY(CCY),
-  CONSTRAINT chk_batch_nat   CHECK (TRAN_NATURE IN ('DR','CR')),
-  CONSTRAINT chk_batch_amt   CHECK (AMOUNT >= 0),
-  CONSTRAINT chk_batch_status CHECK (STATUS IN ('P','S','F','R'))
+  CONSTRAINT fk_gl_batch_gl     FOREIGN KEY (GL_CODE)   REFERENCES FM_GL_MAST(GL_CODE),
+  CONSTRAINT fk_gl_batch_ccy    FOREIGN KEY (CCY)       REFERENCES FM_CURRENCY(CCY),
+  CONSTRAINT chk_gl_batch_nat   CHECK (TRAN_NATURE IN ('DR','CR')),
+  CONSTRAINT chk_gl_batch_amt   CHECK (AMOUNT >= 0),
+  CONSTRAINT chk_gl_batch_status CHECK (STATUS IN ('P','S','F','R'))
 );
-CREATE INDEX idx_batch_gl_date ON WLT_BATCH(GL_CODE, POST_DATE);
-CREATE INDEX idx_batch_ref     ON WLT_BATCH(REFERENCE);
-CREATE INDEX idx_batch_acct    ON WLT_BATCH(ACCT_INTERNAL_KEY, POST_DATE);
-CREATE INDEX idx_batch_pending ON WLT_BATCH(POST_DATE) WHERE STATUS = 'P';
+CREATE INDEX idx_gl_batch_gl_date ON WLT_GL_BATCH(GL_CODE, POST_DATE);
+CREATE INDEX idx_gl_batch_ref     ON WLT_GL_BATCH(REFERENCE);
+CREATE INDEX idx_gl_batch_acct    ON WLT_GL_BATCH(ACCT_INTERNAL_KEY, POST_DATE);
+CREATE INDEX idx_gl_batch_pending ON WLT_GL_BATCH(POST_DATE) WHERE STATUS = 'P';
 
 -- ─── WLT_ACCT_BAL (daily snapshot per account) ────────────────────────────
 CREATE TABLE WLT_ACCT_BAL (
@@ -1010,7 +1010,7 @@ END $$;
 ALTER TABLE WLT_ACCT           SET (fillfactor = 80,                            -- enable HOT updates
                                     autovacuum_vacuum_scale_factor = 0.02,
                                     autovacuum_vacuum_cost_limit = 2000);
-ALTER TABLE WLT_BATCH          SET (autovacuum_vacuum_insert_scale_factor = 0.01);
+ALTER TABLE WLT_GL_BATCH          SET (autovacuum_vacuum_insert_scale_factor = 0.01);
 ALTER TABLE WLT_WITHDRAW_TRACK SET (fillfactor = 80);
 
 -- (b) Leaf partitions of partitioned tables (TRAN_HIST × 32 hash, OUTBOX,
@@ -1071,7 +1071,7 @@ GRANT USAGE ON SCHEMA public TO wallet_app, wallet_pii_ro;
 
 -- wallet_app: DML on WLT, SELECT on FM (via masked view)
 GRANT SELECT, INSERT, UPDATE ON
-  WLT_ACCT, WLT_ACCT_BAL, WLT_TRAN_HIST, WLT_BATCH,
+  WLT_ACCT, WLT_ACCT_BAL, WLT_TRAN_HIST, WLT_GL_BATCH,
   WLT_RESTRAINTS, WLT_API_MESSAGE, WLT_OUTBOX,
   WLT_WITHDRAW_TRACK, WLT_NOSTRO_BAL, WLT_SWEEP_LOG
 TO wallet_app;
@@ -1250,7 +1250,7 @@ COMMIT;
 --
 -- 5. Verify per-table tunings:
 --    SELECT relname, reloptions FROM pg_class
---     WHERE relname IN ('wlt_acct','wlt_tran_hist','wlt_batch','wlt_outbox','wlt_withdraw_track');
+--     WHERE relname IN ('wlt_acct','wlt_tran_hist','wlt_gl_batch','wlt_outbox','wlt_withdraw_track');
 --
 -- =============================================================================
 -- END OF SCHEMA

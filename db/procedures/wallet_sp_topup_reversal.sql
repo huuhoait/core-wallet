@@ -95,7 +95,7 @@ BEGIN
      'Reverse topup: '||COALESCE(p_reason,'?'), v_acct.GROUP_ID, v_cinfo);
 
   -- GL flip: DR wallet liability / CR nostro
-  INSERT INTO WLT_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+  INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
   VALUES
     (v_rev_tfr, 1, v_liab_gl,            v_acct.CLIENT_NO, v_acct.INTERNAL_KEY, v_amt, 'DR', v_acct.CCY, v_rref, CURRENT_DATE, CURRENT_DATE),
     (v_rev_tfr, 2, v_def.CONTRA_GL_CODE, v_acct.CLIENT_NO, v_acct.INTERNAL_KEY, v_amt, 'CR', v_acct.CCY, v_rref, CURRENT_DATE, CURRENT_DATE);
