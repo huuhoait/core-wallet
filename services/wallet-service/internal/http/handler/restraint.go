@@ -38,6 +38,62 @@ func (h *Wallet) AddRestraint(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.RestraintRespFrom(res))
 }
 
+// GET /v1/finance/restraints?acct_no=&limit=&before_seq= — list an account's
+// restraints (all statuses), newest-first, paged at 100/page (max 200; keyset
+// via next_cursor → ?before_seq=).
+func (h *Wallet) ListRestraints(c *gin.Context) {
+	acctNo := c.Query("acct_no")
+	if acctNo == "" {
+		renderError(c, domain.InvalidRequest("acct_no query parameter is required", nil))
+		return
+	}
+
+	limit := domain.DefaultRestraintPageSize
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			renderError(c, domain.InvalidRequest("invalid limit (positive integer)", nil))
+			return
+		}
+		limit = n
+	}
+	if limit > domain.MaxRestraintPageSize {
+		limit = domain.MaxRestraintPageSize
+	}
+
+	q := domain.RestraintListQuery{AcctNo: acctNo, Limit: limit}
+	if v := c.Query("before_seq"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			renderError(c, domain.InvalidRequest("invalid before_seq (non-negative integer)", nil))
+			return
+		}
+		q.BeforeSeq = &n
+	}
+
+	views, err := h.svc.ListRestraints(c.Request.Context(), q)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.RestraintListRespFrom(q, views))
+}
+
+// GET /v1/finance/restraints/:id — a single restraint by id.
+func (h *Wallet) GetRestraint(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		renderError(c, domain.InvalidRequest("invalid restraint id (numeric)", nil))
+		return
+	}
+	v, err := h.svc.GetRestraint(c.Request.Context(), id)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.RestraintViewRespFrom(v))
+}
+
 // POST /v1/finance/restraints/:id/release — release an active restraint.
 func (h *Wallet) ReleaseRestraint(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

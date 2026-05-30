@@ -706,14 +706,14 @@
                 },
                 {
                   "key": "from",
-                  "value": "2026-05-01",
-                  "description": "optional: post_date >= from (YYYY-MM-DD)",
+                  "value": "{{stmt_from}}",
+                  "description": "optional: post_date >= from (YYYY-MM-DD); demo = today-31d (pre-request)",
                   "disabled": true
                 },
                 {
                   "key": "to",
-                  "value": "2026-05-30",
-                  "description": "optional: post_date <= to (YYYY-MM-DD)",
+                  "value": "{{stmt_to}}",
+                  "description": "optional: post_date <= to (YYYY-MM-DD); demo = today (pre-request)",
                   "disabled": true
                 },
                 {
@@ -727,6 +727,19 @@
           },
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// default a 31-day statement window so the from/to demo values aren't stale",
+                  "const to = new Date();",
+                  "const from = new Date(); from.setDate(from.getDate()-31);",
+                  "pm.environment.set('stmt_to', to.toISOString().slice(0,10));",
+                  "pm.environment.set('stmt_from', from.toISOString().slice(0,10));"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -735,6 +748,9 @@
                   "if (pm.response.code===200){",
                   "  const b=pm.response.json();",
                   "  pm.test('items is array', ()=>pm.expect(b.items).to.be.an('array'));",
+                  "  pm.test('page_size is a number', ()=>pm.expect(b.page_size).to.be.a('number'));",
+                  "  pm.test('count matches items', ()=>pm.expect(b.count).to.equal(b.items.length));",
+                  "  pm.test('next_cursor only on a full page', ()=>{ if (b.count===b.page_size) { pm.expect(b.next_cursor).to.be.a('number'); } else { pm.expect(b.next_cursor==null).to.be.true; } });",
                   "  if (b.items.length){ pm.environment.set('tfr_key', b.items[0].transaction_id); }",
                   "}"
                 ]
@@ -968,6 +984,123 @@
                   "    pm.expect(b.available_bal_after).to.be.a('string');",
                   "  });",
                   "  pm.environment.set('restraint_id', b.restraint_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET restraint list (by account)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/finance/restraints?acct_no={{acct_no_a}}&limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "restraints"
+              ],
+              "query": [
+                {
+                  "key": "acct_no",
+                  "value": "{{acct_no_a}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "page size, default 100 / max 200"
+                },
+                {
+                  "key": "before_seq",
+                  "value": "",
+                  "description": "optional keyset cursor: only restraint_id < before_seq (use next_cursor)",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List all restraints on {{acct_no_a}} (statuses A/R/E), newest-first. Paged at 100/page (max 200) — keyset via next_cursor -> ?before_seq=. Read-only (replica)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if (pm.response.code===200){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('items is array', ()=>pm.expect(b.items).to.be.an('array'));",
+                  "  pm.test('page_size is a number', ()=>pm.expect(b.page_size).to.be.a('number'));",
+                  "  pm.test('count matches items', ()=>pm.expect(b.count).to.equal(b.items.length));",
+                  "  pm.test('next_cursor only on a full page', ()=>{ if (b.count===b.page_size) { pm.expect(b.next_cursor).to.be.a('number'); } else { pm.expect(b.next_cursor==null).to.be.true; } });",
+                  "  if (b.items.length){ pm.environment.set('restraint_id', b.items[0].restraint_id); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET restraint by id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/finance/restraints/{{restraint_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "restraints",
+                "{{restraint_id}}"
+              ]
+            },
+            "description": "One restraint by id (run add or the list request first to populate {{restraint_id}})."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if (pm.response.code===200){",
+                  "  const b=pm.response.json();",
+                  "  pm.test('restraint_id is a number', ()=>pm.expect(b.restraint_id).to.be.a('number'));",
+                  "  pm.test('status is a string', ()=>pm.expect(b.status).to.be.a('string'));",
                   "}"
                 ]
               }

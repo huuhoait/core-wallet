@@ -64,6 +64,8 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			finance.POST("/topup/reverse", h.ReverseTopup)         // topup reversal (reference in body)
 			finance.GET("/transactions", h.ListTransactions)       // account statement: ?acct_no=&limit=&before_seq=
 			finance.GET("/transactions/:tfr_key", h.GetTransaction) // all legs of one transaction
+			finance.GET("/restraints", h.ListRestraints)           // list holds/liens: ?acct_no=&limit=&before_seq=
+			finance.GET("/restraints/:id", h.GetRestraint)         // one restraint by id
 			finance.POST("/restraints", h.AddRestraint)             // add a hold/lien
 			finance.POST("/restraints/:id/release", h.ReleaseRestraint)
 		}

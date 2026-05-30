@@ -27,3 +27,21 @@ func (s *WalletService) ReleaseRestraint(ctx context.Context, in domain.ReleaseR
 	}
 	return res, nil
 }
+
+// ListRestraints returns an account's restraints (all statuses), newest-first,
+// keyset-paginated. Limit is clamped to [1, MaxRestraintPageSize] with a default
+// of DefaultRestraintPageSize.
+func (s *WalletService) ListRestraints(ctx context.Context, q domain.RestraintListQuery) ([]domain.RestraintView, error) {
+	if q.Limit <= 0 {
+		q.Limit = domain.DefaultRestraintPageSize
+	}
+	if q.Limit > domain.MaxRestraintPageSize {
+		q.Limit = domain.MaxRestraintPageSize
+	}
+	return s.repo.ListRestraints(ctx, q)
+}
+
+// GetRestraint returns a single restraint by its id (WLT_RESTRAINTS.SEQ_NO).
+func (s *WalletService) GetRestraint(ctx context.Context, id int64) (*domain.RestraintView, error) {
+	return s.repo.GetRestraint(ctx, id)
+}
