@@ -24,31 +24,32 @@ docs alone).
 |------|:--:|:--:|:--:|
 | 1. Onboarding & Wallet Management | 1 | 1 | 6 |
 | 2. Transactions — Posting | 6 | 0 | 1 |
-| 3. Reversals & Refunds | 5 | 2 | 0 |
+| 3. Reversals & Refunds | 5 | 1 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
 | 6. Accounting & GL Operations | 0 | 0 | 5 |
 | 7. Eventing & Integration | 1 | 0 | 2 |
-| 8. Audit, PII & Compliance | 3 | 1 | 1 |
+| 8. Audit, PII & Compliance | 2 | 1 | 1 |
 | 9. Platform / Infra / Observability | 9 | 0 | 3 |
 | 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **38** | **7** | **19** |
+| **Total** | **37** | **4** | **20** |
 
 ---
 
 ## Epic 1 — Onboarding & Wallet Management / Mở ví & KYC
 
-> Production onboarding flow is **not implemented** in the wallet service — only
-> SQL seed helpers (`fn_create_client`, `fn_open_wallet`) exist for test data.
+> Client master CRUD is implemented (US-1.8: `create_client`/`update_client`), but
+> the **onboarding flow** (OTP, eKYC, tier progression, wallet opening) is **not** —
+> those remain seed-only (`fn_create_client`, `fn_open_wallet`, test data).
 > Spec: [docs/specs/wallet_onboarding.md](docs/specs/wallet_onboarding.md).
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
 | US-1.1 | As a new user, I register & verify OTP to create a Tier-1 client | ⬜ | Spec §3, §7.1–7.2. No `/v1/onboard/*` route. |
 | US-1.2 | As a user, I pass eKYC to upgrade to Tier-2 | ⬜ | Spec §5.1, §7.3. Not implemented. |
-| US-1.3 | As a Tier-2 user, I open a wallet (ACCT_NO gen + zero-balance snapshot) | 🟡 | `fn_open_wallet` exists in `db/seeds/` **for test seeding only** (spec §12). No production `POST /v1/wallets`. |
+| US-1.3 | As a Tier-2 user, I open a wallet (ACCT_NO gen + zero-balance snapshot) | 🟡 | `fn_open_wallet` exists in `db/seeds/` **for test seeding only** (spec §12). No production `POST /v1/accounts` (account opening). |
 | US-1.4 | As the platform, I enforce wallet-count limits per customer | ⬜ | Spec §4.3. Not implemented. |
-| US-1.5 | As ops, I block / close a wallet (close requires balance = 0) | ⬜ | Spec §6.2, AC-08. `WLT_ACCT.ACCT_STATUS` exists; no endpoint. |
+| US-1.5 | As ops, I block / close a wallet (close requires balance = 0) | ⬜ | Spec §6.2, AC-08. `WLT_ACCT.ACCT_STATUS` exists; no account-mutation endpoint. |
 | US-1.6 | As compliance, KYC downgrade & 12-month re-KYC | ⬜ | Spec §5.2, §13 (open item). |
 | US-1.7 | As a corporate customer, I onboard (CORP, legal rep / UBO) | ⬜ | Spec §13 — schema gaps noted; not designed. |
 | US-1.8 | As ops, I create/update a **client master record** (identity only, no KYC/onboarding flow) | ✅ | SP `create_client`/`update_client` (SECURITY DEFINER); `POST /v1/clients` + `PATCH /v1/clients/:client_no`. FM_CLIENT (+FM_CLIENT_INDVL). Wallet opening/KYC still out of scope. |
@@ -60,10 +61,10 @@ docs alone).
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-2.1 | As Treasury, I top-up a wallet (internal s2s credit) | ✅ | SP `post_topup`; `POST /v1/transactions/topup`. |
-| US-2.2 | As a user, I transfer wallet → wallet (deadlock-safe lock ordering) | ✅ | SP `post_transfer` (5-leg); `POST /v1/transactions/transfer`. |
-| US-2.3 | As a user, I withdraw to bank (DR wallet / CR nostro, fee + VAT) | ✅ | SP `post_withdraw`; `POST /v1/transactions/withdraw`. |
-| US-2.4 | As a merchant, I withdraw with hot-shard sweep + settlement | ✅ | SP `post_merchant_withdraw`, `post_sweep_shard`, `fn_resolve_shard_acct_no`; `POST /v1/transactions/merchant-withdraw`. |
+| US-2.1 | As Treasury, I top-up a wallet (internal s2s credit) | ✅ | SP `post_topup`; `POST /v1/finance/topup`. |
+| US-2.2 | As a user, I transfer wallet → wallet (deadlock-safe lock ordering) | ✅ | SP `post_transfer` (5-leg); `POST /v1/finance/transfer`. |
+| US-2.3 | As a user, I withdraw to bank (DR wallet / CR nostro, fee + VAT) | ✅ | SP `post_withdraw`; `POST /v1/finance/withdraw`. |
+| US-2.4 | As a merchant, I withdraw with hot-shard sweep + settlement | ✅ | SP `post_merchant_withdraw`, `post_sweep_shard`, `fn_resolve_shard_acct_no`; `POST /v1/finance/merchant-withdraw`. |
 | US-2.5 | As finance, fees + VAT are computed and posted as separate legs | ✅ | Fee/VAT engine inside posting SPs; GL revenue + VAT payable. |
 | US-2.6 | As an agent, I process a cash-in **deposit** (fee + VAT variant) | ⬜ | Spec §3. No `post_deposit` SP / route. |
 | US-2.7 | As risk/ops, each posting carries metadata + a client-info snapshot | ✅ | SP `fn_validate_metadata`, `fn_build_client_info`; `WLT_TRAN_HIST.METADATA` / `CLIENT_INFO`. |
@@ -75,22 +76,22 @@ docs alone).
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-3.1 | As ops, I reverse an in-book transfer (refund incl. fee + VAT) | ✅ | SP `post_transfer_reversal`; `POST /v1/transactions/reverse`; test `wallet_transfer_reversal_test.sql`. |
-| US-3.2 | As ops, I reverse a top-up | ✅ | SP `post_topup_reversal`; `POST /v1/transactions/topup/reverse`. |
+| US-3.1 | As ops, I reverse an in-book transfer (refund incl. fee + VAT) | ✅ | SP `post_transfer_reversal`; `POST /v1/finance/reverse`; test `wallet_transfer_reversal_test.sql`. |
+| US-3.2 | As ops, I reverse a top-up | ✅ | SP `post_topup_reversal`; `POST /v1/finance/topup/reverse`. |
 | US-3.3 | As Treasury, I reverse a withdrawal (refund amount + fee + VAT) | ✅ | SP `post_withdraw_reversal`; `POST /v1/treasury/withdrawals/:ref/reverse`. |
 | US-3.4 | As ops, I reverse a merchant withdrawal | ✅ | SP `post_merchant_withdraw_reversal`. |
 | US-3.5 | Reversals are idempotent and refund fee + VAT legs | ✅ | Reversal SPs write outbox + refund all legs. |
-| US-3.6 | Reversal is rejected outside the allowed time window | 🟡 | Spec §6.4. Window rules designed; enforcement to be confirmed per SP. |
+| US-3.6 | Reversal is rejected outside the allowed time window | ⬜ | Spec §6.4 defines the window, but **no reversal SP enforces it** (no `WINDOW_EXPIRED` / time check in any `*_reversal` SP). |
 | US-3.7 | VAT reversal across a closed period is handled correctly | 🟡 | Spec §6.8 — depends on period close (Epic 6, not built). |
 
 ## Epic 4 — Balance & Statements / Số dư & sao kê
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-4.1 | As a customer, I view my realtime balance | ✅ | SP `get_balance`; `GET /v1/wallets/:acct_no/balance`. |
+| US-4.1 | As a customer, I view my realtime balance | ✅ | SP `get_balance`; `GET /v1/accounts/:acct_no/balance`. |
 | US-4.2 | As a customer, I view a historical balance (`as_of_date`) | ✅ | SP `get_balance_asof`; `?as_of_date=`. |
-| US-4.3 | As ops, I view the full balance breakdown for a wallet | ✅ | SP `get_balance_ops`; `GET /v1/ops/wallets/:acct_no/balance`. |
-| US-4.4 | As ops, I look up balances in batch | ✅ | SP `get_balance_batch`; `POST /v1/ops/wallets/balance/batch`. |
+| US-4.3 | As ops, I view the full balance breakdown for a wallet | ✅ | SP `get_balance_ops`; `GET /v1/ops/accounts/:acct_no/balance`. |
+| US-4.4 | As ops, I look up balances in batch | ✅ | SP `get_balance_batch`; `POST /v1/ops/accounts/balance/batch`. |
 | US-4.5 | As a customer, I retrieve a transaction history / account statement | ✅ | `GET /v1/finance/transactions?acct_no=` (keyset-paged) + `GET /v1/finance/transactions/:tfr_key` (all legs) + `GET /v1/accounts/:acct_no` (profile). Direct SELECT on WLT_*. |
 
 ## Epic 5 — Withdrawal Disbursement / Theo dõi giải ngân rút tiền
@@ -164,7 +165,7 @@ docs alone).
 
 ## Next priorities (suggested) / Ưu tiên tiếp theo (gợi ý)
 
-1. **Account/client CRUD + getClient** (Epic 1) — onboarding write path; needs production SPs (getClient needs the masked view).
+1. **getClient + account opening** (Epic 1) — `GET /v1/clients/:id` needs the masked PII view; `POST /v1/accounts` (open wallet) needs a production SP. (client create/update already done — US-1.8.)
 2. **Outbox relay worker** (US-7.2) — events are written but never published.
 3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
 4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
