@@ -13,6 +13,7 @@ type Config struct {
 	HTTP HTTP
 	DB   DB
 	Otel Otel
+	EOD  EOD
 	Env  string `env:"APP_ENV" envDefault:"dev"` // dev | staging | prod
 }
 
@@ -45,6 +46,13 @@ type DB struct {
 	ConnectTimeout  time.Duration `env:"DB_CONNECT_TIMEOUT"  envDefault:"5s"`
 	StatementTimeout time.Duration `env:"DB_STATEMENT_TIMEOUT" envDefault:"2500ms"`
 	LockTimeout     time.Duration `env:"DB_LOCK_TIMEOUT"     envDefault:"1500ms"`
+	// TxMaxRetries is how many times a write that failed with a RETRYABLE
+	// conflict (serialization_failure 40001 / deadlock 40P01) is re-run on a
+	// fresh snapshot. Default 0 = NO retry: the conflict surfaces to the caller
+	// as a retryable 409 (unchanged behaviour). Raise to 2-3 to absorb
+	// hot-account contention server-side once the conflict rate is understood;
+	// posting SPs are idempotent, so retries cannot double-post.
+	TxMaxRetries    int           `env:"DB_TX_MAX_RETRIES"   envDefault:"0"`
 }
 
 type Otel struct {
@@ -52,6 +60,22 @@ type Otel struct {
 	Endpoint      string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" envDefault:"otel-collector:4317"`
 	Insecure      bool   `env:"OTEL_EXPORTER_OTLP_INSECURE" envDefault:"true"`
 	SamplingRatio float64 `env:"OTEL_TRACES_SAMPLER_ARG"    envDefault:"1.0"`
+}
+
+// EOD configures the in-process end-of-day scheduler (run_eod). Disabled by
+// default; exactly ONE service replica should enable it.
+//
+// EOD COMMITs between chunks and sets a session GUC, so DSN MUST be a DIRECT
+// primary connection (NOT PgBouncer transaction-mode) and authenticate as the
+// wallet_eod role — the only role allowed to write the tamper-evident trial
+// balance (see migration 2026-05-30_ledger_integrity_hardening). The pool runs
+// with statement_timeout disabled (EOD is a long, resumable batch).
+type EOD struct {
+	Enabled    bool          `env:"EOD_ENABLED"     envDefault:"false"`
+	DSN        string        `env:"EOD_DSN"         envExpand:"true"`        // direct PG conn as wallet_eod (e.g. port 5432, not 6432)
+	RunAt      string        `env:"EOD_RUN_AT"      envDefault:"23:59:59"`  // HH:MM:SS local wall-clock
+	Timezone   string        `env:"EOD_TIMEZONE"    envDefault:"Asia/Ho_Chi_Minh"`
+	RunTimeout time.Duration `env:"EOD_RUN_TIMEOUT" envDefault:"30m"`        // hard cap on one close
 }
 
 // Load reads the env into Config. Required vars without defaults cause an error.

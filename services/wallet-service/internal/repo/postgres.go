@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,27 +26,76 @@ import (
 // SET LOCAL is scoped to the current TX so it always takes effect.
 type PgWalletRepo struct {
 	pool             *pgxpool.Pool
-	readPool         *pgxpool.Pool // replica for lag-tolerant reads; == pool when no DB_READ_DSN
+	readPool         *pgxpool.Pool // replica for lag-tolerant reads (no TX, no retry); == pool when no DB_READ_DSN
 	statementTimeoutMs int64
 	lockTimeoutMs      int64
+	txMaxRetries       int // retries of a RETRYABLE write conflict; 0 = no retry
 }
 
 // NewPgWalletRepo wires the write pool (primary) and a read pool. Pass the same
 // pool for both when there is no replica; a nil readPool also falls back to pool.
 // Only the designated lag-tolerant reads use readPool (see transaction.go).
-func NewPgWalletRepo(pool, readPool *pgxpool.Pool, statementTimeout, lockTimeout time.Duration) *PgWalletRepo {
+//
+// txMaxRetries bounds the server-side retry of serialization/deadlock conflicts
+// (SQLSTATE 40001 / 40P01). 0 = no retry (the conflict is returned to the
+// caller as a retryable 409). A negative value is clamped to 0.
+func NewPgWalletRepo(pool, readPool *pgxpool.Pool, statementTimeout, lockTimeout time.Duration, txMaxRetries int) *PgWalletRepo {
 	if readPool == nil {
 		readPool = pool
+	}
+	if txMaxRetries < 0 {
+		txMaxRetries = 0
 	}
 	return &PgWalletRepo{
 		pool:               pool,
 		readPool:           readPool,
 		statementTimeoutMs: statementTimeout.Milliseconds(),
 		lockTimeoutMs:      lockTimeout.Milliseconds(),
+		txMaxRetries:       txMaxRetries,
 	}
 }
 
-// withTx opens a TX, sets audit GUCs, runs fn, commits on success.
+// withTx runs the operation as a single TX and, when txMaxRetries > 0,
+// transparently re-runs it on a RETRYABLE conflict (VERSION_CONFLICT /
+// deadlock, i.e. SQLSTATE 40001 / 40P01) up to txMaxRetries extra times with a
+// small jittered backoff. Each attempt is a fresh TX on a fresh snapshot, and
+// posting SPs are idempotent (WLT_API_MESSAGE gate), so a retry cannot
+// double-post. Non-retryable errors return immediately; ctx cancellation
+// between attempts fails fast.
+//
+// Default (txMaxRetries = 0) is NO retry: a single attempt, with the conflict
+// returned to the caller as a retryable 409 — identical to the prior behaviour.
+// Enabling retries absorbs hot-account optimistic-CAS churn (Tet/payday peaks)
+// server-side so callers mostly see success instead of a 409 storm.
+func (r *PgWalletRepo) withTx(
+	ctx context.Context, audit domain.AuditContext,
+	fn func(tx pgx.Tx) error,
+) error {
+	var err error
+	for attempt := 0; ; attempt++ {
+		err = r.runTx(ctx, audit, fn)
+		if err == nil {
+			return nil
+		}
+		// Retry only retryable conflicts, only while budget + ctx remain.
+		var de *domain.Error
+		if attempt >= r.txMaxRetries || ctx.Err() != nil ||
+			!errors.As(err, &de) || !de.IsRetriable() {
+			return err
+		}
+		// Backoff grows per attempt with up to ~5ms jitter to de-correlate
+		// concurrent retriers; bail early if the caller's deadline fires.
+		backoff := time.Duration(attempt+1)*5*time.Millisecond +
+			time.Duration(rand.Int63n(int64(5*time.Millisecond)))
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(backoff):
+		}
+	}
+}
+
+// runTx opens a TX, sets audit GUCs, runs fn, commits on success — one attempt.
 //
 // Rollback discipline:
 //   - The deferred Rollback runs UNCONDITIONALLY, on every exit path.
@@ -59,7 +109,7 @@ func NewPgWalletRepo(pool, readPool *pgxpool.Pool, statementTimeout, lockTimeout
 // Error mapping: any error escaping the SP or pgx is run through mapPgError
 // so the caller always receives a *domain.Error (TIMEOUT for ctx / lock /
 // statement timeout, INTERNAL for everything else).
-func (r *PgWalletRepo) withTx(
+func (r *PgWalletRepo) runTx(
 	ctx context.Context, audit domain.AuditContext,
 	fn func(tx pgx.Tx) error,
 ) error {

@@ -10,6 +10,16 @@ Core Wallet is a double-entry e-wallet **ledger**. The defining architectural de
 
 Tech: Go 1.23 (Gin) + PostgreSQL 17 (plpgsql) + PgBouncer (transaction-mode pooling) + OpenTelemetry.
 
+## Git workflow (HARD RULE)
+
+**Never merge directly into `master`. Every change reaches `master` only through a reviewed Pull Request.**
+
+1. Branch off `master`: `git checkout -b feature/<name>` (never commit on `master`).
+2. Commit on the feature branch, then push it: `git push -u origin feature/<name>`.
+3. Open a PR into `master`: `gh pr create --base master`. Merge only after review + green CI.
+
+Do **NOT** run `git merge <branch>` into a local `master`, and do **NOT** `git push origin master` directly. `master` advances exclusively by merging an approved PR. If a local `master` ever gets ahead of `origin/master` outside this flow, reset it (`git reset --hard origin/master`) and redo the change as a PR.
+
 ## Common commands
 
 All Go commands run from `services/wallet-service/`:
@@ -100,7 +110,7 @@ PG `lock_timeout` 1.5s → PG `statement_timeout` 2.5s → pgx → HTTP request 
 
 The DB is the source of truth for the ledger.
 
-- `db/ddl/` — `wallet_schema.sql` is the docker-init schema; `wallet_ddl.sql` the full DDL.
+- `db/ddl/` — `wallet_schema.sql` is the docker-init schema and the single source of truth for the DDL.
 - `db/procedures/wallet_sp*.sql` — posting SPs. Posting uses a **deferred-locking** pattern: Phase 1 validates with no lock, Phase 2 does the atomic balance UPDATE.
 - `db/seeds/` — chart of accounts (`coa/`), tran-type extensions, fixtures.
 - `db/tests/` — SQL assertion suites (accounting balance, merchant flow, reconciliation, reversal).

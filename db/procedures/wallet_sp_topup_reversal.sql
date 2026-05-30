@@ -68,6 +68,14 @@ BEGIN
 
   v_rev_tfr := nextval('seq_tfr');
 
+  -- A topup reversal is a DEBIT (removes erroneously-credited funds), so it is
+  -- allowed on a temporarily-blocked ('B') wallet; only a CLOSED wallet is
+  -- rejected — you cannot post to a closed account. Restraint is already
+  -- honoured by the inline fund guard (CALC_BAL excludes restrained amounts).
+  IF v_acct.ACCT_STATUS = 'C' THEN
+    RAISE EXCEPTION 'ACCT_NOT_ACTIVE: wallet % is closed', v_acct_no USING ERRCODE = 'P0022';
+  END IF;
+
   -- Claw back the credited amount (inline fund guard)
   UPDATE WLT_ACCT SET ACTUAL_BAL = ACTUAL_BAL - v_amt, VERSION = VERSION + 1, LAST_TRAN_DATE = clock_timestamp()
    WHERE INTERNAL_KEY = v_acct.INTERNAL_KEY

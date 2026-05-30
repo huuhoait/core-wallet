@@ -42,7 +42,7 @@ Core/
 │   └── specs/                #   feature specs (finance, errors, onboarding, COA, T24, k6)
 │
 ├── db/                       # PostgreSQL — single source of truth for the ledger
-│   ├── ddl/                  #   schema (wallet_ddl.sql, wallet_schema.sql)
+│   ├── ddl/                  #   schema (wallet_schema.sql — single source of truth)
 │   ├── procedures/           #   posting stored functions (wallet_sp*.sql)
 │   ├── seeds/                #   reference + test data (COA, tran-types, fixtures)
 │   └── tests/                #   SQL assertion suites (accounting, recon, reversal)
@@ -187,7 +187,7 @@ and the Postman collection.
 
 | Area | Files | Notes |
 |------|-------|-------|
-| Schema (DDL) | `db/ddl/wallet_ddl.sql`, `db/ddl/wallet_schema.sql` | `wallet_schema.sql` is the docker-init schema |
+| Schema (DDL) | `db/ddl/wallet_schema.sql` | docker-init schema + single source of truth for the DDL |
 | Posting procedures | `db/procedures/wallet_sp*.sql` | `post_topup/transfer/withdraw/merchant_withdraw`, 4 reversals, balance, withdraw state machine |
 | Seeds & reference | `db/seeds/` | Chart of accounts (`coa/`), tran-type extensions, test fixtures |
 | SQL test suites | `db/tests/` | Accounting balance, merchant flow, reconciliation check, reversal |
