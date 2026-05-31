@@ -22,25 +22,33 @@ docs alone).
 
 | Epic | ✅ | 🟡 | ⬜ |
 |------|:--:|:--:|:--:|
-| 1. Onboarding & Wallet Management | 5 | 0 | 7 |
+| 1. Onboarding & Wallet Management | 5 | 0 | 10 |
 | 2. Transactions — Posting | 6 | 0 | 0 |
 | 3. Reversals & Refunds | 6 | 0 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
 | 6. Accounting & GL Operations | 6 | 1 | 2 |
 | 7. Eventing & Integration | 1 | 0 | 2 |
-| 8. Audit, PII & Compliance | 2 | 1 | 1 |
+| 8. Audit, PII & Compliance | 2 | 1 | 2 |
 | 9. Platform / Infra / Observability | 11 | 0 | 6 |
 | 10. Quality — Testing & Load | 8 | 1 | 0 |
-| **Total** | **52** | **3** | **20** |
+| **Total** | **52** | **3** | **24** |
 
 ---
 
 ## Epic 1 — Onboarding & Wallet Management / Mở ví & KYC
 
+> **Onboarding is OTP-free** (OTP register removed 2026-05-31). The target flow
+> is a **4-step workflow**: **(1)** create the client **and** open a
+> zero-balance wallet in one step (US-1.1), **(2)** update KYC info / eKYC to
+> raise the tier (US-1.2), **(3)** attach related documents (US-1.13), **(4)**
+> link a bank account, which returns a `linkId` token (US-1.14). KYC for
+> **individuals *and* organizations** is centralized in **one** `FM_CLIENT_KYC`
+> table (renamed from `WLT_CLIENT_KYC`, US-9.16) carrying a JSONB `extra_data`
+> key-value bag for type-specific fields — `FM_CLIENT_INDVL` folds in (US-1.15).
 > Client master CRUD (US-1.8) and wallet open/block/close (US-1.3/1.5) with
-> count limits (US-1.4) are implemented. The **onboarding flow** (OTP, eKYC, KYC
-> tier progression) is **not** — that remains seed-only / out of scope.
+> count limits (US-1.4) are implemented; the end-to-end onboarding wrapper that
+> chains the 4 steps is **not**.
 > Spec: [docs/specs/wallet_onboarding.md](docs/specs/wallet_onboarding.md).
 >
 > Merchant **hot-wallet lifecycle**: activation (US-1.9) is done; group
@@ -50,18 +58,21 @@ docs alone).
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-1.1 | As a new user, I register & verify OTP to create a Tier-1 client | ⬜ | Spec §3, §7.1–7.2. No `/v1/onboard/*` route. |
-| US-1.2 | As a user, I pass eKYC to upgrade to Tier-2 | ⬜ | Spec §5.1, §7.3. Not implemented. |
+| US-1.1 | As a new user, I register with basic identity (**no OTP**) and the platform creates my client record **and** a zero-balance wallet in one onboarding step | ⬜ | **Step 1** of the flow. OTP register removed (2026-05-31). Building blocks exist — `create_client` (US-1.8) + `open_account` (US-1.3) — but no single `/v1/onboard` call chains them in one TX. Spec §3, §7.1. |
+| US-1.2 | As a user, I submit / update KYC info (eKYC) to raise my KYC tier | ⬜ | **Step 2** of the flow. Writes `FM_CLIENT_KYC` (tier, eKYC score / liveness, type-specific `extra_data`). Spec §5.1, §7.2. Not implemented. |
 | US-1.3 | As ops, I open a wallet (ACCT_NO gen, zero balance) | ✅ | SP `open_account`; `POST /v1/accounts`. ACCT_NO = `9701`+10 (seq_acct_no), `ACTUAL_BAL=0`. (KYC-tier gate **not** enforced — onboarding out of scope; EOD makes the historical snapshot.) |
 | US-1.4 | As the platform, I enforce wallet-count limits per customer | ✅ | In `open_account` (§4.3): CONSUMER 3/CCY, MERCHANT 10 (closed excluded) → `MAX_WALLET_PER_CLIENT_EXCEEDED` (409). |
 | US-1.5 | As ops, I block / close / re-activate a wallet (close requires balance = 0) | ✅ | SP `update_account_status`; `PATCH /v1/accounts/:acct_no`. State machine A↔B→C; close→`ACCT_CLOSE_NONZERO_BAL` if bal≠0; mutate closed→`ACCT_NOT_ACTIVE`. |
 | US-1.6 | As compliance, KYC downgrade & 12-month re-KYC | ⬜ | Spec §5.2, §13 (open item). |
-| US-1.7 | As a corporate customer, I onboard (CORP, legal rep / UBO) | ⬜ | Spec §13 — schema gaps noted; not designed. |
-| US-1.8 | As ops, I create/update a **client master record** (identity only, no KYC/onboarding flow) | ✅ | SP `create_client`/`update_client` (SECURITY DEFINER); `POST /v1/clients` + `PATCH /v1/clients/:client_no`. FM_CLIENT (+FM_CLIENT_INDVL). Wallet opening/KYC still out of scope. |
+| US-1.7 | As a corporate / organization customer, I onboard (CORP / MER, legal rep / UBO) | ⬜ | No longer needs a separate ORG table — org-specific fields (legal_rep, ubo[], business_reg_no, …) live in `FM_CLIENT_KYC.extra_data` (US-1.15). `create_client` already accepts CORP / MER; the org KYC payload + UBO capture are still undesigned end-to-end. Spec §1, §13. |
+| US-1.8 | As ops, I create/update a **client master record** (identity only, no KYC/onboarding flow) | ✅ | SP `create_client`/`update_client` (SECURITY DEFINER); `POST /v1/clients` + `PATCH /v1/clients/:client_no`. FM_CLIENT (+FM_CLIENT_INDVL — to fold into `FM_CLIENT_KYC.extra_data` per US-1.15). Wallet opening/KYC still out of scope. |
 | US-1.9 | As ops, I **activate a merchant hot wallet** (promote a cold group, 0 shards → N) | ✅ | SP `activate_hot_wallet(group_id, shard_count:=4)` (SECURITY DEFINER); `POST /v1/merchant-groups/:group_id/activate`. Creates N empty `SHARD` sub-accounts (index 0..N-1, balance 0 — no funds move, same invariant as `open_account`), flips `WLT_ACCT_GROUP.SHARD_COUNT`. Tiers 4/8/16 (4 = default); groups are now created **cold** (`SHARD_COUNT` default 0, `chk_shard_count IN (0,4,8,16)`). One-way from cold → `GROUP_ALREADY_ACTIVATED` (P0053); bad tier → `INVALID_SHARD_COUNT` (P0052); missing settlement → `SETTLEMENT_NOT_FOUND` (P0054). Tests: `wallet_activate_hotwallet_test.sql` (12/12) + `dto/group_test.go` + `repo/errors_test.go`. |
 | US-1.10 | As ops, I **provision a merchant/agent group** (group row + settlement account in one TX) | ⬜ | No SP yet — `WLT_ACCT_GROUP` + its `SETTLEMENT` account are created by hand (tests/seed). DLD §3.7 names `provision_acct_group(...)` but it does not exist. Prerequisite for US-1.9 on a real merchant (deferred settlement FK needs the same-TX pattern). |
 | US-1.11 | As the platform, I **route merchant deposits** to settlement while cold (0 shards), to a shard once hot | ⬜ | `fn_resolve_shard_acct_no` raises `GROUP_NOT_FOUND` (P0050) for a cold group (proved in `wallet_cold_merchant_test.sql` TC4); **no caller branch** chooses settlement-vs-shard. Deposit/payment posting into a merchant group is not wired. |
 | US-1.12 | As ops, I **rescale a hot wallet** (4→8→16) and rebalance existing shards | ⬜ | `activate_hot_wallet` is one-way cold→hot only. No SP adds shards to an already-hot group or rebalances balances across the new fan-out. |
+| US-1.13 | As a user / ops, I attach & update **related documents** (CCCD images, business licence, UBO proofs) on a client's KYC | ⬜ | **Step 3** of the flow. Replaces the single scalar `FM_CLIENT_KYC.doc_url` with a `related_docs` JSONB array — `[{doc_type, link, status, uploaded_at}]` where `link` is an object-store URL / handle. No SP / endpoint yet. Spec §7.3, §11. |
+| US-1.14 | As a user, I **link a bank account** during onboarding and receive a `linkId` token to reference it | ⬜ | **Step 4** of the flow. `link_client_bank` (`POST /v1/clients/:client_no/banks`) already returns `link_id` and encrypts `acct_no` → `ACCT_NO_ENC`; the **onboarding wrapper** that treats `link_id` as the client-facing opaque token (used by the default-bank `PUT`) and ties linkage to tier progression is pending. Spec §3.2, §7.4. |
+| US-1.15 | As the platform, I centralize **individual *and* organization** KYC into one `FM_CLIENT_KYC` table with a JSONB `extra_data` key-value bag | ⬜ | Design-only. Folds `FM_CLIENT_INDVL` (surname / given_name / birth_date / sex / resident_status / …) and a new ORG branch (legal_rep, ubo[], business_reg_no, incorporation_date, industry_code) into `extra_data` JSONB on the single KYC row — no per-type child tables. Pairs with the `WLT_CLIENT_KYC` → `FM_CLIENT_KYC` rename (US-9.16); sequence both in one migration. Spec §2, §5. |
 
 ## Epic 2 — Transactions (Posting) / Giao dịch ghi sổ
 
@@ -142,9 +153,10 @@ docs alone).
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-8.1 | Capture every client change (OLD/NEW diff, maker-checker) in an audit log | ✅ | `WLT_CLIENT_AUDIT_LOG`; trigger fns `fn_audit_client_change`, `fn_set_audit_columns`. |
+| US-8.1 | Capture client changes (OLD/NEW diff, maker-checker) in an audit log | ✅ | `WLT_CLIENT_AUDIT_LOG`; trigger fns `fn_audit_client_change`, `fn_set_audit_columns`. Coverage today: `FM_CLIENT_BANKS` (`trg_audit_fm_client_bk`) + `WLT_CLIENT_KYC` (`trg_audit_wlt_kyc`) only — UPDATE diffs on the four **core** client tables are tracked in US-8.5. |
 | US-8.2 | Apply holds/restraints (add/release) that block debits/credits | ✅ | SP `add_restraint`/`release_restraint`; `POST /v1/finance/restraints` (+ `/:id/release`); rolls up `TOTAL_RESTRAINED_AMT`/`CR_BLOCKED`, enforced in posting. Maker-checker/idempotency = gateway (deferred). |
 | US-8.3 | Record reconciliation breaks | ⬜ | No `WLT_RECON_BREAK` table or live recon engine in the current schema (`db/export/schema.sql`) — verified absent. Only artifact is the read-only assertion script `db/tests/wallet_reconciliation_check.sql`, which *detects* breaks but does not record them. |
+| US-8.5 | Audit **UPDATEs** to the core client-master tables (`FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_CLIENT_CONTACT`, `FM_CLIENT_IDENTIFIERS`) as OLD→NEW diff rows | ⬜ | Closes the gap behind US-8.1: `fn_audit_client_change` fires today only on `FM_CLIENT_BANKS` + `WLT_CLIENT_KYC`; the four core tables only stamp `created_by`/`updated_by` via the BEFORE `trg_audit_cols`, so `update_client` writes **no** diff row. Add an **`AFTER UPDATE`** trigger (mirror `trg_audit_fm_client_bk`) on each — **UPDATE only, not INSERT** (a create has no before→after diff and is already captured by `created_by`/`created_at`). Soft-delete is an `UPDATE status='C'`, so it's covered; client-master rows are never hard-deleted. Satisfies the "Client-master change auditing" HARD RULE in `CLAUDE.md`. Design-only. |
 | US-8.4 | PII protection: classification, encryption, masking, retention, access log | 🟡 | **Encryption + masking done**: `WLT_CLIENT_KYC.PHONE_NO_ENC`/`EMAIL_ENC` via `pgcrypto` `pgp_sym_encrypt` (DEK from `app.pii_dek`), `PHONE_NO_HASH` for unique lookup, + masked read views (`v_kyc_masked` etc.). Remaining (HLD §8.3): data classification, retention policy, and the `WLT_PII_ACCESS_LOG` access trail. |
 
 ## Epic 9 — Platform / Infra / Observability
@@ -166,7 +178,7 @@ docs alone).
 | US-9.13 | Read-replica routing for lag-tolerant reads | ✅ | `DB_READ_DSN` → separate read pool (`cmd/server`, `repo.readPool`). Only `GetAccount` (profile) + `ListTransactions` (statement) read it; unset → primary (strong consistency). Balance-realtime / tx-detail / ops stay on primary (read-your-writes). Both paths verified live. |
 | US-9.14 | Rename `tfr_internal_key` → `tran_internal_id` for clarity (it groups the legs of **every** transaction type, not just transfers) | ✅ | Done. `tfr`="transfer" was a misnomer — the column is the per-transaction grouping key for topup/transfer/withdraw/merchant/reversal. Renamed the **DB column** on `WLT_TRAN_HIST` (+ all partitions), `WLT_WITHDRAW_TRACK`, `WLT_SWEEP_LOG`; all posting/reversal SP bodies + `RETURNS` + idempotency-cache & outbox jsonb keys (`db/export/schema.sql`); SQL test suites; Go identifiers (`TFRInternalKey`→`TranInternalID`) + repo SQL strings; DLD/HLD/spec docs. **API kept stable** — HTTP JSON field `tfr_internal_key` / `reversal_tfr_key` (Go DTO json tags) + route `:tfr_key` unchanged, so no client breaks (events/internals now use `tran_internal_id`). Verified: fresh `docker compose up` (0 init errors, 202 cols renamed), all SQL suites pass, `go build` + `go test -race` green. Siblings `TFR_SEQ_NO`/`seq_tfr` left as-is (out of scope). |
 | US-9.15 | Rename cryptic `TRAN_TYPE` codes for clarity — e.g. `WDRAW`→`WITHDRAW`, `TRFOUT`→`TRANSF_OUT` — the column is `varchar(10)` but codes use 5–6-char abbreviations that waste the headroom | ⬜ | Deferred (logged from a load-test session, 2026-05-31). `WLT_TRAN_DEF.TRAN_TYPE` is the PK (`varchar(10)`); referenced by `WLT_TRAN_HIST.TRAN_TYPE` (`varchar(10)`, NOT NULL — **no DB FK**, link is logical) and self-referenced via `reversal_tran_type` / `fee_tran_type`. For consistency, rename the whole family, not just the two named: `TRFOUT`/`TRFIN`/`TRFOUTF`, `WDRAW`/`RVWD`/`FEEWD`, `MERCHWD`/`FEEMW`/`RVMWD`, `TOPUP`/`RVTPUP`, `FEETRF`/`RVTRF`/`RVFEE`. **Blast radius** (mirror US-9.14): seed defs (`db/export/seed.sql` `wlt_tran_def`), SP `DEFAULT` args + bodies (`db/export/schema.sql`, e.g. `post_transfer(... p_tran_type DEFAULT 'TRFOUT')`), Go (`internal/domain/types.go`, `http/dto/dto.go`, `repo/postgres.go`), load tests (`deploy/loadtest/k6_wallet.js` + `transfer.sql`/`withdraw*.sql`/`reversal.sql`/`setup.sql`/`merchant_topup.sql`), `postman/`, SQL suites (`db/tests/*`), docs (`docs/specs/finance_transaction.md`, DLD/HLD, COA spec). **Open decisions (defer to roadmap):** (1) **final names** — `varchar(10)` fits `WITHDRAW` (8) but **not** `TRANSFEROUT` (11) → choose `TRANSF_OUT`/`XFER_OUT`/`TRF_OUT`; (2) **history migration** — existing `WLT_TRAN_HIST` rows already carry old codes, so either `UPDATE` them in place or keep old codes read-valid (cf. US-9.14's API-stable approach); (3) widen the column if 10 chars proves too tight. |
-| US-9.16 | Re-prefix `WLT_CLIENT_KYC` → `FM_CLIENT_KYC` (it is client master-data, not wallet ledger) | ⬜ | Deferred. KYC belongs to the **client-master (`FM_`) domain** — siblings already use it (`FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_CLIENT_CONTACT`, `FM_CLIENT_IDENTIFIERS`, `FM_CLIENT_BANKS`); only `WLT_CLIENT_KYC` + `WLT_CLIENT_AUDIT_LOG` (US-9.17) still wear the wrong `WLT_` (ledger) prefix. Plain `ALTER TABLE … RENAME` + rename PK/indexes/constraints (`wlt_client_kyc_*`→`fm_client_kyc_*`) and any FK to `FM_CLIENT`. **Blast radius** (~97 refs): `db/export/schema.sql` (DDL, pgcrypto cols `PHONE_NO_ENC`/`EMAIL_ENC`/`PHONE_NO_HASH` + masked view `v_kyc_masked` — cf. US-8.4), Go `internal/repo/client.go`, seeds (`wallet_seed.sql`, `wallet_testdata_10.sql`), load test (`deploy/loadtest/setup.sql`), `db/maintenance/truncate_operational_data.sql`, docs (DLD/HLD/onboarding), `CHANGELOG.md`. **API impact:** none (no HTTP field/route is named after the table). Pairs with US-9.17 — do both in one migration. |
+| US-9.16 | Re-prefix `WLT_CLIENT_KYC` → `FM_CLIENT_KYC` (it is client master-data, not wallet ledger) | ⬜ | Deferred. KYC belongs to the **client-master (`FM_`) domain** — siblings already use it (`FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_CLIENT_CONTACT`, `FM_CLIENT_IDENTIFIERS`, `FM_CLIENT_BANKS`); only `WLT_CLIENT_KYC` + `WLT_CLIENT_AUDIT_LOG` (US-9.17) still wear the wrong `WLT_` (ledger) prefix. Plain `ALTER TABLE … RENAME` + rename PK/indexes/constraints (`wlt_client_kyc_*`→`fm_client_kyc_*`) and any FK to `FM_CLIENT`. **Blast radius** (~97 refs): `db/export/schema.sql` (DDL, pgcrypto cols `PHONE_NO_ENC`/`EMAIL_ENC`/`PHONE_NO_HASH` + masked view `v_kyc_masked` — cf. US-8.4), Go `internal/repo/client.go`, seeds (`wallet_seed.sql`, `wallet_testdata_10.sql`), load test (`deploy/loadtest/setup.sql`), `db/maintenance/truncate_operational_data.sql`, docs (DLD/HLD/onboarding), `CHANGELOG.md`. **API impact:** none (no HTTP field/route is named after the table). Pairs with US-9.17 — do both in one migration. **US-1.15** layers the JSONB `extra_data` centralization (folding `FM_CLIENT_INDVL` + an ORG branch) onto this rename — sequence them together. |
 | US-9.17 | Re-prefix `WLT_CLIENT_AUDIT_LOG` → `FM_CLIENT_AUDIT_LOG` (audit trail of client-master changes) | ⬜ | Deferred. Same rationale as US-9.16 — it records OLD/NEW diffs of `FM_CLIENT` (US-8.1), so it belongs to the `FM_` client-master family, not the `WLT_` ledger. **Partitioned table** → rename the parent **and** its monthly child partitions + the creation logic in `db/export/partitions.sql` (`fn_ensure_wallet_partitions`) + PK/indexes. **Blast radius** (~86 refs): `db/export/schema.sql` (DDL + the trigger fns that write it, `fn_audit_client_change`/`fn_set_audit_columns`), `db/export/partitions.sql`, `CLAUDE.md` ("Key tables"), `db/maintenance/truncate_operational_data.sql`, docs (DLD ~32 refs, HLD). **API impact:** none. Pairs with US-9.16. |
 
 ## Epic 10 — Quality: Testing & Load / Chất lượng: test & tải

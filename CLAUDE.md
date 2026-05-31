@@ -94,6 +94,17 @@ Every write goes through `PgWalletRepo.withTx` (`internal/repo/postgres.go`). Ea
 
 When adding a new write operation: add the SP function in `db/export/schema.sql`, add the method to the `WalletRepository` port, implement it in `postgres.go` following this exact pattern, then wire usecase → handler → route.
 
+### Client-master change auditing (HARD RULE)
+
+**Every API / SP that updates a client-master record MUST track the change and write an OLD→NEW diff row into the client audit log (`WLT_CLIENT_AUDIT_LOG` — being renamed `FM_CLIENT_AUDIT_LOG`, US-9.17).** Non-negotiable for compliance (US-8.1): all client identity / KYC / bank / document changes must be fully attributable — who (`audit.actor`), when, channel, `trace_id`, and before→after values. This covers `create_client`, `update_client`, `link_client_bank`, `set_default_client_bank`, and every future onboarding step that mutates client data (update-KYC, related-documents, etc.).
+
+The mechanism is the `AFTER INSERT OR UPDATE OR DELETE` trigger `fn_audit_client_change`, attributed by the audit GUCs that `withTx` sets per-TX (step 3 above). So the rule has two halves:
+
+1. **The write path runs through `withTx`** so the GUCs are set — never mutate a client table on a raw pool connection (that yields an unattributed `SYSTEM` row).
+2. **The mutated table carries the `fn_audit_client_change` AFTER trigger.** When you add a client-master table or a new mutating SP, attach it (mirror `trg_audit_fm_client_bk` / `trg_audit_wlt_kyc`).
+
+**Current coverage — close the gaps when you touch these:** the diff trigger fires today only on `FM_CLIENT_BANKS` (`trg_audit_fm_client_bk`) and `WLT_CLIENT_KYC` (`trg_audit_wlt_kyc`). `FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_CLIENT_CONTACT`, `FM_CLIENT_IDENTIFIERS` only have the BEFORE `trg_audit_cols` (which stamps `created_by` / `updated_by`) — they do **not** yet write a diff row, so `update_client` (mutates `FM_CLIENT` / `FM_CLIENT_INDVL`) is **not** fully audited. Closing this (US-8.5) means adding `fn_audit_client_change` as an **`AFTER UPDATE`** trigger on those four tables — **UPDATE only, not INSERT** (a create has no before→after diff and is already attributed by `created_by` / `created_at`; soft-delete is an `UPDATE status='C'`, so it's covered).
+
 ### Error model — keep Go and SQL in sync
 
 `domain.Error` carries a stable `Code`, an `HTTPStatus`, a client-safe `Detail`, and a wrapped `Cause`. **The codes in `internal/domain/errors.go` mirror the `RAISE EXCEPTION` codes in the SP functions (`db/export/schema.sql`)** — when you add or change an SP error, update both sides. `mapPgError` (in `repo/errors.go`) translates pg/ctx/lock/statement-timeout failures into the right `domain.Error`; the HTTP layer renders an RFC 7807 envelope with ISO 20022 reason mapping (`domain/iso20022.go`). Read-only balance/account queries skip the audit TX.
@@ -113,6 +124,8 @@ The DB is the source of truth for the ledger. It is defined by three pg_dump-gen
 - `db/tests/` — SQL assertion suites (accounting balance, merchant flow, reconciliation, reversal).
 
 Key tables: `WLT_ACCT`, `WLT_ACCT_BAL`, `WLT_TRAN_HIST`, `WLT_OUTBOX` (transactional outbox), `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`. Load-test data is prefixed `LT*`/`PB*` (clients `LTC*`/`LTGC*`, groups `LTG*`, refs `LT-*`/`PB-*`) so `deploy/loadtest/teardown.sql` can scope cleanup without touching baseline `C*` data.
+
+**HARD RULE — DDL lives in `db/export/schema.sql`.** Any DDL change (new or altered table, column, index, constraint, sequence, trigger, or PL/pgSQL function / SP) MUST be written into `db/export/schema.sql` as part of the same change — even when you also applied it live to a running DB. `schema.sql` is the source of truth docker-init loads; an `ALTER`/`CREATE` that only ran against a local DB and isn't reflected here is **lost on the next `docker compose down -v && up`** and never reaches review or other environments. Partition DDL belongs in `partitions.sql`, reference/master data in `seed.sql`. After editing, validate with `docker compose down -v && up` (regenerate via `pg_dump` per `db/export/README.md` if you changed the live DB first).
 
 ## Docs
 
