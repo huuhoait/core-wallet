@@ -155,6 +155,7 @@ docs alone).
 | US-9.11 | CI/CD pipeline | ⬜ | None in repo. |
 | US-9.12 | Metrics endpoint (Prometheus) | ⬜ | OTel traces only; no metrics endpoint. |
 | US-9.13 | Read-replica routing for lag-tolerant reads | ✅ | `DB_READ_DSN` → separate read pool (`cmd/server`, `repo.readPool`). Only `GetAccount` (profile) + `ListTransactions` (statement) read it; unset → primary (strong consistency). Balance-realtime / tx-detail / ops stay on primary (read-your-writes). Both paths verified live. |
+| US-9.14 | Rename `tfr_internal_key` → `tran_internal_id` for clarity (it groups the legs of **every** transaction type, not just transfers) | ⬜ | `tfr` = "transfer" (`seq_tfr`; DLD: *"legs of a single transfer"*) but the column is the per-transaction grouping key for topup/transfer/withdraw/merchant/reversal — a misnomer. `tran_internal_id` reads clearer and aligns with the API's forward-looking `transaction_id` JSON. Blast radius ≈ **172 refs / 26 files**: `WLT_TRAN_HIST` column (+ a `db/migrations/` `RENAME COLUMN` for live DBs), all posting/reversal SP params + `RETURNS`, SQL test suites, Go structs + row-scan (`dto`/`repo`/`usecase`), docs, Postman. **Recommended scope:** rename DB + SP + Go internals + docs but KEEP the API JSON (`tfr_internal_key`/`reversal_tfr_key`) + route `:tfr_key` stable so no client breaks. Sibling `TFR_SEQ_NO`/`seq_tfr` carry the same misnomer — decide whether to rename to `tran_seq_no`/`seq_tran` in the same pass. |
 
 ## Epic 10 — Quality: Testing & Load / Chất lượng: test & tải
 
@@ -165,8 +166,10 @@ docs alone).
 | US-10.3 | Reconciliation check | ✅ | `db/tests/wallet_reconciliation_check.sql`. |
 | US-10.4 | Reversal test | ✅ | `db/tests/wallet_transfer_reversal_test.sql`. |
 | US-10.5 | k6 HTTP load test + ledger-row attribution | ✅ | `deploy/loadtest/k6.sh`, `k6_wallet.js`, `k6_sweep.sh`. |
-| US-10.6 | pgbench DB/SP load + TPS saturation sweep | ✅ | `deploy/loadtest/run.sh`, `stress.sh`. |
+| US-10.6 | pgbench DB/SP load + TPS saturation sweep | ✅ | `deploy/loadtest/run.sh`, `stress.sh`. 8-way mix: topup / transfer / withdraw / reversal / **withdraw_reversal** (reversal w/ fee) / **merchant_topup** / merchant_withdraw / **restraint** (add+remove). Verified 200 TPS × 10 min: 120,043 txns, 0 failed, +305,762 `WLT_TRAN_HIST` rows; double-entry holds across 621k GL legs. |
 | US-10.7 | Go unit / integration tests | 🟡 | Error-envelope + ISO-20022 mapping covered (`internal/domain/iso20022_test.go`, `internal/http/handler/errors_test.go`); posting paths still only via SQL. |
+| US-10.8 | Restraint (hold/lien) SQL assertion suite | ✅ | `db/tests/wallet_restraint_test.sql` — 25 cases: `add_restraint`/`release_restraint` rollup of all 4 types, validation errors `P0060–P0064`/`P0001`/`P0004`, posting-path enforcement (`P0025`/`P0026`/`P0029`), release restore/free-funds/`P0065–P0067`, multi-restraint recompute. |
+| US-10.9 | Reversal check resolves reversal→original by a **type-aware** key (correct at scale) | ⬜ | `wallet_reversal_check.sql` `keymap` UNIONs `seq_no` and `tfr_internal_key` into one `link` column; when the two ranges overlap on large datasets, a value that is both a `SEQ_NO` and a `TFR_INTERNAL_KEY` cross-matches → **false R2 (double-reversal) / R3 (amount mismatch)**. **Fix:** tag each key by kind — `'seqno'` for `RVTRF`/`RVTPUP`/`RVMWD`, `'tfrkey'` for `RVWD` (which links via `WLT_WITHDRAW_TRACK.TFR_INTERNAL_KEY`) — and join on `(link AND kind)`. Surfaced by the 200 TPS × 10 min run: 96,675 ambiguous links; precise checks confirmed **0 real double-reversals / 0 amount mismatches** (the engine is correct, only the check over-reports). |
 
 ---
 
