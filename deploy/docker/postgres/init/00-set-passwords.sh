@@ -16,8 +16,13 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wallet_admin') THEN
       CREATE ROLE wallet_admin LOGIN PASSWORD '${WALLET_ADMIN_PASSWORD}' CREATEDB CREATEROLE;
     END IF;
+    -- wallet_eod owns the tamper-evident EOD writes; schema.sql GRANTs to it.
+    -- NOLOGIN by default (EOD runs it on a direct connection, not interactively).
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wallet_eod') THEN
+      CREATE ROLE wallet_eod NOLOGIN;
+    END IF;
   END
   \$\$;
 EOSQL
 
-echo "[init] roles wallet_app / wallet_pii_ro / wallet_admin ensured"
+echo "[init] roles wallet_app / wallet_pii_ro / wallet_admin / wallet_eod ensured"
