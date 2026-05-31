@@ -60,8 +60,11 @@ const KNOWN_OUTCOMES = [
   // success
   'SUCCESS', 'DUPLICATE', 'BALANCE_OK', 'REVERSED', 'REVERSED_DUP', 'SETTLEMENT_SWEEP_REQUIRED',
   'RESTRAINT_ADDED', 'RESTRAINT_RELEASED', 'ONBOARDED', 'KYC_UPDATED',
-  // onboarding validation (onboard_client / update_kyc)
-  'PHONE_ALREADY_REGISTERED', 'ORG_FIELDS_REQUIRED', 'INVALID_PHONE_FORMAT', 'CLIENT_NOT_FOUND',
+  // onboarding validation (onboard_client / update_kyc). CLIENT_ALREADY_EXISTS /
+  // PHONE_ALREADY_REGISTERED appear when re-running onboard over already-created
+  // clients (onboard grows the DB — re-init or clean LT-OB-* between runs).
+  'PHONE_ALREADY_REGISTERED', 'CLIENT_ALREADY_EXISTS', 'ORG_FIELDS_REQUIRED',
+  'INVALID_PHONE_FORMAT', 'CLIENT_NOT_FOUND',
   // restraint validation (add_restraint, §4.9)
   'RESTRAINT_TYPE_INVALID', 'RESTRAINT_PURPOSE_INVALID', 'RESTRAINT_AMT_EXCEEDS_BALANCE',
   // business / errors
@@ -110,6 +113,20 @@ const grp  = (i) => 'LTG' + String(i).padStart(2, '0');
 const stl  = (i) => 'LTGS' + String(i).padStart(4, '0');   // group SETTLEMENT acct (8 chars — passes the HTTP acct_no validator; merchant_topup target)
 const kyc  = (i) => 'LTC' + String(i).padStart(9, '0');    // seeded LT consumer client_no (update_kyc target)
 const ref  = (p) => `${p}-${__VU}-${__ITER}-${Date.now()}`;
+
+// post wraps http.post and tags every request with its operation type, endpoint
+// path and (truncated) payload — so k6.sh can rank the slowest requests by
+// type/url/payload from the --out json stream. The body is JSON-encoded ONCE and
+// the same string is both sent and tagged. `name` is set to the op so k6 groups
+// per-operation latency cleanly (path-id URLs like /clients/:id/kyc don't explode
+// the URL cardinality).
+function post(op, url, obj) {
+  const body = JSON.stringify(obj);
+  return http.post(url, body, {
+    headers: H.headers,
+    tags: { op, name: op, ep: url.replace(BASE, ''), payload: body.slice(0, 300) },
+  });
+}
 
 // outcomeLabel derives a single business label from a response: the success
 // `status` field (SUCCESS/DUPLICATE), a reversal result, a balance read, or the
@@ -167,18 +184,18 @@ function reverseIfPosted(origRes, reverseFn) {
 // consumer wallet, then release it (balance-neutral). 2 HTTP calls. The add returns
 // 201 with NO transaction_status (it is not a posting), so it skips classify().
 function addReleaseRestraint() {
-  const add = http.post(`${BASE}/v1/finance/restraints`, JSON.stringify({
+  const add = post('restraint_add', `${BASE}/v1/finance/restraints`, {
     acct_no: acct(randomIntBetween(1, NW)), restraint_type: 'DEBIT', restraint_purpose: 'PLEDGE',
     pledged_amt: String(randomIntBetween(1000, 100000)), narrative: ref('K6RST'),
-  }), H);
+  });
   recordOutcomeAs(add, 'RESTRAINT_ADDED');
   check(add, { 'handled': (r) => [201, 409, 422, 423].includes(r.status) });
   if (add.status !== 201) return;
   let id = null; try { id = add.json().restraint_id; } catch (_) { id = null; }
   if (!id) return;
-  const rel = http.post(`${BASE}/v1/finance/restraints/${id}/release`, JSON.stringify({
+  const rel = post('restraint_release', `${BASE}/v1/finance/restraints/${id}/release`, {
     reason: 'k6 load-test release',
-  }), H);
+  });
   recordOutcomeAs(rel, 'RESTRAINT_RELEASED');
   check(rel, { 'released': (r) => r.status === 200 });
 }
@@ -188,14 +205,16 @@ function addReleaseRestraint() {
 // within a run (cross-run reuse → 409 PHONE_ALREADY_REGISTERED, a handled outcome).
 // The 201 carries no transaction_status (not a posting), so it skips classify().
 function onboard() {
+  // n is unique per (VU,iter) within a run; phone is 0 + 9 digits, so n (< 1e9 for
+  // VU<1000) fits WITHOUT a modulo wrap — avoids within-run phone-hash collisions.
   const n = __VU * 1000000 + __ITER;
-  const phone = '08' + String(n % 100000000).padStart(8, '0');
-  const res = http.post(`${BASE}/v1/onboard`, JSON.stringify({
+  const phone = '0' + String(n).padStart(9, '0');
+  const res = post('onboard', `${BASE}/v1/onboard`, {
     client_name: 'K6 Onboard ' + n, client_type: 'IND', phone,
     global_id: 'LT-OB-K6-' + n, global_id_type: 'CCCD',
     birthdate: '1990-01-01', sex: 'M',
     extra_data: { surname: 'K6', given_name: 'Onboard' + n },
-  }), H);
+  });
   recordOutcomeAs(res, 'ONBOARDED');
   check(res, { 'handled': (r) => [201, 400, 409, 422].includes(r.status) });
 }
@@ -203,11 +222,13 @@ function onboard() {
 // kyc_update mirrors update_kyc.sql (US-1.2): refresh eKYC + tier on a seeded LT
 // consumer (LTC*). 200, no transaction_status → custom check, not classify().
 function updateKyc() {
-  const res = http.post(`${BASE}/v1/clients/${kyc(randomIntBetween(1, NW))}/kyc`, JSON.stringify({
-    kyc_tier: String(randomIntBetween(1, 3)), status: 'A', risk_level: 'M',
+  // tier 2..3 only — upgrade/refresh, never downgrade a seeded consumer to tier 1
+  // (receive-only) which would 403 a concurrent withdraw on the same wallet.
+  const res = post('kyc_update', `${BASE}/v1/clients/${kyc(randomIntBetween(1, NW))}/kyc`, {
+    kyc_tier: String(randomIntBetween(2, 3)), status: 'A', risk_level: 'M',
     ekyc_provider: 'VNG', ekyc_ref: ref('K6KYC'), face_match_score: 0.97, liveness_result: 'PASS',
     extra_data: { occupation_code: 'ENG' },
-  }), H);
+  });
   recordOutcomeAs(res, 'KYC_UPDATED');
   check(res, { 'handled': (r) => [200, 404, 422].includes(r.status) });
 }
@@ -218,60 +239,60 @@ export default function () {
 
   if (r < 16) {
     // topup (16%)
-    classify(http.post(`${BASE}/v1/finance/topup`, JSON.stringify({
+    classify(post('topup', `${BASE}/v1/finance/topup`, {
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(10000, 1000000)), reference: ref('K6TU'),
-    }), H));
+    }));
 
   } else if (r < 32) {
     // transfer — TRFOUT, consumer → consumer (16%)
     const a = randomIntBetween(1, NW); const b = (a % NW) + 1;
-    classify(http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
+    classify(post('transfer', `${BASE}/v1/finance/transfer`, {
       from_acct_no: acct(a), to_acct_no: acct(b), amount: String(randomIntBetween(1000, 500000)),
       reference: ref('K6TR'), tran_type: 'TRFOUT',
-    }), H));
+    }));
 
   } else if (r < 42) {
     // withdraw — fee + VAT (10%)
-    classify(http.post(`${BASE}/v1/finance/withdraw`, JSON.stringify({
+    classify(post('withdraw', `${BASE}/v1/finance/withdraw`, {
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(50000, 500000)),
       reference: ref('K6WD'), ext_payout_ref: ref('K6EXT'), beneficiary_bank: 'BIDV', beneficiary_acct: '9990000000',
-    }), H));
+    }));
 
   } else if (r < 52) {
     // reversal — transfer + reverse (10%)  [reversal.sql]
     const a = randomIntBetween(1, NW); const b = (a % NW) + 1;
     const reference = ref('K6RVT');
-    const orig = http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
+    const orig = post('reversal', `${BASE}/v1/finance/transfer`, {
       from_acct_no: acct(a), to_acct_no: acct(b), amount: String(randomIntBetween(1000, 100000)),
       reference, tran_type: 'TRFOUT',
-    }), H);
-    reverseIfPosted(orig, () => http.post(`${BASE}/v1/finance/reverse`, JSON.stringify({
+    });
+    reverseIfPosted(orig, () => post('reverse', `${BASE}/v1/finance/reverse`, {
       reference, reason: 'k6 load-test reversal', initiator: 'OPS_MANUAL',
-    }), H));
+    }));
 
   } else if (r < 62) {
     // withdraw_reversal — withdraw + treasury-failed roll-back (10%)  [withdraw_reversal.sql]
     const reference = ref('K6RVW'); const ext = ref('K6RVWEXT');
-    const orig = http.post(`${BASE}/v1/finance/withdraw`, JSON.stringify({
+    const orig = post('withdraw_reversal', `${BASE}/v1/finance/withdraw`, {
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(50000, 300000)),
       reference, ext_payout_ref: ext, beneficiary_bank: 'BIDV', beneficiary_acct: '9990000000',
-    }), H);
-    reverseIfPosted(orig, () => http.post(`${BASE}/v1/treasury/withdrawals/${ext}/reverse`, JSON.stringify({
+    });
+    reverseIfPosted(orig, () => post('wd_reverse', `${BASE}/v1/treasury/withdrawals/${ext}/reverse`, {
       fail_code: 'NAPAS_TIMEOUT', fail_reason: 'k6 load-test withdraw reversal', initiator: 'TREASURY_FAILED',
-    }), H));
+    }));
 
   } else if (r < 72) {
     // merchant_topup — a consumer pays a merchant: consumer → group SETTLEMENT (10%)  [merchant_topup.sql]
-    classify(http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
+    classify(post('merchant_topup', `${BASE}/v1/finance/transfer`, {
       from_acct_no: acct(randomIntBetween(1, NW)), to_acct_no: stl(randomIntBetween(1, NG)),
       amount: String(randomIntBetween(10000, 500000)), reference: ref('K6MTU'), tran_type: 'TRFOUT',
-    }), H));
+    }));
 
   } else if (r < 82) {
     // merchant_withdraw — hot-shard sweep + settlement (10%)
-    classify(http.post(`${BASE}/v1/finance/merchant-withdraw`, JSON.stringify({
+    classify(post('merchant_withdraw', `${BASE}/v1/finance/merchant-withdraw`, {
       group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(50000, 2000000)), reference: ref('K6MW'),
-    }), H));
+    }));
 
   } else if (r < 88) {
     // restraint — add a DEBIT/PLEDGE hold then release it (6%)  [restraint.sql]
