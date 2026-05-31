@@ -34,7 +34,7 @@ BEGIN
   PERFORM set_config('audit.channel','TEST',true);
 
   -- ════════ setup: a COLD merchant group (settlement 5,000,000, 0 shards) ════════
-  v_mc := fn_create_client('Cold Merchant','888300000001','0883000001',NULL,'ORG','3');
+  v_mc := fn_create_client('Cold Merchant','888300000001','0883000001',NULL,'MER','3');
   INSERT INTO WLT_ACCT_GROUP(group_id,client_no,group_type,shard_count,
                              settlement_acct_no,shard_threshold,shard_buffer,
                              sweep_interval_sec,group_status)
