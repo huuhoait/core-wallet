@@ -30,9 +30,9 @@ docs alone).
 | 6. Accounting & GL Operations | 6 | 1 | 2 |
 | 7. Eventing & Integration | 1 | 0 | 2 |
 | 8. Audit, PII & Compliance | 2 | 1 | 1 |
-| 9. Platform / Infra / Observability | 11 | 0 | 3 |
-| 10. Quality — Testing & Load | 7 | 1 | 1 |
-| **Total** | **51** | **3** | **18** |
+| 9. Platform / Infra / Observability | 11 | 0 | 5 |
+| 10. Quality — Testing & Load | 8 | 1 | 0 |
+| **Total** | **52** | **3** | **19** |
 
 ---
 
@@ -165,6 +165,8 @@ docs alone).
 | US-9.12 | Metrics endpoint (Prometheus) | ⬜ | OTel traces only; no metrics endpoint. |
 | US-9.13 | Read-replica routing for lag-tolerant reads | ✅ | `DB_READ_DSN` → separate read pool (`cmd/server`, `repo.readPool`). Only `GetAccount` (profile) + `ListTransactions` (statement) read it; unset → primary (strong consistency). Balance-realtime / tx-detail / ops stay on primary (read-your-writes). Both paths verified live. |
 | US-9.14 | Rename `tfr_internal_key` → `tran_internal_id` for clarity (it groups the legs of **every** transaction type, not just transfers) | ✅ | Done. `tfr`="transfer" was a misnomer — the column is the per-transaction grouping key for topup/transfer/withdraw/merchant/reversal. Renamed the **DB column** on `WLT_TRAN_HIST` (+ all partitions), `WLT_WITHDRAW_TRACK`, `WLT_SWEEP_LOG`; all posting/reversal SP bodies + `RETURNS` + idempotency-cache & outbox jsonb keys (`db/export/schema.sql`); SQL test suites; Go identifiers (`TFRInternalKey`→`TranInternalID`) + repo SQL strings; DLD/HLD/spec docs. **API kept stable** — HTTP JSON field `tfr_internal_key` / `reversal_tfr_key` (Go DTO json tags) + route `:tfr_key` unchanged, so no client breaks (events/internals now use `tran_internal_id`). Verified: fresh `docker compose up` (0 init errors, 202 cols renamed), all SQL suites pass, `go build` + `go test -race` green. Siblings `TFR_SEQ_NO`/`seq_tfr` left as-is (out of scope). |
+| US-9.15 | Re-prefix `WLT_CLIENT_KYC` → `FM_CLIENT_KYC` (it is client master-data, not wallet ledger) | ⬜ | Deferred. KYC belongs to the **client-master (`FM_`) domain** — every sibling already uses that prefix (`FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_CLIENT_CONTACT`, `FM_CLIENT_IDENTIFIERS`, `FM_CLIENT_BANKS`); only `WLT_CLIENT_KYC` + `WLT_CLIENT_AUDIT_LOG` (US-9.16) still wear the wrong `WLT_` (ledger) prefix. Plain `ALTER TABLE … RENAME` + rename its PK/indexes/constraints (`wlt_client_kyc_*` → `fm_client_kyc_*`) and any FK to `FM_CLIENT`. **Blast radius:** `db/export/schema.sql` (DDL, triggers, pgcrypto cols `PHONE_NO_ENC`/`EMAIL_ENC`/`PHONE_NO_HASH` + masked view `v_kyc_masked` — see US-8.4), Go `internal/repo/client.go`, seeds (`db/seeds/wallet_seed.sql`, `wallet_testdata_10.sql`), load test (`deploy/loadtest/setup.sql`/`teardown.sql`), `db/maintenance/truncate_operational_data.sql`, docs (`docs/dld/wallet_DLD.md`, `docs/specs/wallet_onboarding.md`, HLD ×2), `claudedocs/ddl_column_reconciliation.md`, `CHANGELOG.md`. **API impact:** none (no HTTP field/route is named after the table). Pairs with US-9.16 — do both in one migration. |
+| US-9.16 | Re-prefix `WLT_CLIENT_AUDIT_LOG` → `FM_CLIENT_AUDIT_LOG` (audit trail of client-master changes) | ⬜ | Deferred. Same rationale as US-9.15 — it records OLD/NEW diffs of `FM_CLIENT` (US-8.1), so it belongs to the `FM_` client-master family, not the `WLT_` ledger. **Partitioned table** → rename the parent **and** its child partitions + the creation logic in `db/export/partitions.sql` (`fn_ensure_wallet_partitions`, 5 refs) + PK/indexes/constraints. **Blast radius:** `db/export/schema.sql` (DDL + the trigger fns that write it, `fn_audit_client_change`/`fn_set_audit_columns`), `db/export/partitions.sql`, `CLAUDE.md` ("Key tables" list), `db/maintenance/truncate_operational_data.sql`, `deploy/loadtest/teardown.sql`, docs (`docs/dld/wallet_DLD.md` ~32 refs, HLD ×2, onboarding), `claudedocs/ddl_column_reconciliation.md`, `CHANGELOG.md`. **API impact:** none. Pairs with US-9.15. |
 
 ## Epic 10 — Quality: Testing & Load / Chất lượng: test & tải
 
