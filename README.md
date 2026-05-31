@@ -42,9 +42,8 @@ Core/
 │   └── specs/                #   feature specs (finance, errors, onboarding, COA, T24, k6)
 │
 ├── db/                       # PostgreSQL — single source of truth for the ledger
-│   ├── ddl/                  #   schema (wallet_schema.sql — single source of truth)
-│   ├── procedures/           #   posting stored functions (wallet_sp*.sql)
-│   ├── seeds/                #   reference + test data (COA, tran-types, fixtures)
+│   ├── export/               #   the DB: schema.sql + partitions.sql + seed.sql (docker-init)
+│   ├── seeds/                #   demo / load-test fixtures (testdata, bulk generator, COA src)
 │   └── tests/                #   SQL assertion suites (accounting, recon, reversal)
 │
 ├── services/
@@ -109,35 +108,19 @@ docker compose up -d                 # PG17 + PgBouncer
 docker compose logs -f postgres      # wait for "ready to accept connections"
 ```
 
-On first start, PostgreSQL auto-loads `db/ddl/wallet_schema.sql` and
-`db/procedures/wallet_sp.sql`. The remaining procedure files (balance, merchant,
-reversals) and seeds are applied manually:
+On first volume init, PostgreSQL auto-loads the **entire DB** from `db/export/`
+(mounted as init scripts, in order): `01-schema.sql` (all DDL + stored
+functions + triggers), `02-partitions.sql` (monthly + hash partitions),
+`03-seed.sql` (GL master / COA / tran-type reference data). A plain
+`docker compose up` gives a complete, ready DB — **no manual psql steps**. The
+roles the schema grants to are created by `deploy/docker/postgres/init/00-set-passwords.sh`.
 
-```bash
-# apply the rest of the stored functions + seed reference data
-for f in db/procedures/wallet_sp_balance.sql \
-         db/procedures/wallet_sp_merchant.sql \
-         db/procedures/wallet_sp_topup_reversal.sql \
-         db/procedures/wallet_sp_transfer_reversal.sql \
-         db/procedures/wallet_sp_restraint.sql \
-         db/procedures/wallet_sp_client.sql \
-         db/procedures/wallet_sp_account.sql \
-         db/procedures/wallet_sp_eod.sql \
-         db/seeds/wallet_coa_seed.sql \
-         db/seeds/wallet_tran_type_ext.sql \
-         db/seeds/wallet_seed.sql; do
-  docker compose exec -T postgres psql -U postgres -d wallet -f "/dev/stdin" < "$f"
-done
-```
+To change schema or a stored function, edit `db/export/schema.sql` and re-init
+(`docker compose down -v && up`), or apply to a running DB and regenerate — see
+`db/export/README.md` for the `pg_dump` regenerate commands.
 
-`wallet_sp_eod.sql` is self-contained (it creates the EOD tables, the
-`WLT_PERIOD` period lock + write-freeze triggers, and grants for the local
-`wallet_app` role), so loading it activates period locking locally. For tracked
-deploys, also apply the incremental migrations in `db/migrations/` (they harden
-the EOD writes onto the dedicated `wallet_eod` role).
-
-> 🇻🇳 Docker chỉ tự nạp `wallet_schema.sql` + `wallet_sp.sql` khi khởi tạo lần
-> đầu. Các stored function còn lại và seed phải nạp thủ công như trên.
+> 🇻🇳 `docker compose up` tự nạp toàn bộ DB từ 3 file trong `db/export/`
+> (schema → partitions → seed). Không còn bước nạp thủ công.
 
 ### 2. Run the service
 
@@ -194,10 +177,10 @@ and the Postman collection.
 
 | Area | Files | Notes |
 |------|-------|-------|
-| Schema (DDL) | `db/ddl/wallet_schema.sql` | docker-init schema + single source of truth for the DDL |
-| Posting procedures | `db/procedures/wallet_sp*.sql` | `post_topup/transfer/withdraw/merchant_withdraw`, 4 reversals, balance, withdraw state machine |
-| Seeds & reference | `db/seeds/` | Chart of accounts (`coa/`), tran-type extensions, test fixtures |
-| SQL test suites | `db/tests/` | Accounting balance, merchant flow, reconciliation check, reversal |
+| Schema (DDL + SPs) | `db/export/schema.sql` | docker-init: all tables/indexes/functions/triggers; partitioned parents only. `post_topup/transfer/withdraw/merchant_withdraw`, 4 reversals, balance, withdraw state machine |
+| Partitions | `db/export/partitions.sql` | monthly + hash partitions; `fn_ensure_wallet_partitions()` rolls forward |
+| Reference seed | `db/export/seed.sql` | GL master, COA map, tran types, currency, account types |
+| Fixtures & tests | `db/seeds/`, `db/tests/` | demo / load-test fixtures; SQL assertion suites (accounting, merchant, recon, reversal) |
 
 Run the SQL test suites against a seeded DB:
 
