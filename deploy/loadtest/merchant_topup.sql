@@ -7,5 +7,5 @@
 \set g random(1, :ngroup)
 \set amt random(10000, 500000)
 \set r random(1, 2000000000)
-SELECT post_transfer('LT'||lpad((:a)::text,10,'0'), 'LTGS'||lpad((:g)::text,2,'0'), :amt,
+SELECT post_transfer('LT'||lpad((:a)::text,10,'0'), 'LTGS'||lpad((:g)::text,4,'0'), :amt,
                      'PB-MTU-' || :client_id || '-' || :r, 'TRFOUT', '{}'::jsonb, 'MOBILE', 'pgbench');
