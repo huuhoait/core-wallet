@@ -23,7 +23,8 @@ HOST="${HOST:-}"; PORT="${PORT:-}"; PROTO="${PROTO:-prepared}"
 CONN=""; [[ -n "$HOST" ]] && CONN="-h $HOST"; [[ -n "$PORT" ]] && CONN="$CONN -p $PORT"
 
 docker exec "$CTN" mkdir -p /tmp/lt
-for f in setup teardown topup transfer withdraw merchant_withdraw reversal; do
+for f in setup teardown topup transfer withdraw merchant_withdraw reversal \
+         merchant_topup withdraw_reversal restraint; do
   docker cp "deploy/loadtest/$f.sql" "$CTN:/tmp/lt/$f.sql"
 done
 echo "▶ seeding ..."; docker exec -e PGPASSWORD="$PW" "$CTN" psql -U postgres -d wallet -q -f /tmp/lt/setup.sql >/dev/null
@@ -33,8 +34,10 @@ run() { # $1=rate-flag-or-empty  $2=label
     --no-vacuum --protocol="$PROTO" --max-tries=10 \
     $1 --time=$DUR --client=$CLIENTS --jobs=8 \
     --define=nwallet=$NW --define=ngroup=$NG \
-    --file=/tmp/lt/topup.sql@30 --file=/tmp/lt/transfer.sql@30 \
-    --file=/tmp/lt/withdraw.sql@20 --file=/tmp/lt/merchant_withdraw.sql@10 --file=/tmp/lt/reversal.sql@10 2>&1
+    --file=/tmp/lt/topup.sql@20 --file=/tmp/lt/transfer.sql@18 \
+    --file=/tmp/lt/withdraw.sql@12 --file=/tmp/lt/reversal.sql@10 \
+    --file=/tmp/lt/withdraw_reversal.sql@10 --file=/tmp/lt/merchant_topup.sql@12 \
+    --file=/tmp/lt/merchant_withdraw.sql@10 --file=/tmp/lt/restraint.sql@8 2>&1
 }
 report() { # $1=label  $2=output
   local tps lat lag failed
