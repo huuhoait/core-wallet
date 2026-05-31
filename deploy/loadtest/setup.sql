@@ -16,6 +16,11 @@
 -- =============================================================================
 \set ON_ERROR_STOP on
 SET statement_timeout = 0;
+
+-- Sequence feeding onboard.sql (US-1.1 load script): unique phone + global_id per
+-- onboard call. Persisted so onboard never collides on uk_kyc_phone_hash.
+CREATE SEQUENCE IF NOT EXISTS lt_onboard_seq START 1;
+
 BEGIN;
 DO $$
 DECLARE

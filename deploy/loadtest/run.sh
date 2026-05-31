@@ -8,10 +8,11 @@
 #   TEARDOWN=1 ./run.sh ...  # remove LT* data after the run
 #   REPORT=path.md ./run.sh ...  # override the report path
 #
-# Mix (pgbench script weights, /100): topup 20 / transfer 18 / withdraw 12 /
-#   reversal 10 / withdraw_reversal 10 / merchant_topup 12 / merchant_withdraw 10 /
-#   restraint 8. Covers topup, transfer(+fee), reversal, withdraw(+fee), reversal
-#   with fee, merchant topup (consumer→settlement), merchant withdraw, restraint add+remove.
+# Mix (pgbench script weights, /100): topup 16 / transfer 16 / withdraw 10 /
+#   reversal 10 / withdraw_reversal 10 / merchant_topup 10 / merchant_withdraw 10 /
+#   restraint 6 / onboard 7 / update_kyc 5. Covers topup, transfer(+fee), reversal,
+#   withdraw(+fee), reversal with fee, merchant topup (consumer→settlement), merchant
+#   withdraw, restraint add+remove, OTP-free onboarding (US-1.1), KYC update (US-1.2).
 # Runs INSIDE the postgres container (pgbench → local socket, no PgBouncer).
 #
 # Always writes a markdown result report to deploy/loadtest/reports/pgbench_*.md:
@@ -44,7 +45,7 @@ q() { docker exec -e PGPASSWORD="$PW" "$CTN" psql -U postgres -d wallet -tAc "$1
 echo "▶ copying scripts into $CTN ..."
 docker exec "$CTN" mkdir -p /tmp/lt
 for f in setup teardown topup transfer withdraw merchant_withdraw reversal \
-         merchant_topup withdraw_reversal restraint; do
+         merchant_topup withdraw_reversal restraint onboard update_kyc; do
   docker cp "deploy/loadtest/$f.sql" "$CTN:/tmp/lt/$f.sql"
 done
 
@@ -53,24 +54,29 @@ if [[ "${SETUP:-0}" == "1" ]]; then
   docker exec -e PGPASSWORD="$PW" "$CTN" psql -U postgres -d wallet -q -f /tmp/lt/setup.sql
 fi
 
+# onboard.sql needs lt_onboard_seq even when SETUP=0 (idempotent guard).
+q "CREATE SEQUENCE IF NOT EXISTS lt_onboard_seq START 1;" >/dev/null
+
 # Snapshot the ledger high-water mark AFTER any seeding, so the report attributes
 # only the load run's rows (not the seed's).
 s0="$(q "SELECT COALESCE(MAX(SEQ_NO),0) FROM WLT_TRAN_HIST;")"
 
-echo "▶ pgbench: target ${TPS} TPS, ${DUR}s, ${CLIENTS} clients (8-way mix) ${HOST:+via $HOST:$PORT}"
+echo "▶ pgbench: target ${TPS} TPS, ${DUR}s, ${CLIENTS} clients (10-way mix) ${HOST:+via $HOST:$PORT}"
 set +e
 docker exec -e PGPASSWORD="$PW" "$CTN" pgbench $CONN -U postgres -d wallet \
   --no-vacuum --protocol="$PROTO" --max-tries=10 \
   --rate="$TPS" --time="$DUR" --client="$CLIENTS" --jobs=4 \
   --define=nwallet=$NW --define=ngroup=$NG \
-  --file=/tmp/lt/topup.sql@20 \
-  --file=/tmp/lt/transfer.sql@18 \
-  --file=/tmp/lt/withdraw.sql@12 \
+  --file=/tmp/lt/topup.sql@16 \
+  --file=/tmp/lt/transfer.sql@16 \
+  --file=/tmp/lt/withdraw.sql@10 \
   --file=/tmp/lt/reversal.sql@10 \
   --file=/tmp/lt/withdraw_reversal.sql@10 \
-  --file=/tmp/lt/merchant_topup.sql@12 \
+  --file=/tmp/lt/merchant_topup.sql@10 \
   --file=/tmp/lt/merchant_withdraw.sql@10 \
-  --file=/tmp/lt/restraint.sql@8 \
+  --file=/tmp/lt/restraint.sql@6 \
+  --file=/tmp/lt/onboard.sql@7 \
+  --file=/tmp/lt/update_kyc.sql@5 \
   --report-per-command 2>&1 | tee "$OUT"
 pg_rc=${PIPESTATUS[0]}
 set -e
@@ -108,7 +114,7 @@ hist_rows="$(q "SELECT TRAN_TYPE||'|'||count(*) FROM WLT_TRAN_HIST WHERE SEQ_NO 
   echo "| Tier | pgbench (DB/SP, inside ${CTN}) ${HOST:+via $HOST:$PORT} |"
   echo "| Target rate / duration / clients | ${TPS} TPS · ${DUR}s · ${CLIENTS} clients |"
   echo "| Wallets / Groups | NWALLET=${NW} · NGROUP=${NG} |"
-  echo "| Mix (/100) | topup 20 · transfer 18 · withdraw 12 · reversal 10 · withdraw_reversal 10 · merchant_topup 12 · merchant_withdraw 10 · restraint 8 |"
+  echo "| Mix (/100) | topup 16 · transfer 16 · withdraw 10 · reversal 10 · withdraw_reversal 10 · merchant_topup 10 · merchant_withdraw 10 · restraint 6 · onboard 7 · update_kyc 5 |"
   echo "| pgbench exit code | ${pg_rc} (0 = ok) |"
   echo
   echo "## Throughput & reliability"

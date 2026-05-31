@@ -14,17 +14,23 @@ SET statement_timeout = 0;
 
 \echo '--- load-test rows BEFORE teardown ---'
 SELECT 'wlt_acct (LT)'   AS scope, count(*) AS rows FROM wlt_acct      WHERE acct_no  LIKE 'LT%'
-UNION ALL SELECT 'fm_client (LT)',         count(*) FROM fm_client     WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%'
+UNION ALL SELECT 'fm_client (LT)',         count(*) FROM fm_client     WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%' OR global_id LIKE 'LT-OB-%'
 UNION ALL SELECT 'wlt_tran_hist (PB/LT)',  count(*) FROM wlt_tran_hist WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%'
 UNION ALL SELECT 'wlt_gl_batch (PB/LT)',      count(*) FROM wlt_gl_batch     WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
 
 BEGIN;
 /*
 -- Snapshot the load-test entity keys before deleting their parent rows.
-CREATE TEMP TABLE _lt_acct ON COMMIT DROP AS
-  SELECT internal_key FROM wlt_acct  WHERE acct_no  LIKE 'LT%';
+-- onboard.sql (US-1.1) mints C* clients (global_id 'LT-OB-%') with 9701* wallets —
+-- not 'LT'-prefixed — so scope those via client_no, not acct_no.
 CREATE TEMP TABLE _lt_client ON COMMIT DROP AS
-  SELECT client_no   FROM fm_client WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%';
+  SELECT client_no FROM fm_client
+   WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%'
+      OR global_id LIKE 'LT-OB-%';
+CREATE TEMP TABLE _lt_acct ON COMMIT DROP AS
+  SELECT internal_key FROM wlt_acct
+   WHERE acct_no LIKE 'LT%'
+      OR client_no IN (SELECT client_no FROM _lt_client);   -- incl. 9701* onboard wallets
 
 -- 1) Ledger / event / tracking rows (no FK to accounts → free order).
 --    Matched by load-test account/client linkage AND by unambiguous LT/PB
@@ -60,7 +66,8 @@ DELETE FROM wlt_withdraw_track
 DELETE FROM wlt_sweep_log    WHERE group_id LIKE 'LTG%';
 DELETE FROM wlt_restraints   WHERE internal_key IN (SELECT internal_key FROM _lt_acct);
 DELETE FROM wlt_acct_bal     WHERE internal_key IN (SELECT internal_key FROM _lt_acct);
-DELETE FROM wlt_acct         WHERE acct_no  LIKE 'LT%';
+DELETE FROM wlt_acct         WHERE acct_no  LIKE 'LT%'
+    OR client_no IN (SELECT client_no FROM _lt_client);   -- incl. onboard 9701* wallets
 DELETE FROM wlt_acct_group   WHERE group_id LIKE 'LTG%';
 
 -- 3) Client master & its child tables.
@@ -76,7 +83,7 @@ COMMIT;
 */
 \echo '--- remaining load-test rows AFTER teardown (expect all 0) ---'
 SELECT 'wlt_acct (LT)'   AS scope, count(*) AS rows FROM wlt_acct      WHERE acct_no  LIKE 'LT%'
-UNION ALL SELECT 'fm_client (LT)',         count(*) FROM fm_client     WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%'
+UNION ALL SELECT 'fm_client (LT)',         count(*) FROM fm_client     WHERE client_no LIKE 'LTC%' OR client_no LIKE 'LTGC%' OR global_id LIKE 'LT-OB-%'
 UNION ALL SELECT 'wlt_tran_hist (PB/LT)',  count(*) FROM wlt_tran_hist WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%'
 UNION ALL SELECT 'wlt_gl_batch (PB/LT)',      count(*) FROM wlt_gl_batch     WHERE reference LIKE 'PB-%' OR reference LIKE 'PBEXT-%' OR reference LIKE 'LT-%';
-SELECT 'baseline fm_client (C*) preserved' AS check, count(*) AS rows FROM fm_client WHERE client_no NOT LIKE 'LT%';
+SELECT 'baseline fm_client (C*) preserved' AS check, count(*) AS rows FROM fm_client WHERE client_no NOT LIKE 'LT%' AND global_id NOT LIKE 'LT-OB-%';

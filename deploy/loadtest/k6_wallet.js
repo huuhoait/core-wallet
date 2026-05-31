@@ -10,8 +10,8 @@
 //
 // Mix — mirrors the pgbench DB/SP tier (deploy/loadtest/run.sh) 1:1 so the HTTP
 // and DB tiers are directly comparable (weights /100):
-//   topup 20 / transfer 18 / withdraw 12 / reversal 10 / withdraw_reversal 10 /
-//   merchant_topup 12 / merchant_withdraw 10 / restraint 8
+//   topup 16 / transfer 16 / withdraw 10 / reversal 10 / withdraw_reversal 10 /
+//   merchant_topup 10 / merchant_withdraw 10 / restraint 6 / onboard 7 / kyc_update 5
 //
 // Multi-call flows post an original then act on it (2 HTTP calls, like the matching
 // *.sql), so the second call always finds a SUCCESS original:
@@ -19,6 +19,13 @@
 //   - withdraw_reversal → withdraw + POST /treasury/withdrawals/:ext/reverse (withdraw_reversal.sql)
 //   - merchant_topup    → consumer→settlement transfer LT→LTGS              (merchant_topup.sql)
 //   - restraint         → POST /finance/restraints + /:id/release           (restraint.sql)
+//
+// Onboarding (OTP-free, US-1.1/1.2):
+//   - onboard    → POST /v1/onboard — creates a NEW client + KYC + zero-balance
+//                  wallet. Unique phone/global_id per (VU,iter). GROWS the DB
+//                  (new C* client + 9701* wallet per call — re-init between heavy runs).
+//   - kyc_update → POST /v1/clients/LTC*/kyc — refresh eKYC + tier on a seeded LT
+//                  consumer (no growth; exercises the UPDATE audit path).
 //
 // VERSION_CONFLICT surfaces as HTTP 409 (the Go layer does not auto-retry today);
 // it is counted as `conflict`, not a hard failure — a real client should retry.
@@ -52,7 +59,9 @@ const outcome = new Counter('outcome');
 const KNOWN_OUTCOMES = [
   // success
   'SUCCESS', 'DUPLICATE', 'BALANCE_OK', 'REVERSED', 'REVERSED_DUP', 'SETTLEMENT_SWEEP_REQUIRED',
-  'RESTRAINT_ADDED', 'RESTRAINT_RELEASED',
+  'RESTRAINT_ADDED', 'RESTRAINT_RELEASED', 'ONBOARDED', 'KYC_UPDATED',
+  // onboarding validation (onboard_client / update_kyc)
+  'PHONE_ALREADY_REGISTERED', 'ORG_FIELDS_REQUIRED', 'INVALID_PHONE_FORMAT', 'CLIENT_NOT_FOUND',
   // restraint validation (add_restraint, §4.9)
   'RESTRAINT_TYPE_INVALID', 'RESTRAINT_PURPOSE_INVALID', 'RESTRAINT_AMT_EXCEEDS_BALANCE',
   // business / errors
@@ -99,6 +108,7 @@ const H = { headers: { 'Content-Type': 'application/json', 'X-Caller-Subject': '
 const acct = (i) => 'LT' + String(i).padStart(10, '0');
 const grp  = (i) => 'LTG' + String(i).padStart(2, '0');
 const stl  = (i) => 'LTGS' + String(i).padStart(4, '0');   // group SETTLEMENT acct (8 chars — passes the HTTP acct_no validator; merchant_topup target)
+const kyc  = (i) => 'LTC' + String(i).padStart(9, '0');    // seeded LT consumer client_no (update_kyc target)
 const ref  = (p) => `${p}-${__VU}-${__ITER}-${Date.now()}`;
 
 // outcomeLabel derives a single business label from a response: the success
@@ -173,32 +183,61 @@ function addReleaseRestraint() {
   check(rel, { 'released': (r) => r.status === 200 });
 }
 
-// 8-way mix, weights identical to the pgbench tier (deploy/loadtest/run.sh).
+// onboard mirrors onboard.sql (US-1.1): POST /v1/onboard creates a NEW client + KYC
+// + zero-balance wallet. A per-(VU,iter) counter keeps phone + global_id unique
+// within a run (cross-run reuse → 409 PHONE_ALREADY_REGISTERED, a handled outcome).
+// The 201 carries no transaction_status (not a posting), so it skips classify().
+function onboard() {
+  const n = __VU * 1000000 + __ITER;
+  const phone = '08' + String(n % 100000000).padStart(8, '0');
+  const res = http.post(`${BASE}/v1/onboard`, JSON.stringify({
+    client_name: 'K6 Onboard ' + n, client_type: 'IND', phone,
+    global_id: 'LT-OB-K6-' + n, global_id_type: 'CCCD',
+    birthdate: '1990-01-01', sex: 'M',
+    extra_data: { surname: 'K6', given_name: 'Onboard' + n },
+  }), H);
+  recordOutcomeAs(res, 'ONBOARDED');
+  check(res, { 'handled': (r) => [201, 400, 409, 422].includes(r.status) });
+}
+
+// kyc_update mirrors update_kyc.sql (US-1.2): refresh eKYC + tier on a seeded LT
+// consumer (LTC*). 200, no transaction_status → custom check, not classify().
+function updateKyc() {
+  const res = http.post(`${BASE}/v1/clients/${kyc(randomIntBetween(1, NW))}/kyc`, JSON.stringify({
+    kyc_tier: String(randomIntBetween(1, 3)), status: 'A', risk_level: 'M',
+    ekyc_provider: 'VNG', ekyc_ref: ref('K6KYC'), face_match_score: 0.97, liveness_result: 'PASS',
+    extra_data: { occupation_code: 'ENG' },
+  }), H);
+  recordOutcomeAs(res, 'KYC_UPDATED');
+  check(res, { 'handled': (r) => [200, 404, 422].includes(r.status) });
+}
+
+// 10-way mix, weights identical to the pgbench tier (deploy/loadtest/run.sh).
 export default function () {
   const r = Math.random() * 100;
 
-  if (r < 20) {
-    // topup (20%)
+  if (r < 16) {
+    // topup (16%)
     classify(http.post(`${BASE}/v1/finance/topup`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(10000, 1000000)), reference: ref('K6TU'),
     }), H));
 
-  } else if (r < 38) {
-    // transfer — TRFOUT, consumer → consumer (18%)
+  } else if (r < 32) {
+    // transfer — TRFOUT, consumer → consumer (16%)
     const a = randomIntBetween(1, NW); const b = (a % NW) + 1;
     classify(http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
       from_acct_no: acct(a), to_acct_no: acct(b), amount: String(randomIntBetween(1000, 500000)),
       reference: ref('K6TR'), tran_type: 'TRFOUT',
     }), H));
 
-  } else if (r < 50) {
-    // withdraw — fee + VAT (12%)
+  } else if (r < 42) {
+    // withdraw — fee + VAT (10%)
     classify(http.post(`${BASE}/v1/finance/withdraw`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(50000, 500000)),
       reference: ref('K6WD'), ext_payout_ref: ref('K6EXT'), beneficiary_bank: 'BIDV', beneficiary_acct: '9990000000',
     }), H));
 
-  } else if (r < 60) {
+  } else if (r < 52) {
     // reversal — transfer + reverse (10%)  [reversal.sql]
     const a = randomIntBetween(1, NW); const b = (a % NW) + 1;
     const reference = ref('K6RVT');
@@ -210,7 +249,7 @@ export default function () {
       reference, reason: 'k6 load-test reversal', initiator: 'OPS_MANUAL',
     }), H));
 
-  } else if (r < 70) {
+  } else if (r < 62) {
     // withdraw_reversal — withdraw + treasury-failed roll-back (10%)  [withdraw_reversal.sql]
     const reference = ref('K6RVW'); const ext = ref('K6RVWEXT');
     const orig = http.post(`${BASE}/v1/finance/withdraw`, JSON.stringify({
@@ -221,22 +260,30 @@ export default function () {
       fail_code: 'NAPAS_TIMEOUT', fail_reason: 'k6 load-test withdraw reversal', initiator: 'TREASURY_FAILED',
     }), H));
 
-  } else if (r < 82) {
-    // merchant_topup — a consumer pays a merchant: consumer → group SETTLEMENT (12%)  [merchant_topup.sql]
+  } else if (r < 72) {
+    // merchant_topup — a consumer pays a merchant: consumer → group SETTLEMENT (10%)  [merchant_topup.sql]
     classify(http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
       from_acct_no: acct(randomIntBetween(1, NW)), to_acct_no: stl(randomIntBetween(1, NG)),
       amount: String(randomIntBetween(10000, 500000)), reference: ref('K6MTU'), tran_type: 'TRFOUT',
     }), H));
 
-  } else if (r < 92) {
+  } else if (r < 82) {
     // merchant_withdraw — hot-shard sweep + settlement (10%)
     classify(http.post(`${BASE}/v1/finance/merchant-withdraw`, JSON.stringify({
       group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(50000, 2000000)), reference: ref('K6MW'),
     }), H));
 
-  } else {
-    // restraint — add a DEBIT/PLEDGE hold then release it (8%)  [restraint.sql]
+  } else if (r < 88) {
+    // restraint — add a DEBIT/PLEDGE hold then release it (6%)  [restraint.sql]
     addReleaseRestraint();
+
+  } else if (r < 95) {
+    // onboard — OTP-free client + KYC + wallet (7%)  [onboard.sql]
+    onboard();
+
+  } else {
+    // kyc_update — refresh eKYC + tier on a seeded consumer (5%)  [update_kyc.sql]
+    updateKyc();
   }
 }
 
