@@ -86,6 +86,11 @@ const (
 	CodeInvalidAcctType     = "INVALID_ACCT_TYPE"
 	CodeMaxWalletExceeded   = "MAX_WALLET_PER_CLIENT_EXCEEDED"
 	CodeAcctCloseNonzeroBal = "ACCT_CLOSE_NONZERO_BAL"
+	// Merchant hot-wallet group lifecycle (activate_hot_wallet, P0052/P0053).
+	// GROUP_NOT_FOUND (P0050) / SETTLEMENT_NOT_FOUND (P0054) map to 404 via the
+	// _NOT_FOUND family fallback, so they need no explicit constant here.
+	CodeInvalidShardCount     = "INVALID_SHARD_COUNT"
+	CodeGroupAlreadyActivated = "GROUP_ALREADY_ACTIVATED"
 	// EOD period locking (US-6.1) — a posting/reversal dated into a closed
 	// business period is rejected by the write-freeze trigger (SQLSTATE P0092).
 	CodePeriodClosed = "PERIOD_CLOSED"

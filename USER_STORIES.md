@@ -8,7 +8,7 @@ docs alone).
 > dựa trên **code / stored procedure / test thực tế** trong repo, không chỉ dựa
 > trên tài liệu thiết kế.
 
-**Last reviewed / Cập nhật:** 2026-05-30
+**Last reviewed / Cập nhật:** 2026-05-31
 
 ## Status legend / Chú thích trạng thái
 
@@ -22,7 +22,7 @@ docs alone).
 
 | Epic | ✅ | 🟡 | ⬜ |
 |------|:--:|:--:|:--:|
-| 1. Onboarding & Wallet Management | 4 | 0 | 4 |
+| 1. Onboarding & Wallet Management | 5 | 0 | 7 |
 | 2. Transactions — Posting | 6 | 0 | 0 |
 | 3. Reversals & Refunds | 5 | 1 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
@@ -32,7 +32,7 @@ docs alone).
 | 8. Audit, PII & Compliance | 2 | 1 | 1 |
 | 9. Platform / Infra / Observability | 10 | 0 | 3 |
 | 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **46** | **4** | **15** |
+| **Total** | **47** | **4** | **18** |
 
 ---
 
@@ -42,6 +42,11 @@ docs alone).
 > count limits (US-1.4) are implemented. The **onboarding flow** (OTP, eKYC, KYC
 > tier progression) is **not** — that remains seed-only / out of scope.
 > Spec: [docs/specs/wallet_onboarding.md](docs/specs/wallet_onboarding.md).
+>
+> Merchant **hot-wallet lifecycle**: activation (US-1.9) is done; group
+> provisioning (US-1.10), cold→hot deposit routing (US-1.11) and rescaling
+> (US-1.12) are pending — see
+> [docs/specs/finance_transaction.md](docs/specs/finance_transaction.md) §3/§4.8.
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
@@ -53,6 +58,10 @@ docs alone).
 | US-1.6 | As compliance, KYC downgrade & 12-month re-KYC | ⬜ | Spec §5.2, §13 (open item). |
 | US-1.7 | As a corporate customer, I onboard (CORP, legal rep / UBO) | ⬜ | Spec §13 — schema gaps noted; not designed. |
 | US-1.8 | As ops, I create/update a **client master record** (identity only, no KYC/onboarding flow) | ✅ | SP `create_client`/`update_client` (SECURITY DEFINER); `POST /v1/clients` + `PATCH /v1/clients/:client_no`. FM_CLIENT (+FM_CLIENT_INDVL). Wallet opening/KYC still out of scope. |
+| US-1.9 | As ops, I **activate a merchant hot wallet** (promote a cold group, 0 shards → N) | ✅ | SP `activate_hot_wallet(group_id, shard_count:=4)` (SECURITY DEFINER); `POST /v1/merchant-groups/:group_id/activate`. Creates N empty `SHARD` sub-accounts (index 0..N-1, balance 0 — no funds move, same invariant as `open_account`), flips `WLT_ACCT_GROUP.SHARD_COUNT`. Tiers 4/8/16 (4 = default); groups are now created **cold** (`SHARD_COUNT` default 0, `chk_shard_count IN (0,4,8,16)`). One-way from cold → `GROUP_ALREADY_ACTIVATED` (P0053); bad tier → `INVALID_SHARD_COUNT` (P0052); missing settlement → `SETTLEMENT_NOT_FOUND` (P0054). Tests: `wallet_activate_hotwallet_test.sql` (12/12) + `dto/group_test.go` + `repo/errors_test.go`. |
+| US-1.10 | As ops, I **provision a merchant/agent group** (group row + settlement account in one TX) | ⬜ | No SP yet — `WLT_ACCT_GROUP` + its `SETTLEMENT` account are created by hand (tests/seed). DLD §3.7 names `provision_acct_group(...)` but it does not exist. Prerequisite for US-1.9 on a real merchant (deferred settlement FK needs the same-TX pattern). |
+| US-1.11 | As the platform, I **route merchant deposits** to settlement while cold (0 shards), to a shard once hot | ⬜ | `fn_resolve_shard_acct_no` raises `GROUP_NOT_FOUND` (P0050) for a cold group (proved in `wallet_cold_merchant_test.sql` TC4); **no caller branch** chooses settlement-vs-shard. Deposit/payment posting into a merchant group is not wired. |
+| US-1.12 | As ops, I **rescale a hot wallet** (4→8→16) and rebalance existing shards | ⬜ | `activate_hot_wallet` is one-way cold→hot only. No SP adds shards to an already-hot group or rebalances balances across the new fan-out. |
 
 ## Epic 2 — Transactions (Posting) / Giao dịch ghi sổ
 
@@ -64,7 +73,7 @@ docs alone).
 | US-2.1 | As Treasury, I top-up a wallet (internal s2s credit) | ✅ | SP `post_topup`; `POST /v1/finance/topup`. |
 | US-2.2 | As a user, I transfer wallet → wallet (deadlock-safe lock ordering) | ✅ | SP `post_transfer` (5-leg); `POST /v1/finance/transfer`. |
 | US-2.3 | As a user, I withdraw to bank (DR wallet / CR nostro, fee + VAT) | ✅ | SP `post_withdraw`; `POST /v1/finance/withdraw`. |
-| US-2.4 | As a merchant, I withdraw with hot-shard sweep + settlement | ✅ | SP `post_merchant_withdraw`, `post_sweep_shard`, `fn_resolve_shard_acct_no`; `POST /v1/finance/merchant-withdraw`. |
+| US-2.4 | As a merchant, I withdraw with hot-shard sweep + settlement | ✅ | SP `post_merchant_withdraw`, `post_sweep_shard`, `fn_resolve_shard_acct_no`; `POST /v1/finance/merchant-withdraw`. Groups are now created **cold** (0 shards) and promoted via `activate_hot_wallet` (US-1.9); withdraw still works cold (URGENT sweep loops over 0 shards → debits settlement directly). Deposit-side shard routing for cold groups = US-1.11. |
 | US-2.5 | As finance, fees + VAT are computed and posted as separate legs | ✅ | Fee/VAT engine inside posting SPs; GL revenue + VAT payable. |
 | US-2.7 | As risk/ops, each posting carries a metadata bag | ✅ | SP `fn_validate_metadata`; `WLT_TRAN_HIST.METADATA` (≤1KB, P1-forbidden). Client-info snapshot **retired**: `CLIENT_INFO` + `fn_build_client_info` removed (write-only, no reader); redundant `TRAN_DATE`/`EFFECT_DATE` also dropped (they always equalled `POST_DATE`). |
 
@@ -162,7 +171,7 @@ docs alone).
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
 | US-10.1 | SQL accounting/balance assertion suite | ✅ | `db/tests/wallet_accounting_test.sql`. |
-| US-10.2 | Merchant flow + hot-wallet tests | ✅ | `db/tests/wallet_merchant_flow_test.sql`, `wallet_merchant_hotwallet_test.sql`. |
+| US-10.2 | Merchant flow + hot-wallet tests | ✅ | `db/tests/wallet_merchant_flow_test.sql`, `wallet_merchant_hotwallet_test.sql`, `wallet_activate_hotwallet_test.sql` (activation, 12/12), `wallet_cold_merchant_test.sql` (0-shard accounting & normal-wallet isolation, 7/7). |
 | US-10.3 | Reconciliation check | ✅ | `db/tests/wallet_reconciliation_check.sql`. |
 | US-10.4 | Reversal test | ✅ | `db/tests/wallet_transfer_reversal_test.sql`. |
 | US-10.5 | k6 HTTP load test + ledger-row attribution | ✅ | `deploy/loadtest/k6.sh`, `k6_wallet.js`, `k6_sweep.sh`. |
@@ -181,6 +190,7 @@ docs alone).
 4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
 5. **Onboarding service** (Epic 1) — currently seed-only; no production path.
 6. ~~**EOD period-locking + GL feed** (US-6.1/6.2)~~ — ✅ done: `eod_close_period` write-freeze (full immutability) on closed business dates (unblocks US-3.7) + chunked `eod_gl_feed_post` (`WLT_GL_BATCH` P→S). Remaining Epic-6 gaps: full suspense/clearing GL (US-6.2), e-invoice (US-6.4), maker-checker JE (US-6.5), reversal time-window (US-3.6).
+7. **Merchant hot-wallet lifecycle** — activation (US-1.9) ✅ done. Next, in order: group provisioning SP (US-1.10) → cold→hot deposit routing (US-1.11) → hot-wallet rescale 4→8→16 with rebalance (US-1.12).
 
 > These are suggestions based on the gap analysis above — confirm against the
 > product roadmap before scheduling. / Đây là gợi ý dựa trên phân tích khoảng

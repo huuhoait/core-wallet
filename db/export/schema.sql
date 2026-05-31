@@ -72,6 +72,82 @@ END $pii_dek$;
 
 
 --
+-- Name: activate_hot_wallet(character varying, smallint, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.activate_hot_wallet(p_group_id character varying, p_shard_count smallint DEFAULT 4, p_channel character varying DEFAULT 'OPS'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(group_id character varying, shard_count smallint, settlement_acct_no character varying, shard_acct_nos character varying[])
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+#variable_conflict use_column
+-- Promote a cold merchant/agent group (0 shards) to a hot wallet by
+-- materialising N empty SHARD sub-accounts and flipping WLT_ACCT_GROUP.SHARD_COUNT.
+--
+-- Shards are created with ZERO balance — no funds move, so no ledger entry is
+-- needed (same invariant as open_account: never inject off-ledger balance). The
+-- settlement account keeps the whole balance; incoming top-ups route to shards
+-- via fn_resolve_shard_acct_no, and post_sweep_shard later drains them back.
+--
+-- One-way from cold: re-activating an already-hot group raises
+-- GROUP_ALREADY_ACTIVATED (rescaling an existing fleet is a separate operation).
+-- SECURITY DEFINER because wallet_app holds only SELECT on WLT_ACCT_GROUP.
+DECLARE
+  v_grp      WLT_ACCT_GROUP%ROWTYPE;
+  v_settle   WLT_ACCT%ROWTYPE;
+  v_existing INT;
+  v_no       VARCHAR(20);
+  v_accts    VARCHAR(20)[] := '{}';
+  i          INT;
+BEGIN
+  PERFORM set_config('audit.actor',   COALESCE(p_actor, 'ops'), TRUE);
+  PERFORM set_config('audit.channel', COALESCE(p_channel, 'OPS'), TRUE);
+
+  -- 1. shard count must be a supported hot tier (mirrors chk_shard_count: 4/8/16)
+  IF p_shard_count NOT IN (4, 8, 16) THEN
+    RAISE EXCEPTION 'INVALID_SHARD_COUNT: % (allowed: 4, 8, 16)', p_shard_count
+      USING ERRCODE = 'P0052';
+  END IF;
+
+  -- 2. lock the group; must exist
+  SELECT * INTO v_grp FROM WLT_ACCT_GROUP WHERE GROUP_ID = p_group_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'GROUP_NOT_FOUND: %', p_group_id USING ERRCODE = 'P0050';
+  END IF;
+
+  -- 3. activation is one-way from cold (shard_count = 0 AND no physical shards)
+  SELECT count(*) INTO v_existing FROM WLT_ACCT
+   WHERE GROUP_ID = p_group_id AND ACCT_ROLE = 'SHARD';
+  IF v_grp.SHARD_COUNT <> 0 OR v_existing > 0 THEN
+    RAISE EXCEPTION 'GROUP_ALREADY_ACTIVATED: % already has % shard(s)', p_group_id, v_existing
+      USING ERRCODE = 'P0053';
+  END IF;
+
+  -- 4. settlement account anchors client_no + ccy + acct_type for the new shards
+  SELECT * INTO v_settle FROM WLT_ACCT
+   WHERE GROUP_ID = p_group_id AND ACCT_ROLE = 'SETTLEMENT' FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'SETTLEMENT_NOT_FOUND: group % has no settlement account', p_group_id
+      USING ERRCODE = 'P0054';
+  END IF;
+
+  -- 5. materialise N empty SHARD wallets (shard_index 0..N-1, balance 0)
+  FOR i IN 0 .. p_shard_count - 1 LOOP
+    v_no := '9701' || LPAD(nextval('seq_acct_no')::text, 10, '0');
+    INSERT INTO WLT_ACCT (ACCT_NO, CLIENT_NO, ACCT_TYPE, CCY, ACCT_STATUS,
+       ACTUAL_BAL, PREV_DAY_ACTUAL_BAL, ACCT_ROLE, GROUP_ID, SHARD_INDEX, CHANNEL)
+    VALUES (v_no, v_settle.CLIENT_NO, v_settle.ACCT_TYPE, v_settle.CCY, 'A',
+       0, 0, 'SHARD', p_group_id, i, p_channel);
+    v_accts := array_append(v_accts, v_no);
+  END LOOP;
+
+  -- 6. flip the group's configured shard_count to the hot tier
+  UPDATE WLT_ACCT_GROUP SET SHARD_COUNT = p_shard_count WHERE GROUP_ID = p_group_id;
+
+  RETURN QUERY SELECT p_group_id, p_shard_count, v_settle.ACCT_NO, v_accts;
+END $$;
+
+
+--
 -- Name: add_restraint(character varying, character varying, character varying, numeric, date, date, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3457,7 +3533,7 @@ CREATE TABLE public.wlt_acct_group (
     group_id character varying(20) NOT NULL,
     client_no character varying(48) NOT NULL,
     group_type character varying(12) NOT NULL,
-    shard_count smallint DEFAULT 32 NOT NULL,
+    shard_count smallint DEFAULT 0 NOT NULL,
     settlement_acct_no character varying(20) NOT NULL,
     shard_threshold numeric(18,2) DEFAULT 200000 NOT NULL,
     shard_buffer numeric(18,2) DEFAULT 50000 NOT NULL,
@@ -3469,7 +3545,7 @@ CREATE TABLE public.wlt_acct_group (
     created_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL,
     updated_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL,
     CONSTRAINT chk_group_type CHECK (((group_type)::text = ANY (ARRAY[('MERCHANT'::character varying)::text, ('AGENT'::character varying)::text, ('NOSTRO_HOT'::character varying)::text]))),
-    CONSTRAINT chk_shard_count CHECK ((shard_count = ANY (ARRAY[8, 16, 32, 64])))
+    CONSTRAINT chk_shard_count CHECK ((shard_count = ANY (ARRAY[0, 4, 8, 16])))
 );
 
 
@@ -5114,6 +5190,13 @@ ALTER TABLE ONLY public.wlt_sweep_log
 
 GRANT USAGE ON SCHEMA public TO wallet_app;
 GRANT USAGE ON SCHEMA public TO wallet_pii_ro;
+
+
+--
+-- Name: FUNCTION activate_hot_wallet(p_group_id character varying, p_shard_count smallint, p_channel character varying, p_actor character varying); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.activate_hot_wallet(p_group_id character varying, p_shard_count smallint, p_channel character varying, p_actor character varying) TO wallet_app;
 
 
 --
