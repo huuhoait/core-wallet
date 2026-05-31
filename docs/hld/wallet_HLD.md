@@ -365,7 +365,7 @@ pg_cron janitor (every 60s):
 **Fee + VAT config lives in `WLT_TRAN_DEF`** (extra columns, no separate table):
 each `TRAN_TYPE` (e.g. `TRFOUT`, `WDRAW` — max 6 characters) carries `FEE_TYPE` (FIXED/PERCENT/NONE), `FEE_AMT`, `FEE_RATE`, `FEE_MIN`, `FEE_MAX`, `VAT_RATE`, `FEE_GL_CODE`, `VAT_GL_CODE`. The engine reads it once to post both the main transaction and the fee leg.
 
-For each transaction that has a fee, the posting engine generates **3 extra legs** under the same `TFR_INTERNAL_KEY`:
+For each transaction that has a fee, the posting engine generates **3 extra legs** under the same `TRAN_INTERNAL_ID`:
 
 ```
 Original transaction (transfer 1M, FEE_TYPE='FIXED', FEE_AMT=5,500 gross, VAT_RATE=0.10):
@@ -393,7 +393,7 @@ Customer sees: wallet A −1,005,500; wallet B +1,000,000.
 ### 6.5 Reversal / Refund
 
 - A reversal **does not UPDATE** the original row.
-- Generate 2 new rows (DR↔CR flipped), `REVERSAL_TRAN_TYPE` links back to the original row via the original transaction's `TFR_INTERNAL_KEY` + `REVERSAL_DATE`.
+- Generate 2 new rows (DR↔CR flipped), `REVERSAL_TRAN_TYPE` links back to the original row via the original transaction's `TRAN_INTERNAL_ID` + `REVERSAL_DATE`.
 - If the original transaction collected a fee + VAT → the reversal must **refund both the fee and the VAT** (3 reversed legs).
 
 ---

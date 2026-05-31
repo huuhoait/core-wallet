@@ -46,7 +46,7 @@ BEGIN
   SELECT actual_bal INTO v_a0 FROM wlt_acct WHERE internal_key=v_ka;
   SELECT actual_bal INTO v_b0 FROM wlt_acct WHERE internal_key=v_kb;
 
-  SELECT tfr_internal_key, fee_gross, vat_amount INTO v_tfr, v_fee, v_vat
+  SELECT tran_internal_id, fee_gross, vat_amount INTO v_tfr, v_fee, v_vat
     FROM post_transfer(v_a, v_b, 100000, 'ACCTT-TRF-1', 'TRFOUT', '{}'::jsonb, 'MOBILE', 'test');
 
   -- TC1: double-entry balanced
@@ -81,14 +81,14 @@ BEGIN
      format('A:-%s (expect 105500)  B:+%s (expect 100000)', v_a0-v_a1, v_b1-v_b0));
 
   -- TC5: fee leg references origin (TRFOUT) SEQ_NO via TFR_SEQ_NO
-  SELECT seq_no INTO v_seq_base FROM wlt_tran_hist WHERE tfr_internal_key=v_tfr AND tran_type='TRFOUT';
-  SELECT tfr_seq_no INTO v_ref_seq FROM wlt_tran_hist WHERE tfr_internal_key=v_tfr AND tran_type='FEETRF';
+  SELECT seq_no INTO v_seq_base FROM wlt_tran_hist WHERE tran_internal_id=v_tfr AND tran_type='TRFOUT';
+  SELECT tfr_seq_no INTO v_ref_seq FROM wlt_tran_hist WHERE tran_internal_id=v_tfr AND tran_type='FEETRF';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC5 FEE leg TFR_SEQ_NO = origin TRFOUT SEQ_NO',
      v_ref_seq = v_seq_base, format('fee.tfr_seq_no=%s origin.seq_no=%s', v_ref_seq, v_seq_base));
 
   -- ════════════════════ FEE-FREE TRANSFER (TRFOUTF) ════════════════════
-  SELECT tfr_internal_key, fee_gross INTO v_tfr, v_fee
+  SELECT tran_internal_id, fee_gross INTO v_tfr, v_fee
     FROM post_transfer(v_a, v_b, 10000, 'ACCTT-FREE-1', 'TRFOUTF', '{}'::jsonb, 'MOBILE', 'test');
   SELECT count(*) INTO v_legs FROM wlt_gl_batch WHERE tran_key=v_tfr;
   INSERT INTO _t(name,ok,detail) VALUES
@@ -109,7 +109,7 @@ BEGIN
   END;
 
   -- ════════════════════ WITHDRAW WITH FEE ════════════════════
-  SELECT tfr_internal_key, fee_gross, vat_amount INTO v_tfr, v_fee, v_vat
+  SELECT tran_internal_id, fee_gross, vat_amount INTO v_tfr, v_fee, v_vat
     FROM post_withdraw(v_a, 200000, 'ACCTT-WD-1', 'EXTWD-T1', 'BIDV', '12345678901234', '{}'::jsonb, 'MOBILE', 'test');
 
   -- TC8: withdraw double-entry
@@ -135,8 +135,8 @@ BEGIN
      format('fee=%s net=%s vat=%s', v_fee, v_net401, v_vat203));
 
   -- TC11: FEEWD leg references origin WDRAW SEQ_NO
-  SELECT seq_no INTO v_seq_base FROM wlt_tran_hist WHERE tfr_internal_key=v_tfr AND tran_type='WDRAW';
-  SELECT tfr_seq_no INTO v_ref_seq FROM wlt_tran_hist WHERE tfr_internal_key=v_tfr AND tran_type='FEEWD';
+  SELECT seq_no INTO v_seq_base FROM wlt_tran_hist WHERE tran_internal_id=v_tfr AND tran_type='WDRAW';
+  SELECT tfr_seq_no INTO v_ref_seq FROM wlt_tran_hist WHERE tran_internal_id=v_tfr AND tran_type='FEEWD';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC11 FEEWD leg TFR_SEQ_NO = origin WDRAW SEQ_NO',
      v_ref_seq = v_seq_base, format('fee.tfr_seq_no=%s origin.seq_no=%s', v_ref_seq, v_seq_base));
@@ -154,7 +154,7 @@ BEGIN
 
   -- ════════════════════ WITHDRAW REVERSAL (RVWD + RVFEE refund) ════════════════════
   SELECT actual_bal INTO v_pre FROM wlt_acct WHERE internal_key=v_ka;          -- balance before this withdraw
-  SELECT tfr_internal_key, fee_gross INTO v_tfr, v_fee
+  SELECT tran_internal_id, fee_gross INTO v_tfr, v_fee
     FROM post_withdraw(v_a, 200000, 'ACCTT-WDR-1', 'EXTWD-REV1', 'BIDV', '12345678901234', '{}'::jsonb, 'MOBILE', 'test');
   SELECT actual_bal INTO v_postwd FROM wlt_acct WHERE internal_key=v_ka;        -- pre - (200000 + 11000)
 
@@ -181,8 +181,8 @@ BEGIN
 
   -- TC15: RVFEE refunds the fee — RVWD leg=200000, RVFEE credits wallet 11000,
   --       and revenue(401.01)/VAT(203.01) are reversed via DR legs (10000 / 1000)
-  SELECT tran_amt INTO v_rvwd FROM wlt_tran_hist WHERE tfr_internal_key=v_rev AND tran_type='RVWD';
-  SELECT tran_amt INTO v_rvfee_wallet FROM wlt_tran_hist WHERE tfr_internal_key=v_rev AND tran_type='RVFEE';
+  SELECT tran_amt INTO v_rvwd FROM wlt_tran_hist WHERE tran_internal_id=v_rev AND tran_type='RVWD';
+  SELECT tran_amt INTO v_rvfee_wallet FROM wlt_tran_hist WHERE tran_internal_id=v_rev AND tran_type='RVFEE';
   SELECT amount INTO v_dr401 FROM wlt_gl_batch WHERE tran_key=v_rev AND gl_code='401.01' AND tran_nature='DR';
   SELECT amount INTO v_dr203 FROM wlt_gl_batch WHERE tran_key=v_rev AND gl_code='203.01' AND tran_nature='DR';
   INSERT INTO _t(name,ok,detail) VALUES

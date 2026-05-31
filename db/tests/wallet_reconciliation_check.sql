@@ -38,12 +38,12 @@ seqd AS (
 ),
 -- gắn mỗi giao dịch (tran_key) với tập tran_type của nó (cho L + M)
 flow AS (
-  SELECT tfr_internal_key AS tk,
+  SELECT tran_internal_id AS tk,
          string_agg(DISTINCT tran_type,'+' ORDER BY tran_type) AS types
   FROM wlt_tran_hist
-  WHERE tfr_internal_key IS NOT NULL
+  WHERE tran_internal_id IS NOT NULL
     AND post_date >= date_trunc('month', CURRENT_DATE)::date
-  GROUP BY tfr_internal_key
+  GROUP BY tran_internal_id
 ),
 a AS (
   SELECT (coalesce(sum(CASE tran_nature WHEN 'DR' THEN amount ELSE -amount END),0)=0) ok,

@@ -184,7 +184,7 @@ func (r *PgWalletRepo) Topup(ctx context.Context, in domain.TopupInput) (*domain
 
 	err = r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
 		const q = `
-			SELECT tfr_internal_key, status, new_balance, event_uuid
+			SELECT tran_internal_id, status, new_balance, event_uuid
 			  FROM post_topup($1, $2::numeric, $3, $4::jsonb, $5, $6)
 		`
 		row := tx.QueryRow(ctx, q,
@@ -201,7 +201,7 @@ func (r *PgWalletRepo) Topup(ctx context.Context, in domain.TopupInput) (*domain
 func scanTopupResult(row pgx.Row, out *domain.TopupResult) error {
 	var amt string
 	var uu uuid.UUID
-	if err := row.Scan(&out.TFRInternalKey, &out.Status, &amt, &uu); err != nil {
+	if err := row.Scan(&out.TranInternalID, &out.Status, &amt, &uu); err != nil {
 		return err
 	}
 	out.NewBalance = amt
@@ -224,7 +224,7 @@ func (r *PgWalletRepo) Transfer(ctx context.Context, in domain.TransferInput) (*
 
 	err = r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
 		const q = `
-			SELECT tfr_internal_key, status, new_balance_from, new_balance_to,
+			SELECT tran_internal_id, status, new_balance_from, new_balance_to,
 			       fee_gross, vat_amount, event_uuid
 			  FROM post_transfer($1, $2, $3::numeric, $4, $5, $6::jsonb, $7, $8)
 		`
@@ -242,7 +242,7 @@ func (r *PgWalletRepo) Transfer(ctx context.Context, in domain.TransferInput) (*
 func scanTransferResult(row pgx.Row, out *domain.TransferResult) error {
 	var nbF, nbT, fee, vat string
 	var uu uuid.UUID
-	if err := row.Scan(&out.TFRInternalKey, &out.Status, &nbF, &nbT, &fee, &vat, &uu); err != nil {
+	if err := row.Scan(&out.TranInternalID, &out.Status, &nbF, &nbT, &fee, &vat, &uu); err != nil {
 		return err
 	}
 	out.NewBalanceFrom, out.NewBalanceTo = nbF, nbT
@@ -262,7 +262,7 @@ func (r *PgWalletRepo) Withdraw(ctx context.Context, in domain.WithdrawInput) (*
 
 	err = r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
 		const q = `
-			SELECT tfr_internal_key, status, new_balance, fee_gross, vat_amount, event_uuid
+			SELECT tran_internal_id, status, new_balance, fee_gross, vat_amount, event_uuid
 			  FROM post_withdraw($1, $2::numeric, $3, $4, $5, $6, $7::jsonb, $8, $9)
 		`
 		row := tx.QueryRow(ctx, q,
@@ -280,7 +280,7 @@ func (r *PgWalletRepo) Withdraw(ctx context.Context, in domain.WithdrawInput) (*
 func scanWithdrawResult(row pgx.Row, out *domain.WithdrawResult) error {
 	var nb, fee, vat string
 	var uu uuid.UUID
-	if err := row.Scan(&out.TFRInternalKey, &out.Status, &nb, &fee, &vat, &uu); err != nil {
+	if err := row.Scan(&out.TranInternalID, &out.Status, &nb, &fee, &vat, &uu); err != nil {
 		return err
 	}
 	out.NewBalance, out.FeeGross, out.VATAmount = nb, fee, vat
@@ -299,14 +299,14 @@ func (r *PgWalletRepo) MerchantWithdraw(ctx context.Context, in domain.MerchantW
 
 	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
 		const q = `
-			SELECT tfr_internal_key, status, amount, fee_gross, vat_amount,
+			SELECT tran_internal_id, status, amount, fee_gross, vat_amount,
 			       total_deducted, settlement_balance_after, event_uuid
 			  FROM post_merchant_withdraw($1, $2::numeric, $3, $4, $5, $6, $7)
 		`
 		row := tx.QueryRow(ctx, q,
 			in.GroupID, in.Amount, in.Reference, extRef, in.AutoSweep,
 			string(in.Audit.Channel), in.Audit.Actor)
-		// tfr_internal_key + event_uuid are NULL on the SETTLEMENT_SWEEP_REQUIRED branch.
+		// tran_internal_id + event_uuid are NULL on the SETTLEMENT_SWEEP_REQUIRED branch.
 		var tfr *int64
 		var uu *uuid.UUID
 		var amt, fee, vat, total, settle string
@@ -314,7 +314,7 @@ func (r *PgWalletRepo) MerchantWithdraw(ctx context.Context, in domain.MerchantW
 			return err
 		}
 		if tfr != nil {
-			out.TFRInternalKey = *tfr
+			out.TranInternalID = *tfr
 		}
 		if uu != nil {
 			out.EventUUID = *uu

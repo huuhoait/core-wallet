@@ -42,7 +42,7 @@ type Money struct {
 
 // TopupResult is what post_topup SP returns.
 type TopupResult struct {
-	TFRInternalKey int64
+	TranInternalID int64
 	Status         string // "Success" | "DUPLICATE"
 	NewBalance     string
 	EventUUID      uuid.UUID
@@ -50,7 +50,7 @@ type TopupResult struct {
 
 // TransferResult is what post_transfer SP returns.
 type TransferResult struct {
-	TFRInternalKey int64
+	TranInternalID int64
 	Status         string
 	NewBalanceFrom string
 	NewBalanceTo   string
@@ -61,7 +61,7 @@ type TransferResult struct {
 
 // WithdrawResult is what post_withdraw SP returns.
 type WithdrawResult struct {
-	TFRInternalKey int64
+	TranInternalID int64
 	Status         string
 	NewBalance     string
 	FeeGross       string
@@ -78,7 +78,7 @@ type ReversalResult struct {
 
 // MerchantWithdrawResult is what post_merchant_withdraw SP returns.
 type MerchantWithdrawResult struct {
-	TFRInternalKey         int64  // 0 when status is SETTLEMENT_SWEEP_REQUIRED (NULL in SP)
+	TranInternalID         int64  // 0 when status is SETTLEMENT_SWEEP_REQUIRED (NULL in SP)
 	Status                 string // "Success" | "DUPLICATE" | "SETTLEMENT_SWEEP_REQUIRED"
 	Amount                 string
 	FeeGross               string

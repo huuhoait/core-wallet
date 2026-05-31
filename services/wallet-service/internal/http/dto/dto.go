@@ -20,7 +20,7 @@ type TopupRequest struct {
 }
 
 type TopupResponse struct {
-	TFRInternalKey    int64  `json:"tfr_internal_key"`
+	TranInternalID    int64  `json:"tfr_internal_key"`
 	Status            string `json:"status"`
 	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	NewBalance        string `json:"new_balance"`
@@ -29,7 +29,7 @@ type TopupResponse struct {
 
 func TopupRespFrom(r *domain.TopupResult) TopupResponse {
 	return TopupResponse{
-		TFRInternalKey:    r.TFRInternalKey,
+		TranInternalID:    r.TranInternalID,
 		Status:            r.Status,
 		TransactionStatus: domain.TxStatusSettled, // internal credit settles immediately
 		NewBalance:        r.NewBalance,
@@ -50,7 +50,7 @@ type TransferRequest struct {
 }
 
 type TransferResponse struct {
-	TFRInternalKey    int64  `json:"tfr_internal_key"`
+	TranInternalID    int64  `json:"tfr_internal_key"`
 	Status            string `json:"status"`
 	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	NewBalanceFrom    string `json:"new_balance_from"`
@@ -62,7 +62,7 @@ type TransferResponse struct {
 
 func TransferRespFrom(r *domain.TransferResult) TransferResponse {
 	return TransferResponse{
-		TFRInternalKey:    r.TFRInternalKey,
+		TranInternalID:    r.TranInternalID,
 		Status:            r.Status,
 		TransactionStatus: domain.TxStatusSettled, // in-book transfer settles immediately
 		NewBalanceFrom:    r.NewBalanceFrom,
@@ -87,7 +87,7 @@ type WithdrawRequest struct {
 }
 
 type WithdrawResponse struct {
-	TFRInternalKey    int64  `json:"tfr_internal_key"`
+	TranInternalID    int64  `json:"tfr_internal_key"`
 	Status            string `json:"status"`
 	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	NewBalance        string `json:"new_balance"`
@@ -98,7 +98,7 @@ type WithdrawResponse struct {
 
 func WithdrawRespFrom(r *domain.WithdrawResult) WithdrawResponse {
 	return WithdrawResponse{
-		TFRInternalKey: r.TFRInternalKey,
+		TranInternalID: r.TranInternalID,
 		Status:         r.Status,
 		// Ledger committed; external disbursement still pending (Treasury). The
 		// status advances via the treasury state machine (ACSP → ACSC).
@@ -122,7 +122,7 @@ type MerchantWithdrawRequest struct {
 }
 
 type MerchantWithdrawResponse struct {
-	TFRInternalKey         int64  `json:"tfr_internal_key,omitempty"`
+	TranInternalID         int64  `json:"tfr_internal_key,omitempty"`
 	Status                 string `json:"status"`
 	TransactionStatus      string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	Amount                 string `json:"amount"`
@@ -135,7 +135,7 @@ type MerchantWithdrawResponse struct {
 
 func MerchantWithdrawRespFrom(r *domain.MerchantWithdrawResult) MerchantWithdrawResponse {
 	out := MerchantWithdrawResponse{
-		TFRInternalKey:         r.TFRInternalKey,
+		TranInternalID:         r.TranInternalID,
 		Status:                 r.Status,
 		TransactionStatus:      domain.TxStatusAcceptedTechnical, // disbursement pending (Treasury)
 		Amount:                 r.Amount,

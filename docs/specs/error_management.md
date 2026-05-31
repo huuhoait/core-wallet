@@ -497,7 +497,7 @@ This file is the **single source of truth**. Error sections in other specs will 
 | EM-01 | API returns 422 INSUFFICIENT_FUND | Response matches envelope §3, has `internal_code=E4022`, has `trace_id` matching `WLT_API_TRACE` |
 | EM-02 | Replay request with same REFERENCE | Returns previous response from `WLT_API_MESSAGE` or 409 `DUPLICATE_REFERENCE` (E4011), no double posting |
 | EM-03 | DB throws `40001` serialization_failure | SDK retries 3 times with exponential backoff; if still failing → 503 + log internal_code=E4025 |
-| EM-04 | DR ≠ CR within a single `TFR_INTERNAL_KEY` | Raise E5003 `DR_CR_UNBALANCED` + P1 page on-call immediately; transaction rollback |
+| EM-04 | DR ≠ CR within a single `TRAN_INTERNAL_ID` | Raise E5003 `DR_CR_UNBALANCED` + P1 page on-call immediately; transaction rollback |
 | EM-05 | NAPAS timeout > 5s | `DOWNSTREAM_TIMEOUT` (E7002); circuit breaker opens after 3 consecutive failures |
 | EM-06 | Exception with no mapping in §5 | Fallback `INTERNAL_ERROR` (E9001); log full caused_by; P2 alert |
 | EM-07 | Error response leaks no stack trace / SQL / PII | Inspect log + response body, no sensitive info visible |

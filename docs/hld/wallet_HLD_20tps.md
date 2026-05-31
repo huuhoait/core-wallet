@@ -410,7 +410,7 @@ erDiagram
         VARCHAR TRAN_TYPE FK
         NUMERIC TRAN_AMT
         VARCHAR CR_DR_MAINT_IND
-        BIGINT  TFR_INTERNAL_KEY
+        BIGINT  TRAN_INTERNAL_ID
         VARCHAR REFERENCE
         JSONB   METADATA
         JSONB   CLIENT_INFO
@@ -453,7 +453,7 @@ erDiagram
         TIMESTAMPTZ CREATED_AT PK
     }
     WLT_WITHDRAW_TRACK {
-        BIGINT      TFR_INTERNAL_KEY PK
+        BIGINT      TRAN_INTERNAL_ID PK
         VARCHAR     ACCT_NO
         VARCHAR     CLIENT_NO
         NUMERIC     AMOUNT
@@ -510,9 +510,9 @@ erDiagram
 
 > Cardinality cheatsheet:
 > - 1 `FM_CLIENT` → N `WLT_ACCT` (one customer, multiple wallets)
-> - 1 transfer transaction → 3 `WLT_TRAN_HIST` rows (DR + CR + FEETRF) linked by `TFR_INTERNAL_KEY`
+> - 1 transfer transaction → 3 `WLT_TRAN_HIST` rows (DR + CR + FEETRF) linked by `TRAN_INTERNAL_ID`
 > - 1 withdraw transaction → 2 `WLT_TRAN_HIST` + 1 `WLT_WITHDRAW_TRACK` + 5 `WLT_GL_BATCH` + 1 `WLT_OUTBOX`
-> - 1 atomic posting → exactly 1 `WLT_OUTBOX` row (`AGGREGATE_ID = TFR_INTERNAL_KEY`)
+> - 1 atomic posting → exactly 1 `WLT_OUTBOX` row (`AGGREGATE_ID = TRAN_INTERNAL_ID`)
 > - 1 client-table mutation → 1 `WLT_CLIENT_AUDIT_LOG` row (via trigger)
 
 ### 7.1.1 Table inventory by category
@@ -641,7 +641,7 @@ VAT remittance hàng tháng: DR `GL 203.01` / CR operational nostro.
 ### 8.5 Reversal / Refund
 
 - Reversal **không UPDATE** original row
-- Generate 2 new rows (DR↔CR flipped), `REVERSAL_TRAN_TYPE` link via `TFR_INTERNAL_KEY`
+- Generate 2 new rows (DR↔CR flipped), `REVERSAL_TRAN_TYPE` link via `TRAN_INTERNAL_ID`
 - Nếu original có fee + VAT → reversal **phải refund cả fee + VAT** (3 reversed legs)
 - `post_withdraw_reversal` idempotent on `EXT_PAYOUT_REF`
 
