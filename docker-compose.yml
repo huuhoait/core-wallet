@@ -49,6 +49,10 @@ services:
       - ./db/ddl/wallet_schema.sql:/docker-entrypoint-initdb.d/01-wallet-schema.sql:ro
       - ./db/procedures/wallet_sp.sql:/docker-entrypoint-initdb.d/02-wallet-sp.sql:ro
       - ./deploy/docker/postgres/init/03-update-role-passwords.sh:/docker-entrypoint-initdb.d/03-update-role-passwords.sh:ro
+      # 04 applies the remaining SPs + seeds + migrations so a fresh volume is
+      # fully migrated (reads the db/ tree mounted read-only at /db below).
+      - ./deploy/docker/postgres/init/04-apply-rest.sh:/docker-entrypoint-initdb.d/04-apply-rest.sh:ro
+      - ./db:/db:ro
     command:
       - "postgres"
       - "-c"
