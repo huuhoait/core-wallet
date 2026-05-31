@@ -29,8 +29,8 @@ BEGIN
   PERFORM set_config('audit.actor','loadtest',true);
   PERFORM set_config('audit.channel','LOADTEST',true);
 
-  -- ── 10,000 consumer wallets ──
-  FOR i IN 1..10000 LOOP
+  -- ── 50,000 consumer wallets ──
+  FOR i IN 1..50000 LOOP
     v_c := 'LTC'||lpad(i::text,9,'0');
     CONTINUE WHEN EXISTS (SELECT 1 FROM FM_CLIENT WHERE client_no = v_c);
     INSERT INTO FM_CLIENT(client_no,global_id,global_id_type,client_name,client_type,country_loc,country_citizen,status)
@@ -45,8 +45,8 @@ BEGIN
                        'LT-OPEN-'||lpad(i::text,10,'0'), '{}'::jsonb, 'LOADTEST', 'loadtest');
   END LOOP;
 
-  -- ── 20 merchant groups: settlement + 8 shards ──
-  FOR i IN 1..20 LOOP
+  -- ── 50 merchant groups: settlement + 8 shards ──
+  FOR i IN 1..50 LOOP
     v_g := 'LTG'||lpad(i::text,2,'0');
     v_c := 'LTGC'||lpad(i::text,8,'0');
     CONTINUE WHEN EXISTS (SELECT 1 FROM WLT_ACCT_GROUP WHERE group_id = v_g);

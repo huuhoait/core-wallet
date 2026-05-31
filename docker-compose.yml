@@ -77,8 +77,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "4"
-          memory: 16G
+          cpus: "2"
+          memory: 8G
         reservations:
           cpus: "1"
           memory: 4G
@@ -126,6 +126,50 @@ services:
       resources:
         limits:
           cpus: "1"
+          memory: 256M
+    networks:
+      - wallet-net
+
+  # Wallet Go service (thin RPC client → PgBouncer → PG stored functions).
+  # Built from services/wallet-service/Dockerfile (distroless static binary).
+  wallet-service:
+    build:
+      context: ./services/wallet-service
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${WALLET_SERVICE_VERSION:-dev}
+    image: core-wallet/wallet-service:dev
+    container_name: wallet-service
+    restart: unless-stopped
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      GIN_MODE: ${GIN_MODE:-release}
+      HTTP_ADDR: ":8080"
+      # Connect THROUGH PgBouncer (transaction mode) on its IN-NETWORK port 5432,
+      # not the host-mapped 6432. Same wallet_app role / password as the .env DSN.
+      DB_DSN: postgres://wallet_app:${WALLET_APP_PASSWORD:-wallet_app_dev}@pgbouncer:5432/wallet?sslmode=disable
+      DB_LOCK_TIMEOUT: ${DB_LOCK_TIMEOUT:-1500ms}
+      DB_STATEMENT_TIMEOUT: ${DB_STATEMENT_TIMEOUT:-2500ms}
+      HTTP_REQUEST_TIMEOUT: ${HTTP_REQUEST_TIMEOUT:-10s}
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-50}
+      DB_MIN_CONNS: ${DB_MIN_CONNS:-5}
+      OTEL_ENABLED: "false"
+    ports:
+      # Host :8099 → container :8080. 8099 is the k6 BASE_URL default (k6_wallet.js).
+      - "${WALLET_SERVICE_PORT:-8099}:8080"
+    # The image's HEALTHCHECK runs `wallet-service -healthz`, a flag main() does NOT
+    # implement — it would boot a 2nd server, fail to bind :8080 and report unhealthy.
+    # Disable it (distroless has no shell/curl for an HTTP CMD-SHELL probe) until a
+    # real self-check flag exists.
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
           memory: 256M
     networks:
       - wallet-net
