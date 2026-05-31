@@ -44,11 +44,36 @@ services:
       - pg_data:/var/lib/postgresql/data
       - ./deploy/docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - ./deploy/docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
-      # Init scripts run in alphabetical order on first start
+      # Init scripts run in alphabetical (lexicographic) order on first start.
+      # The CONTAINER target name (not the host filename) decides run order, so the
+      # verification script is mounted last as 99-* while keeping its repo name.
       - ./deploy/docker/postgres/init/00-set-passwords.sh:/docker-entrypoint-initdb.d/00-set-passwords.sh:ro
       - ./db/ddl/wallet_schema.sql:/docker-entrypoint-initdb.d/01-wallet-schema.sql:ro
       - ./db/procedures/wallet_sp.sql:/docker-entrypoint-initdb.d/02-wallet-sp.sql:ro
-      - ./deploy/docker/postgres/init/03-update-role-passwords.sh:/docker-entrypoint-initdb.d/03-update-role-passwords.sh:ro
+      # Remaining stored functions (balance, merchant, reversals, restraint, client, account, eod)
+      - ./db/procedures/wallet_sp_balance.sql:/docker-entrypoint-initdb.d/03-wallet-sp-balance.sql:ro
+      - ./db/procedures/wallet_sp_merchant.sql:/docker-entrypoint-initdb.d/04-wallet-sp-merchant.sql:ro
+      - ./db/procedures/wallet_sp_topup_reversal.sql:/docker-entrypoint-initdb.d/05-wallet-sp-topup-reversal.sql:ro
+      - ./db/procedures/wallet_sp_transfer_reversal.sql:/docker-entrypoint-initdb.d/06-wallet-sp-transfer-reversal.sql:ro
+      - ./db/procedures/wallet_sp_restraint.sql:/docker-entrypoint-initdb.d/07-wallet-sp-restraint.sql:ro
+      - ./db/procedures/wallet_sp_client.sql:/docker-entrypoint-initdb.d/08-wallet-sp-client.sql:ro
+      - ./db/procedures/wallet_sp_account.sql:/docker-entrypoint-initdb.d/09-wallet-sp-account.sql:ro
+      - ./db/procedures/wallet_sp_eod.sql:/docker-entrypoint-initdb.d/10-wallet-sp-eod.sql:ro
+      # Seed reference data (chart of accounts, tran-type extensions, fixtures)
+      - ./db/seeds/wallet_coa_seed.sql:/docker-entrypoint-initdb.d/11-seed-coa.sql:ro
+      - ./db/seeds/wallet_tran_type_ext.sql:/docker-entrypoint-initdb.d/12-seed-tran-type-ext.sql:ro
+      # Demo fixtures: wallet_testdata_10.sql (10 schema-correct clients/wallets).
+      # NOT wallet_seed.sql — that is a BULK generator (large DO loop + verification
+      # SELECTs) that exceeds the 2500ms statement_timeout and is meant for manual
+      # load-test seeding, not container init.
+      - ./db/seeds/wallet_testdata_10.sql:/docker-entrypoint-initdb.d/13-seed-testdata.sql:ro
+      # Tracked migration not folded into wallet_schema.sql: ledger-integrity
+      # hardening (wallet_eod role, balanced-posting trigger, DEFAULT partitions).
+      # Idempotent + resolves the GL-journal table name dynamically. Other
+      # migrations are already in the schema or in wallet_sp_eod.sql.
+      - ./db/migrations/2026-05-30_ledger_integrity_hardening.sql:/docker-entrypoint-initdb.d/14-migrate-ledger-integrity.sql:ro
+      # Re-align role passwords + post-init verification (must run LAST)
+      - ./deploy/docker/postgres/init/03-update-role-passwords.sh:/docker-entrypoint-initdb.d/99-update-role-passwords.sh:ro
     command:
       - "postgres"
       - "-c"

@@ -44,7 +44,11 @@ BEGIN
   SELECT COALESCE(SUM(AMOUNT) FILTER (WHERE TRAN_NATURE = 'DR'), 0),
          COALESCE(SUM(AMOUNT) FILTER (WHERE TRAN_NATURE = 'CR'), 0)
     INTO v_dr, v_cr
-    FROM WLT_BATCH
+    -- GL-journal table is WLT_GL_BATCH on the current schema (renamed from
+    -- WLT_BATCH). PL/pgSQL resolves this at execution time, so on a pre-rename
+    -- upgrade the function is created harmlessly and the table exists by the
+    -- time the trigger first fires (rename migration sorts AFTER this one).
+    FROM WLT_GL_BATCH
    WHERE TRAN_KEY = NEW.TRAN_KEY
      AND CCY      = NEW.CCY;
 
@@ -57,12 +61,29 @@ BEGIN
 END
 $fn$;
 
-DROP TRIGGER IF EXISTS trg_batch_balanced ON WLT_BATCH;
-CREATE CONSTRAINT TRIGGER trg_batch_balanced
-  AFTER INSERT ON WLT_BATCH
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW
-  EXECUTE FUNCTION fn_assert_batch_balanced();
+-- Attach the trigger to the GL-journal table by whichever name it currently
+-- carries: WLT_GL_BATCH on a fresh install from wallet_schema.sql, WLT_BATCH on
+-- a pre-rename upgrade (the rename migration sorts AFTER this one and moves the
+-- trigger with the table by OID). Resolved dynamically so one file serves both.
+DO $do$
+DECLARE
+  v_tbl text := COALESCE(
+    (SELECT 'wlt_gl_batch' WHERE to_regclass('public.wlt_gl_batch') IS NOT NULL),
+    (SELECT 'wlt_batch'    WHERE to_regclass('public.wlt_batch')    IS NOT NULL)
+  );
+BEGIN
+  IF v_tbl IS NULL THEN
+    RAISE EXCEPTION 'ledger_integrity_hardening: GL-journal table not found (neither wlt_gl_batch nor wlt_batch)';
+  END IF;
+  EXECUTE format('DROP TRIGGER IF EXISTS trg_batch_balanced ON %I', v_tbl);
+  EXECUTE format($t$
+    CREATE CONSTRAINT TRIGGER trg_batch_balanced
+      AFTER INSERT ON %I
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW
+      EXECUTE FUNCTION fn_assert_batch_balanced()$t$, v_tbl);
+END
+$do$;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- B#4 — DEFAULT partition on every range-partitioned parent (cliff guard)
@@ -92,11 +113,24 @@ $do$;
 
 -- Reads EOD needs (no raw PII — EOD only touches WLT_* aggregates + GL refs).
 GRANT SELECT ON
-  WLT_ACCT, WLT_ACCT_BAL, WLT_TRAN_HIST, WLT_BATCH, WLT_RESTRAINTS,
+  WLT_ACCT, WLT_ACCT_BAL, WLT_TRAN_HIST, WLT_RESTRAINTS,
   WLT_ACCT_TYPE, WLT_ACCT_GROUP, WLT_TRAN_DEF, WLT_GL_MAP,
   FM_CURRENCY, FM_GL_MAST,
   WLT_TRIAL_BALANCE, WLT_TRIAL_BALANCE_PROOF, WLT_EOD_RUN, WLT_EOD_AUDIT_LOG
 TO wallet_eod;
+-- GL journal: granted by whichever name it currently carries (see trigger note).
+DO $do$
+DECLARE
+  v_tbl text := COALESCE(
+    (SELECT 'wlt_gl_batch' WHERE to_regclass('public.wlt_gl_batch') IS NOT NULL),
+    (SELECT 'wlt_batch'    WHERE to_regclass('public.wlt_batch')    IS NOT NULL)
+  );
+BEGIN
+  IF v_tbl IS NOT NULL THEN
+    EXECUTE format('GRANT SELECT ON %I TO wallet_eod', v_tbl);
+  END IF;
+END
+$do$;
 -- Writes EOD performs.
 GRANT INSERT, UPDATE         ON WLT_ACCT_BAL            TO wallet_eod;
 GRANT UPDATE                 ON WLT_ACCT                TO wallet_eod;
