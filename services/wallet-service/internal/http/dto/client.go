@@ -60,7 +60,13 @@ type OnboardRequest struct {
 	CountryCitizen string         `json:"country_citizen,omitempty" binding:"omitempty,max=8"`
 	AcctType       string         `json:"acct_type,omitempty"       binding:"omitempty,oneof=CONSUMER MERCHANT"`
 	Ccy            string         `json:"ccy,omitempty"             binding:"omitempty,len=3"`
-	ExtraData      map[string]any `json:"extra_data,omitempty"`
+	// Flat identity columns (FM_CLIENT_KYC). Dates are YYYY-MM-DD.
+	BirthDate  string         `json:"birthdate,omitempty"    binding:"omitempty,datetime=2006-01-02"`
+	Sex        string         `json:"sex,omitempty"          binding:"omitempty,oneof=M F O"`
+	DateIssue  string         `json:"date_issue,omitempty"   binding:"omitempty,datetime=2006-01-02"`
+	ExpireDate string         `json:"expire_date,omitempty"  binding:"omitempty,datetime=2006-01-02"`
+	PlaceIssue string         `json:"place_issue,omitempty"  binding:"omitempty,max=120"`
+	ExtraData  map[string]any `json:"extra_data,omitempty"`
 }
 
 // OnboardResponse — onboard_client result.

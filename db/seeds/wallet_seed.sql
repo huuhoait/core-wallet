@@ -43,9 +43,9 @@ CREATE SEQUENCE IF NOT EXISTS seq_acct_no AS BIGINT START 1 CACHE 100;
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- fn_create_client: Create FM_CLIENT + FM_CLIENT_KYC (IND details → extra_data,
---                   CCCD doc → identifiers JSONB array — US-1.15 + identifiers
---                   merge) in a single transaction.
+-- fn_create_client: Create FM_CLIENT + FM_CLIENT_KYC (surname/given_name →
+--                   extra_data; global_id/sex → flat columns — US-1.15) in a
+--                   single transaction.
 -- Returns: CLIENT_NO
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_create_client(
@@ -73,10 +73,11 @@ BEGIN
   -- PII at rest: phone/email encrypted (pgp_sym_encrypt), phone also SHA-256
   -- hashed for the unique index uk_kyc_phone_hash. Test key is fixed — posting
   -- tests never decrypt phone, so this matches wallet_testdata_10.sql.
-  -- IND personal details fold into extra_data JSONB; the CCCD identifier folds
-  -- into the identifiers JSONB array (US-1.15 + merge of FM_CLIENT_IDENTIFIERS).
+  -- surname/given_name/resident_status live in extra_data; identity doc + sex are
+  -- flat real columns (global_id/global_id_type/sex — US-1.15 + identifiers flatten).
   INSERT INTO FM_CLIENT_KYC
-    (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS, EXTRA_DATA, IDENTIFIERS)
+    (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS, EXTRA_DATA,
+     GLOBAL_ID, GLOBAL_ID_TYPE, SEX)
   VALUES
     (v_client_no,
      pgp_sym_encrypt(p_phone, v_key),
@@ -86,10 +87,10 @@ BEGIN
      CASE WHEN p_client_type = 'IND'
           THEN jsonb_build_object('surname', split_part(p_client_name, ' ', 1),
                                   'given_name', split_part(p_client_name, ' ', -1),
-                                  'sex', 'M', 'resident_status', 'R')
+                                  'resident_status', 'R')
           ELSE '{}'::jsonb END,
-     jsonb_build_array(jsonb_build_object('global_id', p_global_id, 'global_id_type', 'CCCD',
-                                          'is_current', 1, 'nationality', 'VN')));
+     p_global_id, 'CCCD',
+     CASE WHEN p_client_type = 'IND' THEN 'M' ELSE NULL END);
 
   RETURN v_client_no;
 END $$;

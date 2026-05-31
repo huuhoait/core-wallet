@@ -58,6 +58,11 @@ func (h *Wallet) Onboard(c *gin.Context) {
 		CountryCitizen: req.CountryCitizen,
 		AcctType:       req.AcctType,
 		Ccy:            req.Ccy,
+		BirthDate:      req.BirthDate,
+		Sex:            req.Sex,
+		DateIssue:      req.DateIssue,
+		ExpireDate:     req.ExpireDate,
+		PlaceIssue:     req.PlaceIssue,
 		ExtraData:      req.ExtraData,
 		Audit:          middleware.FromGin(c),
 	})

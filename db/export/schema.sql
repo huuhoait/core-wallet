@@ -267,21 +267,19 @@ BEGIN
     v_extra := jsonb_strip_nulls(jsonb_build_object(
       'surname',         p_surname,
       'given_name',      p_given_name,
-      'birth_date',      p_birth_date,
-      'sex',             p_sex,
       'resident_status', 'R'));
   ELSE
     v_extra := '{}'::jsonb;   -- ORG (CORP/MER): legal_rep/ubo/business_reg_no set via onboarding
   END IF;
 
-  INSERT INTO FM_CLIENT_KYC(client_no, kyc_tier, status, extra_data, identifiers)
+  -- Identity document + personal birth/sex are flat real columns; the rest of
+  -- the type-specific bag stays in extra_data.
+  INSERT INTO FM_CLIENT_KYC(client_no, kyc_tier, status, extra_data,
+       global_id, global_id_type, birthdate, sex)
   VALUES (v_no, '1', 'P', v_extra,
-    CASE WHEN p_global_id IS NULL THEN '[]'::jsonb
-         ELSE jsonb_build_array(jsonb_build_object(
-                'global_id', p_global_id,
-                'global_id_type', COALESCE(p_global_id_type, 'CCCD'),
-                'is_current', 1,
-                'nationality', COALESCE(p_country_citizen, 'VN'))) END);
+       p_global_id,
+       CASE WHEN p_global_id IS NULL THEN NULL ELSE COALESCE(p_global_id_type, 'CCCD') END,
+       p_birth_date, p_sex);
 
   RETURN QUERY SELECT v_no, 'A'::varchar, v_created;
 END;
@@ -297,7 +295,7 @@ $$;
 -- (IND surname/given_name/…, ORG legal_rep/ubo/business_reg_no/…) rides extra_data.
 --
 
-CREATE FUNCTION public.onboard_client(p_client_name character varying, p_client_type character varying, p_phone character varying, p_global_id character varying DEFAULT NULL::character varying, p_global_id_type character varying DEFAULT NULL::character varying, p_email character varying DEFAULT NULL::character varying, p_country_loc character varying DEFAULT 'VN'::character varying, p_country_citizen character varying DEFAULT 'VN'::character varying, p_acct_type character varying DEFAULT 'CONSUMER'::character varying, p_ccy character varying DEFAULT 'VND'::character varying, p_extra_data jsonb DEFAULT '{}'::jsonb, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(client_no character varying, acct_no character varying, internal_key bigint, kyc_tier character varying, kyc_status character varying, balance numeric, ccy character varying, created_at timestamp with time zone)
+CREATE FUNCTION public.onboard_client(p_client_name character varying, p_client_type character varying, p_phone character varying, p_global_id character varying DEFAULT NULL::character varying, p_global_id_type character varying DEFAULT NULL::character varying, p_email character varying DEFAULT NULL::character varying, p_country_loc character varying DEFAULT 'VN'::character varying, p_country_citizen character varying DEFAULT 'VN'::character varying, p_acct_type character varying DEFAULT 'CONSUMER'::character varying, p_ccy character varying DEFAULT 'VND'::character varying, p_birth_date date DEFAULT NULL::date, p_sex character varying DEFAULT NULL::character varying, p_date_issue date DEFAULT NULL::date, p_expire_date date DEFAULT NULL::date, p_place_issue character varying DEFAULT NULL::character varying, p_extra_data jsonb DEFAULT '{}'::jsonb, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(client_no character varying, acct_no character varying, internal_key bigint, kyc_tier character varying, kyc_status character varying, balance numeric, ccy character varying, created_at timestamp with time zone)
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public'
     AS $$
@@ -353,19 +351,17 @@ BEGIN
   -- Centralized KYC (US-1.15): phone is captured at registration (no OTP); the
   -- client is active at tier 1 (receive-only — tier 2+ unlocked via update_kyc).
   INSERT INTO FM_CLIENT_KYC(client_no, phone_no_enc, phone_no_hash, email_enc,
-       kyc_tier, status, extra_data, identifiers)
+       kyc_tier, status, extra_data,
+       global_id, global_id_type, date_issue, expire_date, place_issue, birthdate, sex)
   VALUES (v_no,
        pgp_sym_encrypt(p_phone, v_dek, 'cipher-algo=aes256'),
        digest(p_phone, 'sha256'),
        CASE WHEN p_email IS NULL THEN NULL
             ELSE pgp_sym_encrypt(p_email, v_dek, 'cipher-algo=aes256') END,
        '1', 'A', v_extra,
-       CASE WHEN p_global_id IS NULL THEN '[]'::jsonb
-            ELSE jsonb_build_array(jsonb_build_object(
-                   'global_id', p_global_id,
-                   'global_id_type', COALESCE(p_global_id_type, 'CCCD'),
-                   'is_current', 1,
-                   'nationality', COALESCE(p_country_citizen, 'VN'))) END);
+       p_global_id,
+       CASE WHEN p_global_id IS NULL THEN NULL ELSE COALESCE(p_global_id_type, 'CCCD') END,
+       p_date_issue, p_expire_date, p_place_issue, p_birth_date, p_sex);
 
   -- Open the first wallet (zero balance) in the same TX — reuses the acct-type /
   -- per-client count guards in open_account.
@@ -1050,10 +1046,10 @@ BEGIN
   VALUES (v_client_no, p_global_id, 'CCCD', p_client_name,
      p_client_type, 'VN', 'VN', 'A');
 
-  -- Centralized KYC (US-1.15): IND personal details fold into extra_data JSONB;
-  -- the CCCD identifier folds into the identifiers JSONB array (merge of the old
-  -- FM_CLIENT_IDENTIFIERS table).
-  INSERT INTO FM_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS, EXTRA_DATA, IDENTIFIERS)
+  -- Centralized KYC (US-1.15): surname/given_name in extra_data; the CCCD number
+  -- (global_id) + sex are flat real columns (FM_CLIENT_IDENTIFIERS flattened in).
+  INSERT INTO FM_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS,
+       EXTRA_DATA, GLOBAL_ID, GLOBAL_ID_TYPE, SEX)
   VALUES (
     v_client_no,
     pgp_sym_encrypt(p_phone, v_key, 'cipher-algo=aes256'),
@@ -1063,10 +1059,10 @@ BEGIN
     CASE WHEN p_client_type = 'IND'
          THEN jsonb_build_object('surname', split_part(p_client_name,' ',1),
                                  'given_name', split_part(p_client_name,' ',-1),
-                                 'sex', 'M', 'resident_status', 'R')
+                                 'resident_status', 'R')
          ELSE '{}'::jsonb END,
-    jsonb_build_array(jsonb_build_object('global_id', p_global_id, 'global_id_type', 'CCCD',
-                                         'is_current', 1, 'nationality', 'VN')));
+    p_global_id, 'CCCD',
+    CASE WHEN p_client_type = 'IND' THEN 'M' ELSE NULL END);
 
   RETURN v_client_no;
 END $$;
@@ -3376,8 +3372,8 @@ CREATE TABLE public.fm_client_contact (
 
 
 --
--- fm_client_identifiers removed: CCCD/passport docs folded into
--- FM_CLIENT_KYC.identifiers JSONB array (merge client_kyc + client_identifier).
+-- fm_client_identifiers removed: the primary identity doc is flattened into real
+-- FM_CLIENT_KYC columns (global_id/global_id_type/date_issue/expire_date/place_issue).
 --
 
 --
@@ -3489,8 +3485,11 @@ CREATE SEQUENCE public.seq_tfr
 --
 -- Centralized KYC for ALL client types (IND/CORP/MER) — US-9.16 rename
 -- (WLT_CLIENT_KYC -> FM_CLIENT_KYC, it is client master-data) + US-1.15:
--- type-specific identity lives in extra_data JSONB (FM_CLIENT_INDVL folded in);
--- identifiers JSONB array folds in FM_CLIENT_IDENTIFIERS (CCCD/passport docs);
+-- type-specific identity lives in extra_data JSONB (FM_CLIENT_INDVL folded in;
+-- surname/given_name/resident_status + ORG legal_rep/ubo/business_reg_no);
+-- the primary identity document + personal birth/sex are FLAT real columns
+-- (global_id/global_id_type/date_issue/expire_date/place_issue/birthdate/sex —
+-- flattened out of the old FM_CLIENT_IDENTIFIERS table);
 -- related_docs JSONB replaces the old scalar doc_url. Phone is nullable: a client
 -- can exist before the onboarding flow captures/verifies a phone (no OTP).
 --
@@ -3506,9 +3505,15 @@ CREATE TABLE public.fm_client_kyc (
     ekyc_ref character varying(80),
     face_match_score numeric(5,3),
     liveness_result character varying(8),
+    global_id character varying(64),
+    global_id_type character varying(20),
+    date_issue date,
+    expire_date date,
+    place_issue character varying(120),
+    birthdate date,
+    sex character varying(4),
     extra_data jsonb DEFAULT '{}'::jsonb NOT NULL,
     related_docs jsonb DEFAULT '[]'::jsonb NOT NULL,
-    identifiers jsonb DEFAULT '[]'::jsonb NOT NULL,
     status character varying(4) DEFAULT 'A'::character varying NOT NULL,
     risk_level character varying(4) DEFAULT 'L'::character varying NOT NULL,
     verified_at timestamp with time zone,
@@ -3519,7 +3524,6 @@ CREATE TABLE public.fm_client_kyc (
     created_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL,
     updated_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL,
     CONSTRAINT chk_kyc_extra_obj CHECK ((jsonb_typeof(extra_data) = 'object'::text)),
-    CONSTRAINT chk_kyc_idents_arr CHECK ((jsonb_typeof(identifiers) = 'array'::text)),
     CONSTRAINT chk_kyc_reldocs_arr CHECK ((jsonb_typeof(related_docs) = 'array'::text)),
     CONSTRAINT chk_kyc_st CHECK (((status)::text = ANY (ARRAY[('A'::character varying)::text, ('B'::character varying)::text, ('C'::character varying)::text, ('P'::character varying)::text]))),
     CONSTRAINT chk_kyc_tier CHECK (((kyc_tier)::text = ANY (ARRAY[('0'::character varying)::text, ('1'::character varying)::text, ('2'::character varying)::text, ('3'::character varying)::text])))
@@ -3544,8 +3548,8 @@ CREATE VIEW public.v_client_masked AS
     c.client_grp,
     c.acct_exec,
     c.status,
-    ((k.extra_data ->> 'birth_date'))::date AS birth_date,
-    (k.extra_data ->> 'sex') AS sex,
+    k.birthdate AS birth_date,
+    k.sex,
     (k.extra_data ->> 'resident_status') AS resident_status,
     k.kyc_tier,
     k.status AS kyc_status,
@@ -3561,6 +3565,8 @@ CREATE VIEW public.v_client_masked AS
             k2.risk_level,
             k2.phone_no_hash,
             k2.extra_data,
+            k2.birthdate,
+            k2.sex,
             k2.verified_at
            FROM public.fm_client_kyc k2
           WHERE ((k2.client_no)::text = (c.client_no)::text)
@@ -5325,7 +5331,7 @@ GRANT ALL ON FUNCTION public.create_client(p_client_name character varying, p_cl
 -- Name: FUNCTION onboard_client(...); Type: ACL; Schema: public; Owner: -
 --
 
-GRANT ALL ON FUNCTION public.onboard_client(p_client_name character varying, p_client_type character varying, p_phone character varying, p_global_id character varying, p_global_id_type character varying, p_email character varying, p_country_loc character varying, p_country_citizen character varying, p_acct_type character varying, p_ccy character varying, p_extra_data jsonb, p_actor character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.onboard_client(p_client_name character varying, p_client_type character varying, p_phone character varying, p_global_id character varying, p_global_id_type character varying, p_email character varying, p_country_loc character varying, p_country_citizen character varying, p_acct_type character varying, p_ccy character varying, p_birth_date date, p_sex character varying, p_date_issue date, p_expire_date date, p_place_issue character varying, p_extra_data jsonb, p_actor character varying) TO wallet_app;
 
 
 --

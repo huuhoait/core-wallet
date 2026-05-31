@@ -56,8 +56,14 @@ type OnboardInput struct {
 	CountryCitizen string
 	AcctType       string // CONSUMER | MERCHANT ("" → CONSUMER)
 	Ccy            string // "" → VND
-	ExtraData      map[string]any
-	Audit          AuditContext
+	// Flat identity columns on FM_CLIENT_KYC (dates as YYYY-MM-DD; "" → NULL).
+	BirthDate  string
+	Sex        string
+	DateIssue  string // identity-doc issuance date
+	ExpireDate string // identity-doc expiry date
+	PlaceIssue string // identity-doc place of issuance
+	ExtraData  map[string]any
+	Audit      AuditContext
 }
 
 // OnboardResult is returned by onboard_client.

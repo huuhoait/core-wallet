@@ -12,7 +12,7 @@
 CREATE SEQUENCE IF NOT EXISTS seq_client  AS BIGINT START 1000000000 CACHE 100;
 CREATE SEQUENCE IF NOT EXISTS seq_acct_no AS BIGINT START 5000000000 CACHE 100;
 
--- ---- fn_create_client : FM_CLIENT + KYC (IND→extra_data, CCCD→identifiers) ---
+-- ---- fn_create_client : FM_CLIENT + KYC (names→extra_data, global_id/sex→cols) -
 CREATE OR REPLACE FUNCTION fn_create_client(
   p_client_name VARCHAR, p_global_id VARCHAR, p_phone VARCHAR,
   p_email VARCHAR DEFAULT NULL, p_client_type VARCHAR DEFAULT 'IND',
@@ -29,8 +29,9 @@ BEGIN
   VALUES (v_client_no, p_global_id, 'CCCD', p_client_name,
      p_client_type, 'VN', 'VN', 'A');
 
-  -- IND details fold into extra_data; CCCD doc folds into identifiers (US-1.15 + merge)
-  INSERT INTO FM_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS, EXTRA_DATA, IDENTIFIERS)
+  -- surname/given_name → extra_data; global_id/sex → flat columns (US-1.15)
+  INSERT INTO FM_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS,
+       EXTRA_DATA, GLOBAL_ID, GLOBAL_ID_TYPE, SEX)
   VALUES (
     v_client_no,
     pgp_sym_encrypt(p_phone, v_key),
@@ -40,10 +41,10 @@ BEGIN
     CASE WHEN p_client_type = 'IND'
          THEN jsonb_build_object('surname', split_part(p_client_name,' ',1),
                                  'given_name', split_part(p_client_name,' ',-1),
-                                 'sex','M','resident_status','R')
+                                 'resident_status','R')
          ELSE '{}'::jsonb END,
-    jsonb_build_array(jsonb_build_object('global_id', p_global_id, 'global_id_type', 'CCCD',
-                                         'is_current', 1, 'nationality', 'VN')));
+    p_global_id, 'CCCD',
+    CASE WHEN p_client_type = 'IND' THEN 'M' ELSE NULL END);
 
   RETURN v_client_no;
 END $$;

@@ -48,13 +48,16 @@ func (r *PgWalletRepo) OnboardClient(ctx context.Context, in domain.OnboardInput
 	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
 		const q = `
 			SELECT client_no, acct_no, internal_key, kyc_tier, kyc_status, balance, ccy, created_at
-			  FROM onboard_client($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+			  FROM onboard_client($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+			                      $11::date, $12, $13::date, $14::date, $15, $16::jsonb, $17)
 		`
 		row := tx.QueryRow(ctx, q,
 			in.ClientName, in.ClientType, in.Phone,
 			nullStr(in.GlobalID), nullStr(in.GlobalIDType), nullStr(in.Email),
 			nullStr(in.CountryLoc), nullStr(in.CountryCitizen),
 			nullStr(in.AcctType), nullStr(in.Ccy),
+			nullDate(in.BirthDate), nullStr(in.Sex), nullDate(in.DateIssue),
+			nullDate(in.ExpireDate), nullStr(in.PlaceIssue),
 			extraJSON, in.Audit.Actor)
 		return row.Scan(&out.ClientNo, &out.AcctNo, &out.InternalKey, &out.KycTier,
 			&out.KycStatus, &out.Balance, &out.Ccy, &out.CreatedAt)
@@ -182,19 +185,21 @@ func (r *PgWalletRepo) GetClient(ctx context.Context, clientNo string) (*domain.
 // stay encrypted at rest and are not decrypted here. Unknown client_no → 404.
 // READ-ONLY: no TX, no audit GUCs.
 func (r *PgWalletRepo) GetClientFull(ctx context.Context, clientNo string) (*domain.ClientFullView, error) {
-	// IND personal details now live in FM_CLIENT_KYC.extra_data JSONB (US-1.15);
-	// FM_CLIENT_INDVL was folded in and dropped. Read them via ->> on the KYC row.
+	// FM_CLIENT_INDVL was folded into FM_CLIENT_KYC (US-1.15). birthdate/sex are
+	// flat real columns; surname/given_name/resident_status/marital_status remain
+	// in extra_data JSONB.
 	const q = `
 		SELECT c.client_no, c.client_name, c.client_type, c.global_id, c.global_id_type,
 		       c.country_loc, c.country_citizen, c.client_grp, c.acct_exec, c.status,
 		       c.registered_date, c.created_at, c.updated_at,
 		       k.extra_data->>'surname', k.extra_data->>'given_name',
-		       (k.extra_data->>'birth_date')::date, k.extra_data->>'sex',
+		       k.birthdate, k.sex,
 		       k.extra_data->>'resident_status', k.extra_data->>'marital_status',
 		       k.kyc_tier, k.kyc_status, k.risk_level, k.verified_at
 		  FROM FM_CLIENT c
 		  LEFT JOIN LATERAL (
-		    SELECT k2.kyc_tier, k2.status AS kyc_status, k2.risk_level, k2.verified_at, k2.extra_data
+		    SELECT k2.kyc_tier, k2.status AS kyc_status, k2.risk_level, k2.verified_at,
+		           k2.extra_data, k2.birthdate, k2.sex
 		      FROM FM_CLIENT_KYC k2
 		     WHERE k2.client_no = c.client_no
 		     ORDER BY k2.kyc_id DESC
