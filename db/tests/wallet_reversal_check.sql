@@ -5,9 +5,10 @@
 --   docker exec -i wallet-postgres psql -U postgres -d wallet < db/tests/wallet_reversal_check.sql
 --
 -- Liên kết reversal -> giao dịch gốc (chuẩn kép vì SP lưu khác nhau theo loại):
---   • RVTRF / RVTPUP  : orig_seq_no = SEQ_NO của bút toán gốc
---   • RVWD            : orig_seq_no = TRAN_INTERNAL_ID của lệnh rút gốc (từ withdraw_track)
---   → keymap ánh xạ cả seq_no LẪN tran_internal_id của giao dịch gốc về tran_internal_id.
+--   • RVTRF / RVTPUP / RVMWD : orig_seq_no = SEQ_NO của bút toán gốc        → kind='seqno'
+--   • RVWD                   : orig_seq_no = TRAN_INTERNAL_ID của lệnh rút gốc (withdraw_track) → kind='trfkey'
+--   → keymap gắn KIND cho từng khóa (seqno vs trfkey) và join trên (link AND kind),
+--     tránh va chạm khi dải seq_no và tran_internal_id chồng nhau ở quy mô lớn (US-10.9).
 --
 -- Phạm vi = tháng hiện tại (đổi date_trunc('month',CURRENT_DATE) nếu cần).
 --
@@ -26,7 +27,9 @@ rev AS (
          max(r.time_stamp)                                    AS rev_time,
          min(r.reference)                                     AS rev_ref,
          -- transfer reversal có 2 chân RVTRF cùng giá trị → dùng max (số tiền đầu mục), không cộng dồn
-         max(r.tran_amt) FILTER (WHERE r.tran_type IN ('RVTRF','RVWD','RVTPUP')) AS rev_principal
+         max(r.tran_amt) FILTER (WHERE r.tran_type IN ('RVTRF','RVWD','RVTPUP')) AS rev_principal,
+         -- KIND của orig_link: RVWD link qua tran_internal_id ('trfkey'); còn lại qua seq_no ('seqno')
+         CASE WHEN bool_or(r.tran_type = 'RVWD') THEN 'trfkey' ELSE 'seqno' END AS kind
   FROM wlt_tran_hist r, mn
   WHERE r.tran_type LIKE 'RV%' AND r.post_date >= mn.d
   GROUP BY r.tran_internal_id
@@ -41,19 +44,19 @@ orig AS (
   WHERE o.tran_type NOT LIKE 'RV%' AND o.post_date >= mn.d AND o.tran_internal_id IS NOT NULL
   GROUP BY o.tran_internal_id
 ),
--- ánh xạ mọi khóa có thể (seq_no & tran_internal_id) -> giao dịch gốc
+-- ánh xạ khóa -> giao dịch gốc, TAG theo KIND để seqno-link chỉ khớp seqno-key (US-10.9)
 keymap AS (
-  SELECT o.seq_no AS link, o.tran_internal_id AS orig_txn
+  SELECT 'seqno'::text  AS kind, o.seq_no          AS link, o.tran_internal_id AS orig_txn
   FROM wlt_tran_hist o, mn WHERE o.tran_type NOT LIKE 'RV%' AND o.post_date >= mn.d
   UNION
-  SELECT o.tran_internal_id AS link, o.tran_internal_id AS orig_txn
+  SELECT 'trfkey'::text AS kind, o.tran_internal_id AS link, o.tran_internal_id AS orig_txn
   FROM wlt_tran_hist o, mn WHERE o.tran_type NOT LIKE 'RV%' AND o.post_date >= mn.d
 ),
--- mỗi reversal -> giao dịch gốc
+-- mỗi reversal -> giao dịch gốc (join trên link AND kind)
 resolved AS (
   SELECT rev.*, km.orig_txn, o.ref AS orig_ref, o.types AS orig_types, o.principal AS orig_principal
   FROM rev
-  LEFT JOIN keymap km ON km.link = rev.orig_link
+  LEFT JOIN keymap km ON km.link = rev.orig_link AND km.kind = rev.kind
   LEFT JOIN orig   o  ON o.tran_internal_id = km.orig_txn
 ),
 checks(ord, area, name, ok, detail) AS (
