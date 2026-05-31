@@ -2,12 +2,16 @@
 -- loadtest/setup.sql — seed load-test data (all 'LT*' prefixed for easy teardown)
 -- =============================================================================
 -- 10,000 consumer wallets (LT0000000001..LT0000010000), tier 2, funded 1e12.
--- 20 merchant groups (LTG01..LTG20): settlement + 8 shards each, funded large.
--- Idempotent (NOT EXISTS guards + post_topup reference idempotency).
+-- 20 merchant groups (LTG01..LTG20): settlement funded 500M, 8 shards each at 0.
+-- Idempotent (NOT EXISTS guards + post_topup/post_transfer reference idempotency).
 -- Committed — load test needs persistent data.
 --
--- Funding goes through post_topup (DR 101.02.001 nostro / CR wallet liability)
--- so every seeded balance has a matching ledger + GL entry — wlt_acct.actual_bal
+-- Consumer funding goes through post_topup (DR 101.02.001 nostro / CR wallet
+-- liability). Merchant SETTLEMENT wallets are funded by customer→merchant
+-- TRANSFERS (post_topup is STANDALONE-only; post_transfer permits a SETTLEMENT
+-- receiver), and SHARD wallets are NEVER funded directly — they fill via sweep
+-- only (crediting a shard directly corrupts the group's aggregation invariants).
+-- So every seeded balance has a matching ledger + GL entry — wlt_acct.actual_bal
 -- always reconciles to Σ(wlt_tran_hist). Do NOT set actual_bal directly here.
 -- =============================================================================
 \set ON_ERROR_STOP on
@@ -15,7 +19,7 @@ SET statement_timeout = 0;
 BEGIN;
 DO $$
 DECLARE
-  i int; j int; v_c text; v_g text; v_key text := 'loadtest-key';
+  i int; j int; k int; v_c text; v_g text; v_key text := 'loadtest-key';
 BEGIN
   PERFORM set_config('audit.actor','loadtest',true);
   PERFORM set_config('audit.channel','LOADTEST',true);
@@ -51,13 +55,18 @@ BEGIN
       VALUES(v_g,v_c,'MERCHANT',8,'LTGS'||lpad(i::text,2,'0'),50000000,0,60,'A');
     INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,acct_role,group_id)
       VALUES('LTGS'||lpad(i::text,2,'0'), v_c,'MERCHANT','VND','A','SETTLEMENT',v_g);
-    PERFORM post_topup('LTGS'||lpad(i::text,2,'0'), 1000000000000,
-                       'LT-OPEN-LTGS'||lpad(i::text,2,'0'), '{}'::jsonb, 'LOADTEST', 'loadtest');
+    -- Fund SETTLEMENT via customer→merchant transfers: TRFOUT caps at 100M/tx and
+    -- post_transfer has no monthly cap, so 5×100M = 500M per group (covers the k6
+    -- merchant-withdraw draw of ≤2M at peak rate with headroom). Funder = consumer
+    -- i (tier 2, funded 1e12 above). SHARDS are created at 0 and fill via sweep.
+    FOR k IN 1..5 LOOP
+      PERFORM post_transfer('LT'||lpad(i::text,10,'0'), 'LTGS'||lpad(i::text,2,'0'),
+                            100000000, 'LT-FUND-LTGS'||lpad(i::text,2,'0')||'-'||k,
+                            'TRFOUT', '{}'::jsonb, 'LOADTEST', 'loadtest');
+    END LOOP;
     FOR j IN 0..7 LOOP
       INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,acct_role,group_id,shard_index)
         VALUES('LTGH'||lpad(i::text,2,'0')||j, v_c,'MERCHANT','VND','A','SHARD',v_g,j);
-      PERFORM post_topup('LTGH'||lpad(i::text,2,'0')||j, 10000000000,
-                         'LT-OPEN-LTGH'||lpad(i::text,2,'0')||j, '{}'::jsonb, 'LOADTEST', 'loadtest');
     END LOOP;
   END LOOP;
 END $$;
