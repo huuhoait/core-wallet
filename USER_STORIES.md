@@ -24,15 +24,15 @@ docs alone).
 |------|:--:|:--:|:--:|
 | 1. Onboarding & Wallet Management | 5 | 0 | 7 |
 | 2. Transactions — Posting | 6 | 0 | 0 |
-| 3. Reversals & Refunds | 5 | 1 | 1 |
+| 3. Reversals & Refunds | 6 | 0 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
-| 6. Accounting & GL Operations | 5 | 1 | 3 |
+| 6. Accounting & GL Operations | 6 | 1 | 2 |
 | 7. Eventing & Integration | 1 | 0 | 2 |
 | 8. Audit, PII & Compliance | 2 | 1 | 1 |
-| 9. Platform / Infra / Observability | 10 | 0 | 3 |
-| 10. Quality — Testing & Load | 6 | 1 | 0 |
-| **Total** | **47** | **4** | **18** |
+| 9. Platform / Infra / Observability | 11 | 0 | 3 |
+| 10. Quality — Testing & Load | 7 | 1 | 1 |
+| **Total** | **51** | **3** | **18** |
 
 ---
 
@@ -144,8 +144,8 @@ docs alone).
 |----|-----------|:------:|------------------|
 | US-8.1 | Capture every client change (OLD/NEW diff, maker-checker) in an audit log | ✅ | `WLT_CLIENT_AUDIT_LOG`; trigger fns `fn_audit_client_change`, `fn_set_audit_columns`. |
 | US-8.2 | Apply holds/restraints (add/release) that block debits/credits | ✅ | SP `add_restraint`/`release_restraint`; `POST /v1/finance/restraints` (+ `/:id/release`); rolls up `TOTAL_RESTRAINED_AMT`/`CR_BLOCKED`, enforced in posting. Maker-checker/idempotency = gateway (deferred). |
-| US-8.3 | Record reconciliation breaks | 🟡 | `WLT_RECON_BREAK` table + `db/tests/wallet_reconciliation_check.sql`; no live recon engine. |
-| US-8.4 | PII protection: classification, encryption, masking, retention, access log | ⬜ | HLD §8.3 design. App-level controls/`WLT_PII_ACCESS_LOG` not built. |
+| US-8.3 | Record reconciliation breaks | ⬜ | No `WLT_RECON_BREAK` table or live recon engine in the current schema (`db/export/schema.sql`) — verified absent. Only artifact is the read-only assertion script `db/tests/wallet_reconciliation_check.sql`, which *detects* breaks but does not record them. |
+| US-8.4 | PII protection: classification, encryption, masking, retention, access log | 🟡 | **Encryption + masking done**: `WLT_CLIENT_KYC.PHONE_NO_ENC`/`EMAIL_ENC` via `pgcrypto` `pgp_sym_encrypt` (DEK from `app.pii_dek`), `PHONE_NO_HASH` for unique lookup, + masked read views (`v_kyc_masked` etc.). Remaining (HLD §8.3): data classification, retention policy, and the `WLT_PII_ACCESS_LOG` access trail. |
 
 ## Epic 9 — Platform / Infra / Observability
 
