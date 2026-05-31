@@ -1,11 +1,12 @@
 # Onboarding & Wallet Opening — Design
 
-**Version**: 1.0
-**Date**: 2026-05-28
+**Version**: 1.1
+**Date**: 2026-05-31
 **Status**: Draft
 **Companion**: `wallet_HLD.md`, `wallet_DLD.md`, `wallet_seed.sql`
 
 **Changelog**
+- v1.1 (2026-05-31): **Removed OTP** from registration. Reworked onboarding into a **4-step workflow** (create client + zero-balance wallet → update KYC → attach related documents → link bank with a `linkId` token). **Centralized KYC** for individuals **and** organizations into one `FM_CLIENT_KYC` table (renamed from `WLT_CLIENT_KYC`, US-9.16) with a JSONB `extra_data` key-value bag — `FM_CLIENT_INDVL` folds in (US-1.15). Corporate/organization onboarding is now in scope.
 - v1.0 (2026-05-28): Split out from the old scope (which was trimmed in DLD v1.2). Covers the BRD for individual customer onboarding + wallet opening flow, KYC tier rules, API spec, state machine.
 
 ---
@@ -13,13 +14,15 @@
 ## 1. Objectives & Scope
 
 ### 1.1 In scope
-- **Client onboarding** for individuals (IND): create a profile in `FM_CLIENT`, identification, KYC
-- **Wallet opening**: open a `WLT_ACCT` wallet for a customer who already has a `CLIENT_NO`
-- **KYC tier upgrade**: upgrade/downgrade tier (1 → 2 → 3)
-- **Status lifecycle**: client/wallet pending → active → blocked/closed
+- **Client onboarding** for individuals (IND) **and** organizations (CORP / MER): create a profile in `FM_CLIENT`, capture KYC in `FM_CLIENT_KYC`
+- **Combined create**: one step creates the client **and** opens a zero-balance `WLT_ACCT` wallet
+- **KYC tier upgrade**: update KYC info / eKYC to raise the tier (1 → 2 → 3)
+- **Related documents**: attach / update document links (CCCD images, business licence, UBO proofs)
+- **Bank linkage**: link an owned bank account; the link returns a `linkId` token
+- **Status lifecycle**: client / wallet pending → active → blocked / closed
 
 ### 1.2 Out of scope
-- Corporate clients (CORP) — later phase
+- One-time-password (OTP) verification — **removed** from registration (v1.1); phone capture stays, phone *verification* is a gateway/channel concern, not part of this flow
 - Periodic re-KYC (yearly) — later phase
 - Joint account / authorized signatory
 - Card issuance attached to a wallet
@@ -27,122 +30,158 @@
 ### 1.3 Stakeholders
 | Stakeholder | Role |
 |-------------|------|
-| User | Registers via mobile app |
+| User | Registers via mobile app (individual) |
+| Organization | Registers via ops / portal (CORP / MER) |
 | eKYC provider (VNG/FPT/TS) | Verify CCCD (citizen ID) + liveness |
-| Compliance | Approve tier 3, AML check |
+| Compliance | Approve tier 3, AML check, UBO review |
 | Operations | Manual review for cases that fail eKYC |
 
 ---
 
-## 2. Concepts — Client vs Wallet
+## 2. Concepts — Client vs Wallet vs KYC
 
 ```
 1 FM_CLIENT (CLIENT_NO)  ─┬─▶ N WLT_ACCT (INTERNAL_KEY, ACCT_NO)
-                          ├─▶ 1 WLT_CLIENT_KYC (tier + eKYC info)
+                          ├─▶ 1 FM_CLIENT_KYC (tier + eKYC + extra_data JSONB + related_docs JSONB)
                           ├─▶ N FM_CLIENT_IDENTIFIERS (CCCD, passport)
-                          └─▶ N FM_CLIENT_BANKS (linked bank accounts)
+                          └─▶ N FM_CLIENT_BANKS (linked bank accounts, linkId token)
 ```
 
-- **Client (`CLIENT_NO`)**: legal entity/individual, the **golden source** shared across wallet + lending + payment
+- **Client (`CLIENT_NO`)**: legal entity / individual, the **golden source** shared across wallet + lending + payment
 - **Wallet (`ACCT_NO`)**: a transactional account; one customer may open multiple wallets (e.g., a main VND wallet, a savings wallet, a merchant wallet if the customer has a shop)
-- **KYC tier**: attached to `CLIENT_NO` (1 customer = 1 tier), applied to **all wallets** of that customer
+- **KYC (`FM_CLIENT_KYC`)**: attached to `CLIENT_NO` (1 customer = 1 KYC row), applied to **all wallets** of that customer
+
+### 2.1 Centralized KYC — one table for IND & ORG (US-1.15)
+
+KYC for **every** client type lives in a single `FM_CLIENT_KYC` row. Common columns are
+typed; **type-specific** attributes go into a JSONB `extra_data` key-value bag, so there
+is **no per-type child table** (`FM_CLIENT_INDVL` folds in here).
+
+| Column | Notes |
+|--------|-------|
+| `kyc_id` (PK), `client_no` (FK → `FM_CLIENT`) | one KYC row per client |
+| `phone_no_enc`, `phone_no_hash`, `email_enc` | PII via pgcrypto (cf. US-8.4); hash is the lookup/uniqueness key |
+| `kyc_tier` (`0`–`3`), `status` (`A/B/C/P`), `risk_level` | tier + lifecycle |
+| `ekyc_provider`, `ekyc_ref`, `face_match_score`, `liveness_result`, `verified_at`, `verified_by` | eKYC result (tier 2) |
+| **`extra_data` JSONB** | type-specific key-value attributes (below) |
+| **`related_docs` JSONB** | array of document links (replaces scalar `doc_url`) — §2.3 |
+| audit cols (`created_at/by`, `updated_at/by`, `channel`) | populated by the audit trigger |
+
+**`extra_data` keys by client type:**
+
+| Type | Keys folded into `extra_data` |
+|------|-------------------------------|
+| **IND** (from `FM_CLIENT_INDVL`) | `surname`, `given_name`, `birth_date`, `sex`, `resident_status`, `marital_status`, `occupation_code` |
+| **ORG** (CORP / MER) | `legal_name`, `business_reg_no`, `incorporation_date`, `industry_code`, `tax_id`, `legal_rep` `{name, id_no}`, `ubo` `[{name, id_no, pct}]` |
+
+> Common, queryable, or constraint-bearing fields stay as real columns; `extra_data`
+> is for the long tail of type-specific attributes. The rename `WLT_CLIENT_KYC` →
+> `FM_CLIENT_KYC` is tracked in **US-9.16** (do the rename + the `extra_data`
+> centralization in one migration).
+
+### 2.2 Bank linkage — the `linkId` token (US-1.14)
+
+Linking a bank account inserts a `FM_CLIENT_BANKS` row and returns its identity
+`link_id` as an **opaque `linkId` token**. The client uses this token to reference the
+linked bank (e.g., to set it as default) without ever handling the raw account number —
+the bank account number is stored encrypted (`ACCT_NO_ENC`, pgcrypto) and never returned.
+
+### 2.3 Related documents — `related_docs` JSONB (US-1.13)
+
+The single scalar `doc_url` is replaced by a `related_docs` JSONB array so a client can
+carry many documents:
+
+```json
+"related_docs": [
+  { "doc_type": "CCCD_FRONT",   "link": "s3://kyc/C0000001234/cccd_front.jpg", "status": "VERIFIED", "uploaded_at": "2026-05-31T10:02:00+07:00" },
+  { "doc_type": "BUSINESS_LICENCE", "link": "s3://kyc/...", "status": "PENDING", "uploaded_at": "..." }
+]
+```
+
+`link` is an object-store URL / handle (the file bytes are **not** stored in the DB).
 
 ---
 
-## 3. Onboarding flow — Individual customer (Tier 1 → Tier 2)
+## 3. Onboarding flow — 4-step workflow (OTP-free)
 
 ### 3.1 Sequence diagram
 
 ```mermaid
 sequenceDiagram
   actor User
-  participant App as Mobile App
+  participant App as Mobile App / Portal
   participant GW as API Gateway
   participant OS as Onboarding Service
   participant EKY as eKYC Provider
   participant FM as FM (Foundation Master)
   participant WLT as WLT (Wallet)
 
-  User->>App: Register phone number + OTP
-  App->>GW: POST /v1/onboard/init {phone}
+  Note over User,WLT: Step 1 — create client + zero-balance wallet (no OTP)
+  User->>App: Register (phone, name/legal_name, type IND/CORP/MER)
+  App->>GW: POST /v1/onboard {phone, client_type, name, ...}
   GW->>OS: forward
-  OS->>OS: Validate phone format (VN: 0xxxxxxxxx)
-  OS->>OS: Send OTP via SMS
-  OS-->>App: 200 {session_id}
+  OS->>FM: INSERT FM_CLIENT (STATUS='A')
+  OS->>FM: INSERT FM_CLIENT_KYC (KYC_TIER='1', STATUS='P', extra_data{...})
+  OS->>WLT: INSERT WLT_ACCT (ACCT_NO from seq_acct_no) + WLT_ACCT_BAL (bal=0)
+  Note over OS,WLT: one transaction — client + KYC row + zero-balance wallet
+  OS-->>App: 201 {client_no, acct_no, kyc_tier:'1', balance:0}
 
-  User->>App: Enter OTP + basic info (name, year of birth)
-  App->>GW: POST /v1/onboard/verify-otp {session_id, otp, name, dob}
+  Note over User,WLT: Step 2 — update KYC info (eKYC) → tier 2
+  User->>App: Upload CCCD + selfie (IND) / business docs (ORG)
+  App->>GW: POST /v1/onboard/kyc {client_no, ...}
   GW->>OS: forward
-  OS->>OS: Verify OTP
-  OS->>FM: INSERT FM_CLIENT (STATUS='P' pending)
-  OS->>FM: INSERT FM_CLIENT_INDVL
-  OS->>WLT: INSERT WLT_CLIENT_KYC (KYC_TIER='1', STATUS='P')
-  Note over OS,WLT: Tier 1: limit 20M/month, cannot open a wallet yet
-  OS-->>App: 201 {client_no, kyc_tier:'1'}
-
-  User->>App: Upload CCCD + selfie for Tier 2
-  App->>GW: POST /v1/onboard/ekyc {client_no, cccd_front, cccd_back, selfie}
-  GW->>OS: forward
-  OS->>EKY: Verify CCCD + face match
+  OS->>EKY: Verify CCCD + face match (IND)
   EKY-->>OS: {match_score: 0.97, liveness:'PASS', cccd_data}
   alt match_score >= 0.85 AND liveness = PASS
     OS->>FM: INSERT FM_CLIENT_IDENTIFIERS (CCCD)
-    OS->>FM: UPDATE FM_CLIENT SET STATUS='A'
-    OS->>WLT: UPDATE WLT_CLIENT_KYC SET KYC_TIER='2', STATUS='A', FACE_MATCH_SCORE=0.97
-    OS-->>App: 200 {kyc_tier:'2', can_open_wallet: true}
+    OS->>FM: UPDATE FM_CLIENT_KYC SET KYC_TIER='2', STATUS='A', FACE_MATCH_SCORE=0.97
+    OS-->>App: 200 {kyc_tier:'2'}
   else fail
-    OS->>WLT: UPDATE WLT_CLIENT_KYC SET STATUS='C', LIVENESS_RESULT='FAIL'
+    OS->>FM: UPDATE FM_CLIENT_KYC SET STATUS='C', LIVENESS_RESULT='FAIL'
     OS-->>App: 422 {code:'EKYC_FAIL', retry_allowed: true}
   end
+
+  Note over User,WLT: Step 3 — attach related documents
+  App->>GW: PUT /v1/onboard/documents {client_no, related_docs:[...]}
+  GW->>OS: forward
+  OS->>FM: UPDATE FM_CLIENT_KYC SET related_docs = related_docs || [...]
+  OS-->>App: 200 {related_docs:[...]}
+
+  Note over User,WLT: Step 4 — link bank (returns linkId token) → tier 3
+  App->>GW: POST /v1/onboard/link-bank {client_no, bank_code, acct_no, ...}
+  GW->>OS: forward
+  OS->>FM: INSERT FM_CLIENT_BANKS (ACCT_NO_ENC) RETURNING link_id
+  OS->>FM: UPDATE FM_CLIENT_KYC SET KYC_TIER='3'
+  OS-->>App: 201 {linkId, is_default, kyc_tier:'3'}
 ```
 
 ### 3.2 Steps mapping
 
 | Step | Endpoint | Tables written | Status after step |
 |------|----------|----------------|-------------------|
-| 1. Init | `POST /v1/onboard/init` | (OTP cache) | – |
-| 2. Verify OTP + basic info | `POST /v1/onboard/verify-otp` | `FM_CLIENT` (P), `FM_CLIENT_INDVL`, `WLT_CLIENT_KYC` (T1, P) | T1 pending |
-| 3. eKYC | `POST /v1/onboard/ekyc` | `FM_CLIENT_IDENTIFIERS`, UPDATE `FM_CLIENT` (A), UPDATE `WLT_CLIENT_KYC` (T2, A) | T2 active |
-| 4. (Tier 3) Bank linkage | `POST /v1/onboard/link-bank` | `FM_CLIENT_BANKS`, UPDATE `WLT_CLIENT_KYC` (T3) | T3 active |
+| 1. Create client + wallet | `POST /v1/onboard` | `FM_CLIENT` (A), `FM_CLIENT_KYC` (T1, P), `WLT_ACCT` + `WLT_ACCT_BAL` (bal=0) | T1, wallet open (0 balance) |
+| 2. Update KYC (eKYC) | `POST /v1/onboard/kyc` | `FM_CLIENT_IDENTIFIERS`, UPDATE `FM_CLIENT_KYC` (T2, A) | T2 active |
+| 3. Related documents | `PUT /v1/onboard/documents` | UPDATE `FM_CLIENT_KYC.related_docs` | docs attached |
+| 4. Link bank | `POST /v1/onboard/link-bank` | `FM_CLIENT_BANKS` (→ `linkId`), UPDATE `FM_CLIENT_KYC` (T3) | T3 active |
 
-> **Implemented today (client API, outside the onboarding flow):** linking a bank
-> to an existing client is available via the client-master API —
-> `POST /v1/clients/:client_no/banks` (SP `link_client_bank`, encrypts `acct_no` →
-> `ACCT_NO_ENC`; `is_default` flag) and `PUT /v1/clients/:client_no/banks/:link_id/default`
-> (SP `set_default_client_bank`). Both are audited into `WLT_CLIENT_AUDIT_LOG` via
-> `trg_audit_fm_client_bk`. The Tier-3 onboarding wrapper above (`/v1/onboard/link-bank`,
-> with KYC-tier side effects) is still pending.
+> **Implemented today (client API, outside the onboarding wrapper):** the building
+> blocks of step 1 exist separately — `create_client` (`POST /v1/clients`, US-1.8) and
+> `open_account` (`POST /v1/accounts`, US-1.3) — but no single `/v1/onboard` call chains
+> them in one TX (US-1.1). Step 4's primitive is live: `POST /v1/clients/:client_no/banks`
+> (SP `link_client_bank`, encrypts `acct_no` → `ACCT_NO_ENC`, returns `link_id`; `is_default`
+> flag) and `PUT /v1/clients/:client_no/banks/:link_id/default` (SP `set_default_client_bank`).
+> Both are audited into `WLT_CLIENT_AUDIT_LOG` via `trg_audit_fm_client_bk`. The onboarding
+> wrappers (`/v1/onboard/*`, with KYC-tier side effects) are still pending.
 
 ---
 
-## 4. Wallet opening flow
+## 4. Wallet opening (folded into step 1)
 
-> Prerequisite: the customer already has a `CLIENT_NO` with `WLT_CLIENT_KYC.STATUS='A'` and `KYC_TIER >= '2'` (Tier 1 only has a profile, cannot open a wallet yet).
+> In the OTP-free flow, the **first wallet is opened in step 1** alongside client
+> creation (zero balance). This section documents the wallet rules; a customer can open
+> **additional** wallets later via the same `open_account` primitive.
 
-### 4.1 Sequence
-
-```mermaid
-sequenceDiagram
-  participant App as Mobile App
-  participant GW as API Gateway
-  participant AM as Account Mgmt Service
-  participant WLT as WLT
-  participant FM as FM
-  participant K as Kafka
-
-  App->>GW: POST /v1/wallets {client_no, acct_type:'CONSUMER', ccy:'VND'}
-  GW->>AM: forward
-  AM->>FM: SELECT FM_CLIENT.STATUS WHERE CLIENT_NO=...
-  AM->>WLT: SELECT WLT_CLIENT_KYC.KYC_TIER WHERE CLIENT_NO=...
-  AM->>WLT: SELECT count(*) FROM WLT_ACCT WHERE CLIENT_NO=... AND ACCT_TYPE='CONSUMER'
-  Note over AM: Validate: client active, tier >= 2, does not exceed max-wallet-per-client
-  AM->>WLT: INSERT WLT_ACCT (ACCT_NO generated from seq_acct_no)
-  AM->>WLT: INSERT WLT_ACCT_BAL (T-snapshot with bal=0)
-  AM->>K: emit "wallet.opened" {client_no, acct_no, internal_key}
-  AM-->>App: 201 {acct_no, internal_key, balance:0}
-```
-
-### 4.2 ACCT_NO generation
+### 4.1 ACCT_NO generation
 
 Format: `9701` + 10-digit serial from `seq_acct_no`
 - `9701` = example wallet BIN (must be registered with SBV/NAPAS in practice)
@@ -150,29 +189,36 @@ Format: `9701` + 10-digit serial from `seq_acct_no`
 
 Example: `9701` + `0000123456` → `97010000123456`
 
-### 4.3 Wallet count rules per customer
+### 4.2 Wallet count rules per customer
 
 | ACCT_TYPE | Max wallets / client | Reason |
 |-----------|---------------------|--------|
 | CONSUMER  | 3 (same CCY) | Prevent abuse via splitting to exceed limits |
 | MERCHANT  | 10 | Each branch/POS has its own wallet |
 
+Enforced in `open_account` → `MAX_WALLET_PER_CLIENT_EXCEEDED` (409).
+
 ---
 
 ## 5. KYC tier rules
 
-| Tier | Eligibility conditions | Limit/month | Can open wallet? | Receive only? |
-|------|------------------------|-------------|------------------|---------------|
-| **0** | Initialized, no OTP yet | – | ❌ | ❌ |
-| **1** | OTP + name + DOB | 20M VND | ❌ | ✅ (waiting for tier upgrade) |
-| **2** | + CCCD eKYC + face match ≥ 0.85 + liveness PASS | 100M VND | ✅ | ✅ |
-| **3** | + Linkage of ≥ 1 owned bank account + at least 1 transaction | Per signed customer contract | ✅ | ✅ |
+| Tier | Eligibility conditions | Limit/month | Can transact? |
+|------|------------------------|-------------|---------------|
+| **1** | Registered (basic identity, **no OTP**) — created in step 1 | 20M VND | Receive only |
+| **2** | + CCCD eKYC + face match ≥ 0.85 + liveness PASS (IND) / verified business docs (ORG) | 100M VND | ✅ |
+| **3** | + Linkage of ≥ 1 owned bank account (`linkId`) + at least 1 transaction | Per signed customer contract | ✅ |
 
-### 5.1 eKYC pass criteria (Tier 2 gate)
+> Tier **0** (initialized, no profile) is retired — there is no pre-registration
+> placeholder now that OTP is gone; the client row is created directly at **tier 1**.
+
+### 5.1 eKYC pass criteria (Tier 2 gate, individuals)
 - `FACE_MATCH_SCORE >= 0.85` (configured in the app, not hard-coded in DB)
 - `LIVENESS_RESULT = 'PASS'`
 - CCCD has not been used for another `CLIENT_NO` (unique on `FM_CLIENT_IDENTIFIERS.GLOBAL_ID`)
 - CCCD has not expired (`EXPIRY_DATE > CURRENT_DATE`)
+
+For **organizations**, the tier-2 gate is verified business documents (business licence,
+legal-rep ID) captured in `extra_data` + `related_docs` and reviewed by compliance.
 
 ### 5.2 Tier downgrade
 - Suspicious activity (AML/CFT) → manual downgrade to Tier 1, freeze all wallets
@@ -182,14 +228,14 @@ Example: `9701` + `0000123456` → `97010000123456`
 
 ## 6. State machine
 
-### 6.1 Client (`FM_CLIENT.STATUS` + `WLT_CLIENT_KYC.STATUS`)
+### 6.1 Client (`FM_CLIENT.STATUS` + `FM_CLIENT_KYC.STATUS`)
 
 ```
-       OTP only       eKYC pass           AML flag
+   create (step 1)    eKYC pass (step 2)       AML flag
   ┌───────┐  ────▶  ┌───────┐  ────▶  ┌───────┐  ────▶  ┌──────────┐
-  │   P   │         │ T1/A  │         │ T2/A  │         │ BLOCKED  │
+  │ T1/P  │         │ T1/A  │         │ T2/A  │         │ BLOCKED  │
   └───────┘         └───────┘         └───────┘         └──────────┘
-  (pending)         (active)          (active)          │
+  (pending KYC)     (active)          (active)          │
                                        │                ▼
                                        │  Customer    ┌──────────┐
                                        │  closes      │  CLOSED  │
@@ -211,59 +257,84 @@ Transitioning `A → C` is only allowed when `ACTUAL_BAL = 0` and there is no ac
 
 ## 7. API specifications
 
-### 7.1 POST /v1/onboard/init
+### 7.1 POST /v1/onboard — create client + zero-balance wallet (step 1)
 ```json
 Request:
-{ "phone": "0901234567", "device_id": "ABC-XYZ" }
-
-Response 200:
-{ "session_id": "sess_abc123", "otp_expires_in": 180 }
-
-Error 400: { "code": "INVALID_PHONE_FORMAT" }
-Error 429: { "code": "OTP_RATE_LIMITED", "retry_after_sec": 60 }
-```
-
-### 7.2 POST /v1/onboard/verify-otp
-```json
-Request:
-{ "session_id": "sess_abc123", "otp": "482931",
-  "name": "NGUYEN VAN A", "dob": "1990-05-15" }
+{ "client_type": "IND", "name": "NGUYEN VAN A",
+  "phone": "0901234567", "email": "a@example.com",
+  "ccy": "VND", "acct_type": "CONSUMER",
+  "extra_data": { "birth_date": "1990-05-15", "sex": "M" } }
 
 Response 201:
-{ "client_no": "C0000001234", "kyc_tier": "1",
-  "status": "A", "can_open_wallet": false }
+{ "client_no": "C0000001234",
+  "acct_no": "97010000123456",
+  "internal_key": 5001,
+  "kyc_tier": "1", "status": "P",
+  "balance": 0, "ccy": "VND" }
 
-Error 401: { "code": "OTP_INVALID" }
-Error 410: { "code": "OTP_EXPIRED" }
+Error 400: { "code": "INVALID_PHONE_FORMAT" }
+Error 409: { "code": "PHONE_ALREADY_REGISTERED" }
+Error 422: { "code": "INVALID_CLIENT_TYPE" }
 ```
 
-### 7.3 POST /v1/onboard/ekyc
+> For an organization: `"client_type": "CORP"` (or `"MER"`) with
+> `extra_data: { "business_reg_no": "...", "legal_rep": {...}, "ubo": [...] }`.
+
+### 7.2 POST /v1/onboard/kyc — update KYC / eKYC (step 2)
 ```json
-Request (multipart):
+Request (multipart, IND):
 { "client_no": "C0000001234",
   "cccd_front": <file>, "cccd_back": <file>, "selfie": <file> }
 
 Response 200:
 { "kyc_tier": "2", "status": "A",
-  "face_match_score": 0.97, "liveness": "PASS",
-  "can_open_wallet": true }
+  "face_match_score": 0.97, "liveness": "PASS" }
 
 Error 422: { "code": "EKYC_FAIL_LOW_SCORE", "score": 0.62 }
 Error 409: { "code": "CCCD_ALREADY_USED", "existing_client": "C0000000999" }
 ```
 
-### 7.4 POST /v1/wallets
+### 7.3 PUT /v1/onboard/documents — attach related documents (step 3)
+```json
+Request:
+{ "client_no": "C0000001234",
+  "related_docs": [
+    { "doc_type": "CCCD_FRONT", "link": "s3://kyc/.../cccd_front.jpg" },
+    { "doc_type": "SELFIE",     "link": "s3://kyc/.../selfie.jpg" }
+  ] }
+
+Response 200:
+{ "client_no": "C0000001234",
+  "related_docs": [ { "doc_type": "CCCD_FRONT", "link": "...", "status": "PENDING", "uploaded_at": "..." }, ... ] }
+```
+
+### 7.4 POST /v1/onboard/link-bank — link bank, returns linkId token (step 4)
+```json
+Request:
+{ "client_no": "C0000001234", "bank_code": "970418",
+  "acct_no": "0123456789", "acct_holder_name": "NGUYEN VAN A",
+  "is_default": true }
+
+Response 201:
+{ "linkId": 88001, "client_no": "C0000001234",
+  "is_default": 1, "status": "A", "kyc_tier": "3" }
+
+Error 404: { "code": "CLIENT_NOT_FOUND" }
+Error 400: { "code": "INVALID_REQUEST", "detail": "bank_code required" }
+```
+
+> `linkId` is the opaque token the client uses to reference the linked bank
+> (e.g. `PUT /v1/onboard/link-bank/{linkId}/default`). The raw `acct_no` is
+> encrypted (`ACCT_NO_ENC`) and never returned.
+
+### 7.5 POST /v1/wallets — open an additional wallet
 ```json
 Request:
 { "client_no": "C0000001234", "acct_type": "CONSUMER", "ccy": "VND" }
 
 Response 201:
-{ "acct_no": "97010000123456",
-  "internal_key": 5001,
-  "balance": 0,
-  "ccy": "VND",
-  "status": "A",
-  "opened_at": "2026-05-28T10:23:45+07:00" }
+{ "acct_no": "97010000123457", "internal_key": 5002,
+  "balance": 0, "ccy": "VND", "status": "A" }
 
 Error 403: { "code": "KYC_TIER_INSUFFICIENT", "current_tier": "1", "required": "2" }
 Error 409: { "code": "MAX_WALLET_PER_CLIENT_EXCEEDED", "current_count": 3, "max": 3 }
@@ -276,15 +347,15 @@ Error 423: { "code": "CLIENT_BLOCKED" }
 
 | ID | Rule | Mechanism |
 |----|------|-----------|
-| BR-01 | One phone number maps to only one active `CLIENT_NO` | UNIQUE constraint on `WLT_CLIENT_KYC.PHONE_NO` |
-| BR-02 | One CCCD belongs to only one active `CLIENT_NO` | UNIQUE check in the app (FM_CLIENT_IDENTIFIERS has a composite PK; the app must validate the active scope) |
-| BR-03 | Customer under 15 years old → reject (Vietnamese law) | App checks `DOB`; DB does not enforce |
-| BR-04 | Customer ≥ 70 years old → flag for additional review | App checks, no hard reject |
-| BR-05 | Opening a wallet requires `KYC_TIER >= '2'` | App checks before INSERT into `WLT_ACCT` |
-| BR-06 | Max wallets/client by `ACCT_TYPE` (§4.3) | App checks before INSERT |
-| BR-07 | Closing a wallet requires `ACTUAL_BAL = 0` AND no active restraint | App check + optional DB check constraint |
+| BR-01 | One phone number maps to only one active `CLIENT_NO` | UNIQUE on `FM_CLIENT_KYC.PHONE_NO_HASH` |
+| BR-02 | One CCCD belongs to only one active `CLIENT_NO` | UNIQUE check in the app (`FM_CLIENT_IDENTIFIERS` has a composite PK; the app validates the active scope) |
+| BR-03 | Individual under 15 years old → reject (Vietnamese law) | App checks `extra_data.birth_date`; DB does not enforce |
+| BR-04 | Individual ≥ 70 years old → flag for additional review | App checks, no hard reject |
+| BR-05 | The **first** wallet is opened in step 1 at tier 1; **additional** wallets require `KYC_TIER >= '2'` | App / `open_account` check |
+| BR-06 | Max wallets/client by `ACCT_TYPE` (§4.2) | `open_account` check |
+| BR-07 | Closing a wallet requires `ACTUAL_BAL = 0` AND no active restraint | App check + DB check |
 | BR-08 | eKYC score < 0.85 → 1 retry; after 3 failures → manual review | Counter in app/Redis |
-| BR-09 | OTP is 6 digits, expires in 3 minutes, max 5 resends/hour | Rate limit at the gateway |
+| BR-09 | Organization onboarding requires `extra_data.business_reg_no` + ≥ 1 `legal_rep` | App validates the ORG payload |
 | BR-10 | CCCD must still be valid (`EXPIRY_DATE > CURRENT_DATE`) | Validated at the eKYC step |
 
 ---
@@ -294,16 +365,15 @@ Error 423: { "code": "CLIENT_BLOCKED" }
 | HTTP | Code | Scenario | Caller action |
 |------|------|----------|---------------|
 | 400 | INVALID_PHONE_FORMAT | Phone number does not match VN format | Validate again |
-| 401 | OTP_INVALID | Wrong OTP | Allow retry, count attempts |
-| 410 | OTP_EXPIRED | OTP older than 3 minutes | Resend |
+| 422 | INVALID_CLIENT_TYPE | `client_type` not IND/CORP/MER | Fix the request |
 | 409 | PHONE_ALREADY_REGISTERED | Phone number already has an active client | Log in instead of registering |
 | 409 | CCCD_ALREADY_USED | CCCD overlaps with another client | Contact customer service |
 | 422 | EKYC_FAIL_LOW_SCORE | Face match < 0.85 | Retry with a clearer photo |
 | 422 | EKYC_LIVENESS_FAIL | Liveness FAIL (anti-spoof) | Retry; after 3 failures → manual |
 | 422 | CCCD_EXPIRED | CCCD expired | Update the ID document |
-| 403 | KYC_TIER_INSUFFICIENT | Tier too low for the action | Upgrade tier first |
+| 403 | KYC_TIER_INSUFFICIENT | Tier too low for the action | Raise tier first |
+| 404 | CLIENT_NOT_FOUND | `client_no` unknown (link-bank/documents) | Check the client_no |
 | 423 | CLIENT_BLOCKED | Customer is blocked (AML) | Contact operations |
-| 429 | OTP_RATE_LIMITED | OTP spamming | Wait for cooldown |
 
 ---
 
@@ -311,14 +381,15 @@ Error 423: { "code": "CLIENT_BLOCKED" }
 
 | AC | Scenario | Expected |
 |----|----------|----------|
-| AC-01 | Valid new registration → Tier 1 | `FM_CLIENT.STATUS='A'`, `WLT_CLIENT_KYC.KYC_TIER='1'` |
-| AC-02 | eKYC pass → Tier 2 | Update 3 tables atomically; can_open_wallet=true |
+| AC-01 | Valid new registration (step 1) | `FM_CLIENT.STATUS='A'`, `FM_CLIENT_KYC.KYC_TIER='1'`, **one `WLT_ACCT` + one `WLT_ACCT_BAL` (bal=0)** created in the same TX |
+| AC-02 | eKYC pass (step 2) → Tier 2 | Update KYC + INSERT identifier atomically |
 | AC-03 | eKYC liveness fail → reject, no upgrade to Tier 2 | `LIVENESS_RESULT='FAIL'`, no `FM_CLIENT_IDENTIFIERS` row created |
-| AC-04 | Open wallet at Tier=1 → 403 | No `WLT_ACCT` row generated |
-| AC-05 | Open wallet correctly → has a `WLT_ACCT` row + 1 `WLT_ACCT_BAL` snapshot row with bal=0 | INSERT into 2 tables atomically; emit "wallet.opened" Kafka event |
-| AC-06 | 2 concurrent open-wallet requests for the same customer → at most 1 exceeds the limit | Validation in app + check `count(*)` within the tx |
+| AC-04 | Attach documents (step 3) | `FM_CLIENT_KYC.related_docs` JSONB grows; existing entries preserved |
+| AC-05 | Link bank (step 4) | `FM_CLIENT_BANKS` row created; response returns `linkId`; `KYC_TIER='3'` |
+| AC-06 | 2 concurrent open-wallet requests for the same customer → at most 1 exceeds the limit | `count(*)` check within the tx |
 | AC-07 | CCCD overlaps with another customer → 409 | App rejects; no UPDATE/INSERT |
-| AC-08 | Close wallet when balance > 0 → 422 | Not allowed |
+| AC-08 | Organization onboarding without `business_reg_no` → 422 | Rejected (BR-09) |
+| AC-09 | No OTP endpoint exists | `/v1/onboard/init` and `/v1/onboard/verify-otp` are **removed** |
 
 ---
 
@@ -326,16 +397,16 @@ Error 423: { "code": "CLIENT_BLOCKED" }
 
 | Step | Table | Action | When |
 |------|-------|--------|------|
-| Verify OTP | `FM_CLIENT` | INSERT | New registration |
-| Verify OTP | `FM_CLIENT_INDVL` | INSERT | Individual customer |
-| Verify OTP | `WLT_CLIENT_KYC` | INSERT (T1) | Every new customer |
-| eKYC pass | `FM_CLIENT_IDENTIFIERS` | INSERT (CCCD) | Tier 2 |
-| eKYC pass | `FM_CLIENT` | UPDATE STATUS='A' | Tier 2 |
-| eKYC pass | `WLT_CLIENT_KYC` | UPDATE KYC_TIER='2' | Tier 2 |
-| Link bank | `FM_CLIENT_BANKS` | INSERT | Tier 3 |
-| Link bank | `WLT_CLIENT_KYC` | UPDATE KYC_TIER='3' | Tier 3 |
-| Open wallet | `WLT_ACCT` | INSERT | After Tier ≥ 2 |
-| Open wallet | `WLT_ACCT_BAL` | INSERT (snapshot bal=0) | Same tx |
+| Create (step 1) | `FM_CLIENT` | INSERT | New registration |
+| Create (step 1) | `FM_CLIENT_KYC` | INSERT (T1, `extra_data` per type) | Every new customer |
+| Create (step 1) | `WLT_ACCT` | INSERT | Same TX (first wallet) |
+| Create (step 1) | `WLT_ACCT_BAL` | INSERT (snapshot bal=0) | Same TX |
+| Update KYC (step 2) | `FM_CLIENT_IDENTIFIERS` | INSERT (CCCD) | Tier 2 |
+| Update KYC (step 2) | `FM_CLIENT_KYC` | UPDATE KYC_TIER='2' | Tier 2 |
+| Documents (step 3) | `FM_CLIENT_KYC` | UPDATE `related_docs` JSONB | Any time after step 1 |
+| Link bank (step 4) | `FM_CLIENT_BANKS` | INSERT (→ `linkId`) | Tier 3 |
+| Link bank (step 4) | `FM_CLIENT_KYC` | UPDATE KYC_TIER='3' | Tier 3 |
+| Open more wallets | `WLT_ACCT` + `WLT_ACCT_BAL` | INSERT | After Tier ≥ 2 |
 | Block wallet | `WLT_ACCT` | UPDATE ACCT_STATUS='B' | Ops/AML |
 | Close wallet | `WLT_ACCT` | UPDATE ACCT_STATUS='C' | Customer request, bal=0 |
 
@@ -356,8 +427,10 @@ See `wallet_seed.sql` §3, §4.
 
 ## 13. Open items / TODO
 
-- [ ] Periodic re-KYC process (12 months): automatically ping the customer to update CCCD if it is about to expire?
-- [ ] Corporate onboarding (CORP) — schema `FM_CLIENT.CLIENT_TYPE='CORP'`, missing tables for legal representatives/UBO
+- [ ] `FM_CLIENT_KYC` rename + `extra_data`/`related_docs` JSONB migration (US-9.16 + US-1.15) — sequence in one migration
+- [ ] Combined `POST /v1/onboard` SP/endpoint chaining client + KYC + wallet in one TX (US-1.1)
+- [ ] Periodic re-KYC process (12 months): auto-ping the customer to update CCCD if it is about to expire (US-1.6)
+- [ ] Organization onboarding payload + UBO capture in `extra_data`, compliance review path (US-1.7)
 - [ ] Joint wallet / authorized signatory — design not yet available
 - [ ] At which step is AML scoring integrated? Real-time at eKYC or daily batch?
 - [ ] CIC (Credit Information Center) linkage for tier 3?
