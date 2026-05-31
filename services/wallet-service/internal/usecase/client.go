@@ -26,6 +26,26 @@ func (s *WalletService) UpdateClient(ctx context.Context, in domain.ClientUpdate
 	return res, nil
 }
 
+// OnboardClient runs the OTP-free step 1: create client + KYC + first wallet (US-1.1/1.7).
+func (s *WalletService) OnboardClient(ctx context.Context, in domain.OnboardInput) (*domain.OnboardResult, error) {
+	res, err := s.repo.OnboardClient(ctx, in)
+	if err != nil {
+		s.logFailure(ctx, "onboard_client", in.GlobalID, err)
+		return nil, err
+	}
+	return res, nil
+}
+
+// UpdateKYC submits/updates eKYC info and raises the KYC tier (US-1.2).
+func (s *WalletService) UpdateKYC(ctx context.Context, in domain.KycUpdateInput) (*domain.KycResult, error) {
+	res, err := s.repo.UpdateKYC(ctx, in)
+	if err != nil {
+		s.logFailure(ctx, "update_kyc", in.ClientNo, err)
+		return nil, err
+	}
+	return res, nil
+}
+
 // GetClient returns the masked client profile (wallet_app path).
 func (s *WalletService) GetClient(ctx context.Context, clientNo string) (*domain.ClientView, error) {
 	return s.repo.GetClient(ctx, clientNo)

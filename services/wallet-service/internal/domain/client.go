@@ -41,6 +41,62 @@ type ClientResult struct {
 	Timestamp time.Time // created_at (create) | updated_at (update)
 }
 
+// OnboardInput — POST /v1/onboard (US-1.1/1.7): step 1 of the OTP-free flow.
+// One TX creates FM_CLIENT, its FM_CLIENT_KYC row (phone captured, tier 1) and
+// the first zero-balance wallet. ExtraData carries type-specific identity (IND
+// surname/given_name/…; ORG legal_rep/ubo/business_reg_no — required for CORP/MER).
+type OnboardInput struct {
+	ClientName     string
+	ClientType     string // IND | CORP | MER
+	Phone          string // VN format 0xxxxxxxxx (captured, not OTP-verified)
+	GlobalID       string
+	GlobalIDType   string
+	Email          string
+	CountryLoc     string
+	CountryCitizen string
+	AcctType       string // CONSUMER | MERCHANT ("" → CONSUMER)
+	Ccy            string // "" → VND
+	ExtraData      map[string]any
+	Audit          AuditContext
+}
+
+// OnboardResult is returned by onboard_client.
+type OnboardResult struct {
+	ClientNo    string
+	AcctNo      string
+	InternalKey int64
+	KycTier     string
+	KycStatus   string
+	Balance     string // numeric → string (always "0" at onboarding)
+	Ccy         string
+	CreatedAt   time.Time
+}
+
+// KycUpdateInput — POST /v1/clients/:client_no/kyc (US-1.2): submit/update eKYC
+// info and raise the tier. Empty/nil fields are left unchanged; ExtraData (when
+// present) is MERGED into FM_CLIENT_KYC.extra_data.
+type KycUpdateInput struct {
+	ClientNo       string
+	KycTier        string // "" = unchanged; else 0..3
+	Status         string
+	RiskLevel      string
+	EkycProvider   string
+	EkycRef        string
+	FaceMatchScore *float64 // nil = unchanged
+	LivenessResult string
+	ExtraData      map[string]any // nil = unchanged
+	Audit          AuditContext
+}
+
+// KycResult is returned by update_kyc.
+type KycResult struct {
+	ClientNo   string
+	KycTier    string
+	Status     string
+	RiskLevel  string
+	VerifiedAt *time.Time
+}
+
 // BankLinkInput links a bank account to a client (link_client_bank SP).
 // AcctNo is plaintext in; the SP encrypts it to ACCT_NO_ENC (pgp_sym_encrypt).
 type BankLinkInput struct {

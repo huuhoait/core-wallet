@@ -80,6 +80,11 @@ const (
 	CodeInvalidClientType   = "INVALID_CLIENT_TYPE"
 	CodeClientAlreadyExists = "CLIENT_ALREADY_EXISTS"
 	CodeClientNotFound      = "CLIENT_NOT_FOUND"
+	// Onboarding (US-1.1/1.2/1.7) — OTP-free 4-step flow
+	CodePhoneAlreadyRegistered = "PHONE_ALREADY_REGISTERED" // duplicate phone_no_hash
+	CodeInvalidPhoneFormat     = "INVALID_PHONE_FORMAT"
+	CodeKycNotFound            = "KYC_NOT_FOUND"
+	CodeOrgFieldsRequired      = "ORG_FIELDS_REQUIRED" // CORP/MER need business_reg_no + legal_rep (BR-09)
 	// Client linked-bank management (BANK_LINK_NOT_FOUND → 404 via _NOT_FOUND family)
 	CodeBankLinkNotFound = "BANK_LINK_NOT_FOUND"
 	// Account (wallet) lifecycle

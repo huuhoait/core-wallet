@@ -9,9 +9,8 @@
 --     fm_currency, fm_gl_mast (GL chart of accounts), fm_nos_vos,
 --     wlt_acct_type, wlt_tran_def (tran types), wlt_gl_map, wlt_nostro_link
 --
---   TRUNCATED (17 tables, partitions cascade automatically):
---     customers : fm_client, fm_client_identifiers,
---                 fm_client_contact, fm_client_banks, fm_client_kyc
+--   TRUNCATED (16 tables, partitions cascade automatically):
+--     customers : fm_client, fm_client_contact, fm_client_banks, fm_client_kyc
 --     accounts  : wlt_acct, wlt_acct_group, wlt_acct_bal*, wlt_restraints
 --     postings  : wlt_gl_batch
 --     tran hist : wlt_tran_hist*        (* = partitioned)
@@ -63,7 +62,6 @@ BEGIN;
 TRUNCATE TABLE
     -- Customer master & KYC
     fm_client,
-    fm_client_identifiers,
     fm_client_contact,
     fm_client_banks,
     fm_client_kyc,

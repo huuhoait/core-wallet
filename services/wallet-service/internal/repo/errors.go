@@ -112,6 +112,7 @@ func httpStatusFor(code string) int {
 		domain.CodeSameAccount,
 		domain.CodeAmountOutOfRange,
 		domain.CodeTranTypeInactive,
+		domain.CodeInvalidPhoneFormat,
 		domain.CodeInvalidRequest:
 		return http.StatusBadRequest
 	case domain.CodeTierInsufficient:
@@ -133,6 +134,7 @@ func httpStatusFor(code string) int {
 		domain.CodeWDInvalidState,
 		domain.CodeRestraintAlreadyRemoved,
 		domain.CodeClientAlreadyExists,
+		domain.CodePhoneAlreadyRegistered,
 		domain.CodeMaxWalletExceeded,
 		domain.CodeGroupAlreadyActivated:
 		// Group already promoted to hot — re-activation conflicts with current state.
@@ -146,6 +148,7 @@ func httpStatusFor(code string) int {
 		domain.CodeInvalidClientType,
 		domain.CodeInvalidAcctType,
 		domain.CodeAcctCloseNonzeroBal,
+		domain.CodeOrgFieldsRequired,
 		domain.CodeInvalidShardCount:
 		// Schema-valid request but the shard count is not a supported hot tier.
 		return http.StatusUnprocessableEntity
