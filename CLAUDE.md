@@ -123,7 +123,7 @@ The DB is the source of truth for the ledger. It is defined by three pg_dump-gen
 - `db/seeds/` — demo / load-test fixtures (`wallet_testdata_10.sql`, the `wallet_seed.sql` bulk generator, `coa/` source); **not** part of the init export.
 - `db/tests/` — SQL assertion suites (accounting balance, merchant flow, reconciliation, reversal).
 
-Key tables: `WLT_ACCT`, `WLT_ACCT_BAL`, `WLT_TRAN_HIST`, `WLT_OUTBOX` (transactional outbox), `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`. Load-test data is prefixed `LT*`/`PB*` (clients `LTC*`/`LTGC*`, groups `LTG*`, refs `LT-*`/`PB-*`) so `deploy/loadtest/teardown.sql` can scope cleanup without touching baseline `C*` data.
+Key tables: `WLT_ACCT`, `WLT_ACCT_BAL`, `WLT_TRAN_HIST`, `WLT_OUTBOX` (transactional outbox), `WLT_WITHDRAW_TRACK`, `FM_CLIENT_AUDIT_LOG`. Load-test data is prefixed `LT*`/`PB*` (clients `LTC*`/`LTGC*`, groups `LTG*`, refs `LT-*`/`PB-*`) so `deploy/loadtest/teardown.sql` can scope cleanup without touching baseline `C*` data.
 
 **HARD RULE — DDL lives in `db/export/schema.sql`.** Any DDL change (new or altered table, column, index, constraint, sequence, trigger, or PL/pgSQL function / SP) MUST be written into `db/export/schema.sql` as part of the same change — even when you also applied it live to a running DB. `schema.sql` is the source of truth docker-init loads; an `ALTER`/`CREATE` that only ran against a local DB and isn't reflected here is **lost on the next `docker compose down -v && up`** and never reaches review or other environments. Partition DDL belongs in `partitions.sql`, reference/master data in `seed.sql`. After editing, validate with `docker compose down -v && up` (regenerate via `pg_dump` per `db/export/README.md` if you changed the live DB first).
 

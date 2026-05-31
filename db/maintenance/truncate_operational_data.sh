@@ -36,7 +36,7 @@ TRUNCATE_TABLES=(
   fm_client fm_client_contact fm_client_banks
   fm_client_kyc wlt_acct wlt_acct_group wlt_acct_bal wlt_restraints
   wlt_gl_batch wlt_tran_hist wlt_outbox wlt_api_message wlt_withdraw_track
-  wlt_client_audit_log wlt_sweep_log wlt_nostro_bal
+  fm_client_audit_log wlt_sweep_log wlt_nostro_bal
 )
 
 count_query() {

@@ -44,7 +44,7 @@ DELETE FROM wlt_outbox       WHERE partition_key LIKE 'LT%';
 DELETE FROM wlt_api_message
  WHERE object_ref_id LIKE 'PB-%' OR object_ref_id LIKE 'PBEXT-%' OR object_ref_id LIKE 'LT-%';
 
-DELETE FROM wlt_client_audit_log
+DELETE FROM fm_client_audit_log
  WHERE client_no IN (SELECT client_no FROM _lt_client)
     OR client_no LIKE 'LT%'
     OR change_source = 'LOADTEST' OR changed_by = 'loadtest';
