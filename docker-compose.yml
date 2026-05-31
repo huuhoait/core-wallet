@@ -47,16 +47,20 @@ services:
       # Init scripts run in lexicographic order of their CONTAINER target name.
       # The whole DB is two generated artifacts in db/export/ (regenerate with
       # pg_dump — see db/export/README.md):
-      #   01-schema.sql  all DDL: tables, sequences, indexes, constraints,
-      #                  functions, procedures, triggers (incl. the balanced-posting
-      #                  CONSTRAINT TRIGGER + DEFAULT partitions), views, extensions,
-      #                  and GRANTs to wallet_app / wallet_pii / wallet_eod.
-      #   02-seed.sql    reference/master data: GL master (fm_gl_mast), COA map
-      #                  (wlt_gl_map), tran types (wlt_tran_def), currency, acct types.
+      #   01-schema.sql      all DDL: tables (incl. the 4 partitioned PARENTS, no
+      #                      child partitions), sequences, indexes, constraints,
+      #                      functions, procedures, triggers (incl. the balanced-
+      #                      posting CONSTRAINT TRIGGER), views, extensions, GRANTs.
+      #   02-partitions.sql  monthly partitions for the 4 parents (wlt_tran_hist also
+      #                      hash-subpartitioned) + DEFAULT partitions. Idempotent;
+      #                      re-runnable to roll partitions forward.
+      #   03-seed.sql        reference/master data: GL master (fm_gl_mast), COA map
+      #                      (wlt_gl_map), tran types (wlt_tran_def), currency, acct types.
       # 00 creates the roles the schema grants to; 99 re-aligns passwords + verifies.
       - ./deploy/docker/postgres/init/00-set-passwords.sh:/docker-entrypoint-initdb.d/00-set-passwords.sh:ro
       - ./db/export/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-      - ./db/export/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - ./db/export/partitions.sql:/docker-entrypoint-initdb.d/02-partitions.sql:ro
+      - ./db/export/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql:ro
       - ./deploy/docker/postgres/init/03-update-role-passwords.sh:/docker-entrypoint-initdb.d/99-update-role-passwords.sh:ro
     command:
       - "postgres"
