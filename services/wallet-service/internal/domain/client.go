@@ -6,7 +6,7 @@ import "time"
 // No KYC/onboarding — identity only (FM_CLIENT + FM_CLIENT_INDVL when IND).
 type ClientCreateInput struct {
 	ClientName     string
-	ClientType     string // 'IND' | 'CORP' (SP-validated)
+	ClientType     string // 'IND' | 'CORP' | 'MER' (SP-validated; CORP/MER are org-like)
 	GlobalID       string // CCCD / passport / tax id
 	GlobalIDType   string
 	CountryLoc     string

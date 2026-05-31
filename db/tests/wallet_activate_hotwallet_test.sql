@@ -24,7 +24,7 @@ RETURNS text LANGUAGE plpgsql AS $$
 DECLARE v_c text;
 BEGIN
   v_c := fn_create_client('Merchant '||p_grp, '8882'||lpad((random()*1e8)::int::text,8,'0'),
-                          '0882'||lpad((random()*1e6)::int::text,6,'0'), NULL, 'ORG','3');
+                          '0882'||lpad((random()*1e6)::int::text,6,'0'), NULL, 'MER','3');
   INSERT INTO WLT_ACCT_GROUP(group_id, client_no, group_type, shard_count,
                              settlement_acct_no, shard_threshold, shard_buffer,
                              sweep_interval_sec, group_status)

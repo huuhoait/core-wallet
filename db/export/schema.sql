@@ -236,7 +236,9 @@ DECLARE
   v_no      VARCHAR(48);
   v_created TIMESTAMPTZ;
 BEGIN
-  IF p_client_type IS NULL OR p_client_type NOT IN ('IND','CORP') THEN
+  -- Unified client types: IND (individual), CORP (corporate), MER (merchant).
+  -- CORP and MER are organization-like and handled identically below (no INDVL row).
+  IF p_client_type IS NULL OR p_client_type NOT IN ('IND','CORP','MER') THEN
     RAISE EXCEPTION 'INVALID_CLIENT_TYPE' USING ERRCODE = 'P0070';
   END IF;
   IF p_client_name IS NULL OR length(btrim(p_client_name)) = 0 THEN
@@ -257,6 +259,8 @@ BEGIN
        p_client_type, COALESCE(p_country_loc, 'VN'), COALESCE(p_country_citizen, 'VN'), 'A')
   RETURNING created_at INTO v_created;
 
+  -- Individuals carry the personal-detail sub-row; CORP/MER are the bare FM_CLIENT
+  -- row (no FM_CLIENT_ORG table in scope yet — add an org branch here if needed).
   IF p_client_type = 'IND' THEN
     INSERT INTO FM_CLIENT_INDVL(client_no, surname, given_name_1, birth_date, sex, resident_status)
     VALUES (v_no, p_surname, p_given_name, p_birth_date, p_sex, 'R');

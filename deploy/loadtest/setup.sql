@@ -47,7 +47,7 @@ BEGIN
     v_c := 'LTGC'||lpad(i::text,8,'0');
     CONTINUE WHEN EXISTS (SELECT 1 FROM WLT_ACCT_GROUP WHERE group_id = v_g);
     INSERT INTO FM_CLIENT(client_no,global_id,global_id_type,client_name,client_type,country_loc,country_citizen,status)
-      VALUES(v_c,'LTGID'||lpad(i::text,8,'0'),'CCCD','LoadMerchant '||i,'ORG','VN','VN','A');
+      VALUES(v_c,'LTGID'||lpad(i::text,8,'0'),'CCCD','LoadMerchant '||i,'MER','VN','VN','A');
     INSERT INTO WLT_CLIENT_KYC(client_no,phone_no_enc,phone_no_hash,kyc_tier,status)
       VALUES(v_c, convert_to('09'||lpad(i::text,8,'0'),'UTF8'),
              digest('LTM09'||lpad(i::text,8,'0'),'sha256'),'3','A');

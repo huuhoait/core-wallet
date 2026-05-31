@@ -33,7 +33,7 @@ BEGIN
   PERFORM set_config('audit.channel','TEST',true);
 
   -- ── setup: 1 merchant group = 1 SETTLEMENT (1,000,000) + 4 SHARD (500,000 each)
-  v_mc := fn_create_client('Merchant Hot','888000009001','0888009001','m@hot.test','ORG','3');
+  v_mc := fn_create_client('Merchant Hot','888000009001','0888009001','m@hot.test','MER','3');
 
   -- group first (settlement_acct_no FK is DEFERRABLE → fine before the acct exists)
   INSERT INTO WLT_ACCT_GROUP

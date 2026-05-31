@@ -16,7 +16,7 @@ RETURNS text LANGUAGE plpgsql AS $$
 DECLARE v_c text; v_g text := 'GF'||p_sfx; i int;
 BEGIN
   PERFORM set_config('audit.actor','test',true); PERFORM set_config('audit.channel','TEST',true);
-  v_c := fn_create_client('Merchant '||p_sfx, '8881'||lpad(p_sfx,8,'0'), '0881'||lpad(p_sfx,6,'0'), NULL, 'ORG','3');
+  v_c := fn_create_client('Merchant '||p_sfx, '8881'||lpad(p_sfx,8,'0'), '0881'||lpad(p_sfx,6,'0'), NULL, 'MER','3');
   INSERT INTO WLT_ACCT_GROUP(group_id,client_no,group_type,shard_count,settlement_acct_no,shard_threshold,shard_buffer,sweep_interval_sec,group_status)
     VALUES (v_g, v_c, 'MERCHANT', 8, 'MCH'||p_sfx||'S', 50000000, p_buf, 60, 'A');
   INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,actual_bal,prev_day_actual_bal,acct_role,group_id)

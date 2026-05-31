@@ -94,7 +94,7 @@ BEGIN
   FOR i IN 1 .. array_length(v_data,1) LOOP
     v_cn := fn_create_client(
       v_data[i][1], v_data[i][2], v_data[i][3], v_data[i][4],
-      CASE WHEN v_data[i][5]='MERCHANT' THEN 'ORG' ELSE 'IND' END,
+      CASE WHEN v_data[i][5]='MERCHANT' THEN 'MER' ELSE 'IND' END,
       v_data[i][6]);
     PERFORM fn_open_wallet(v_cn, v_data[i][5], v_data[i][7]::NUMERIC);
     RAISE NOTICE 'Created % (%) % fund=%', v_data[i][1], v_cn, v_data[i][5], v_data[i][7];
