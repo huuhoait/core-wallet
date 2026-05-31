@@ -197,13 +197,16 @@ and the Postman collection.
 | Schema (DDL) | `db/ddl/wallet_schema.sql` | docker-init schema + single source of truth for the DDL |
 | Posting procedures | `db/procedures/wallet_sp*.sql` | `post_topup/transfer/withdraw/merchant_withdraw`, 4 reversals, balance, withdraw state machine |
 | Seeds & reference | `db/seeds/` | Chart of accounts (`coa/`), tran-type extensions, test fixtures |
-| SQL test suites | `db/tests/` | Accounting balance, merchant flow, reconciliation check, reversal |
+| SQL test suites | `db/tests/` | Accounting balance, restraint (hold/lien) lifecycle, merchant flow, reconciliation check, reversal, EOD period lock |
 
-Run the SQL test suites against a seeded DB:
+Run the SQL test suites against a seeded DB (each is self-contained — creates its
+own fixtures and `ROLLBACK`s, except the read-only `*_check` reconciliation audits):
 
 ```bash
-docker compose exec -T postgres psql -U postgres -d wallet -f /dev/stdin \
+docker compose exec -T postgres psql -U postgres -d wallet -v ON_ERROR_STOP=1 -f /dev/stdin \
   < db/tests/wallet_accounting_test.sql
+docker compose exec -T postgres psql -U postgres -d wallet -v ON_ERROR_STOP=1 -f /dev/stdin \
+  < db/tests/wallet_restraint_test.sql
 ```
 
 ---
@@ -220,6 +223,18 @@ SETUP=1 TEARDOWN=1 bash deploy/loadtest/run.sh 100 60 16
 # TPS saturation sweep
 LEVELS="100 200 400" bash deploy/loadtest/stress.sh
 ```
+
+The pgbench tier drives an **8-way mix** (weights /100): `topup` 20 · `transfer`
+(TRFOUT, fee) 18 · `withdraw` (WDRAW, fee+VAT) 12 · `reversal` (transfer reversal)
+10 · `withdraw_reversal` (reversal **with fee** refund — RVWD+RVFEE) 10 ·
+`merchant_topup` (consumer→settlement payment) 12 · `merchant_withdraw` 10 ·
+`restraint` (add+remove a DEBIT/PLEDGE hold) 8 — one `deploy/loadtest/<op>.sql` per
+scenario. `SETUP=1` seeds 10k consumer wallets + 20 merchant groups (`LT*`); merchant
+settlement/shard sub-accounts are funded directly (no posting path credits them).
+
+> ⚠️ `teardown.sql` ships with its DELETE block commented out (dry-run by design —
+> it only prints before/after `LT*`/`PB*` row counts). To actually purge load-test
+> data, uncomment the `BEGIN … COMMIT` block; `TEARDOWN=1` is otherwise a no-op.
 
 Latest sweep notes: [docs/specs/k6_sweep.md](docs/specs/k6_sweep.md).
 

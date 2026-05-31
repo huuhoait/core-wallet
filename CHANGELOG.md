@@ -8,6 +8,38 @@ condensed from the HLD changelog.
 
 ## [Unreleased]
 
+### Added — Load-test scenarios: merchant topup, fee reversal, restraint (2026-05-31)
+- **3 new pgbench scripts** wired into the `run.sh` / `stress.sh` 8-way mix:
+  - `deploy/loadtest/merchant_topup.sql` — consumer→merchant **SETTLEMENT** payment
+    (the only on-ledger merchant-credit path; `post_topup` rejects non-STANDALONE).
+  - `deploy/loadtest/withdraw_reversal.sql` — withdraw + `post_withdraw_reversal`,
+    exercising the **reversal-with-fee** path (RVWD principal + RVFEE refund + DR
+    reversal of revenue 401.01 / VAT 203.01 + treasury-status transition).
+  - `deploy/loadtest/restraint.sql` — `add_restraint` (DEBIT/PLEDGE) + `release_restraint`
+    lifecycle (balance-neutral; `\gset` threads the new `restraint_id` into the release).
+  - New mix (/100): topup 20 / transfer 18 / withdraw 12 / reversal 10 /
+    withdraw_reversal 10 / merchant_topup 12 / merchant_withdraw 10 / restraint 8.
+    Verified end-to-end: 537 txns, **0 failed** across all 8 scripts.
+- **Fixed `deploy/loadtest/setup.sql`** — it funded merchant settlement/shard
+  sub-accounts via `post_topup`, which now raises `P0028` (ACCT_ROLE_INVALID — topup
+  is STANDALONE-only), aborting the whole seed. Settlement/shards are now seeded with
+  a direct opening `actual_bal` (the pattern the merchant SQL suites already use);
+  consumer wallets stay on `post_topup`.
+
+### Added — Restraint test suite + seed schema fix (2026-05-31)
+- **`db/tests/wallet_restraint_test.sql`** — 25 self-contained, rollback-scoped
+  cases covering `add_restraint` / `release_restraint` (previously untested):
+  rollup of all 4 types (DEBIT/CREDIT/ALL/INFO) onto `WLT_ACCT`
+  (`TOTAL_RESTRAINED_AMT`/`CR_BLOCKED`/`RESTRAINT_PRESENT`/`VERSION`), validation
+  errors `P0060`–`P0064`/`P0001`/`P0004`, **posting-path enforcement** (DEBIT pledge
+  shrinks `CALC_BAL` → withdraw `P0026`; full block `P0025`; credit block → topup
+  `P0029`), and release semantics (restore, free-funds, `P0065`–`P0067`,
+  multi-restraint recompute). 25/25 pass.
+- **Fixed `db/seeds/wallet_seed.sql`** — `fn_create_client` still wrote the dropped
+  `WLT_CLIENT_KYC.PHONE_NO`/`EMAIL` columns; updated to the encrypted schema
+  (`PHONE_NO_ENC`/`PHONE_NO_HASH`/`EMAIL_ENC` via `pgp_sym_encrypt`+`digest`),
+  matching `wallet_testdata_10.sql`. The documented seed flow ran clean again.
+
 ### Changed — Trim WLT_TRAN_HIST (2026-05-31)
 - Dropped `TRAN_DATE` + `EFFECT_DATE` — they always equalled `POST_DATE` (redundant);
   ledger dating is now `POST_DATE` + `VALUE_DATE` only.

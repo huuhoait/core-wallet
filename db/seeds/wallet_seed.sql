@@ -58,6 +58,7 @@ CREATE OR REPLACE FUNCTION fn_create_client(
 LANGUAGE plpgsql AS $$
 DECLARE
   v_client_no VARCHAR(48);
+  v_key       TEXT := 'wallet-test-key';
 BEGIN
   v_client_no := 'C' || LPAD(nextval('seq_client')::text, 10, '0');
 
@@ -83,10 +84,17 @@ BEGIN
   VALUES
     (v_client_no, p_global_id, 'CCCD', 1, 'VN');
 
+  -- PII at rest: phone/email encrypted (pgp_sym_encrypt), phone also SHA-256
+  -- hashed for the unique index uk_kyc_phone_hash. Test key is fixed — posting
+  -- tests never decrypt phone, so this matches wallet_testdata_10.sql.
   INSERT INTO WLT_CLIENT_KYC
-    (CLIENT_NO, PHONE_NO, EMAIL, KYC_TIER, STATUS)
+    (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS)
   VALUES
-    (v_client_no, p_phone, p_email, p_kyc_tier, 'A');
+    (v_client_no,
+     pgp_sym_encrypt(p_phone, v_key),
+     digest(p_phone, 'sha256'),
+     CASE WHEN p_email IS NULL THEN NULL ELSE pgp_sym_encrypt(p_email, v_key) END,
+     p_kyc_tier, 'A');
 
   RETURN v_client_no;
 END $$;

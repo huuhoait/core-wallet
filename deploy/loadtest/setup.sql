@@ -49,15 +49,16 @@ BEGIN
              digest('LTM09'||lpad(i::text,8,'0'),'sha256'),'3','A');
     INSERT INTO WLT_ACCT_GROUP(group_id,client_no,group_type,shard_count,settlement_acct_no,shard_threshold,shard_buffer,sweep_interval_sec,group_status)
       VALUES(v_g,v_c,'MERCHANT',8,'LTGS'||lpad(i::text,2,'0'),50000000,0,60,'A');
-    INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,acct_role,group_id)
-      VALUES('LTGS'||lpad(i::text,2,'0'), v_c,'MERCHANT','VND','A','SETTLEMENT',v_g);
-    PERFORM post_topup('LTGS'||lpad(i::text,2,'0'), 1000000000000,
-                       'LT-OPEN-LTGS'||lpad(i::text,2,'0'), '{}'::jsonb, 'LOADTEST', 'loadtest');
+    -- Settlement + shards are internal hot-wallet sub-accounts. post_topup rejects
+    -- non-STANDALONE roles (P0028) and there is no posting path to credit them
+    -- (transfer rejects SHARD receivers; sweep only moves shard→settlement), so
+    -- seed their opening balance directly — exactly how the merchant SQL suites
+    -- fund MCH*S/MCH*H. Consumer wallets above stay on post_topup (STANDALONE).
+    INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,actual_bal,prev_day_actual_bal,acct_role,group_id)
+      VALUES('LTGS'||lpad(i::text,2,'0'), v_c,'MERCHANT','VND','A',1000000000000,1000000000000,'SETTLEMENT',v_g);
     FOR j IN 0..7 LOOP
-      INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,acct_role,group_id,shard_index)
-        VALUES('LTGH'||lpad(i::text,2,'0')||j, v_c,'MERCHANT','VND','A','SHARD',v_g,j);
-      PERFORM post_topup('LTGH'||lpad(i::text,2,'0')||j, 10000000000,
-                         'LT-OPEN-LTGH'||lpad(i::text,2,'0')||j, '{}'::jsonb, 'LOADTEST', 'loadtest');
+      INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,actual_bal,prev_day_actual_bal,acct_role,group_id,shard_index)
+        VALUES('LTGH'||lpad(i::text,2,'0')||j, v_c,'MERCHANT','VND','A',10000000000,10000000000,'SHARD',v_g,j);
     END LOOP;
   END LOOP;
 END $$;
