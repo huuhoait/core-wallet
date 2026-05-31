@@ -32,6 +32,7 @@ const BASE = __ENV.BASE_URL || 'http://localhost:8099';
 const NW   = parseInt(__ENV.NWALLET || '10000');
 const NG   = parseInt(__ENV.NGROUP  || '20');    // merchant groups (LTG01..LTGnn)
 const PEAK = parseInt(__ENV.PEAK    || '100');   // peak target TPS
+const DUR  = parseInt(__ENV.DURATION || '0');    // DURATION=N → short N-second run (2s ramp + hold at PEAK) instead of the 90s staged ramp
 
 // Business outcomes (409 conflict, 422 insufficient/limit, 423 restrained) are
 // valid fast responses, not infra failures — mark them "expected" so
@@ -67,7 +68,10 @@ export const options = {
       // (that lag caused dropped_iterations at PEAK>=700). maxVUs gives headroom
       // when per-iteration latency rises — at 700 TPS the old cap of 300 was hit.
       preAllocatedVUs: 150, maxVUs: 600,
-      stages: [
+      stages: DUR ? [
+        { target: PEAK, duration: '2s' },
+        { target: PEAK, duration: (DUR > 2 ? DUR - 2 : 1) + 's' },
+      ] : [
         { target: 10,   duration: '15s' },
         { target: 50,   duration: '15s' },
         { target: PEAK, duration: '30s' },

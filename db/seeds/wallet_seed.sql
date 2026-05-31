@@ -83,17 +83,10 @@ BEGIN
   VALUES
     (v_client_no, p_global_id, 'CCCD', 1, 'VN');
 
-  -- PII is stored encrypted: phone/email as bytea (dev: convert_to placeholder,
-  -- matching wallet_testdata_10.sql) + a sha256 phone hash for the unique index
-  -- uk_kyc_phone_hash. The plain PHONE_NO/EMAIL columns were dropped from the schema.
   INSERT INTO WLT_CLIENT_KYC
-    (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS)
+    (CLIENT_NO, PHONE_NO, EMAIL, KYC_TIER, STATUS)
   VALUES
-    (v_client_no,
-     convert_to(p_phone, 'UTF8'),
-     digest(p_phone, 'sha256'),
-     CASE WHEN p_email IS NULL THEN NULL ELSE convert_to(p_email, 'UTF8') END,
-     p_kyc_tier, 'A');
+    (v_client_no, p_phone, p_email, p_kyc_tier, 'A');
 
   RETURN v_client_no;
 END $$;

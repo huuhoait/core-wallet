@@ -57,6 +57,21 @@ COMMENT ON EXTENSION "uuid-ossp" IS 'generate universally unique identifiers (UU
 
 
 --
+-- Name: app.pii_dek; Type: DATABASE SETTING; Schema: -; Owner: -
+--
+-- Dev DEK for pgp_sym_encrypt/decrypt of PII (phone/email/beneficiary acct) used
+-- by fn_create_client, the posting SPs, and the masked views. Set per-database so
+-- it survives reconnects (PgBouncer txn-mode). OVERRIDE IN PROD via KMS. DB-name
+-- agnostic so this export restores cleanly into any target database name.
+--
+
+DO $pii_dek$ BEGIN
+  EXECUTE format('ALTER DATABASE %I SET app.pii_dek = %L',
+                 current_database(), 'dev_only_change_in_prod_kms');
+END $pii_dek$;
+
+
+--
 -- Name: add_restraint(character varying, character varying, character varying, numeric, date, date, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -780,8 +795,12 @@ CREATE FUNCTION public.fn_create_client(p_client_name character varying, p_globa
     AS $$
 DECLARE
   v_client_no VARCHAR(48);
-  v_key       TEXT := 'wallet-test-key';
+  v_key       TEXT := current_setting('app.pii_dek', TRUE);  -- same DEK the masked views decrypt with
 BEGIN
+  IF v_key IS NULL OR v_key = '' THEN
+    RAISE EXCEPTION 'PII_DEK_NOT_SET — set ALTER DATABASE ... SET app.pii_dek=...'
+      USING ERRCODE = 'P0030';
+  END IF;
   v_client_no := 'C' || LPAD(nextval('seq_client')::text, 10, '0');
 
   INSERT INTO FM_CLIENT (CLIENT_NO, GLOBAL_ID, GLOBAL_ID_TYPE, CLIENT_NAME,
@@ -800,9 +819,9 @@ BEGIN
   INSERT INTO WLT_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS)
   VALUES (
     v_client_no,
-    pgp_sym_encrypt(p_phone, v_key),
+    pgp_sym_encrypt(p_phone, v_key, 'cipher-algo=aes256'),
     digest(p_phone, 'sha256'),
-    CASE WHEN p_email IS NULL THEN NULL ELSE pgp_sym_encrypt(p_email, v_key) END,
+    CASE WHEN p_email IS NULL THEN NULL ELSE pgp_sym_encrypt(p_email, v_key, 'cipher-algo=aes256') END,
     p_kyc_tier, 'A');
 
   RETURN v_client_no;
