@@ -24,6 +24,9 @@ Archive/
 # ---- Load-test scratch ------------------------------------------------------
 loadtest/*.tmp
 *.k6-summary.json
+# Generated run reports (run.sh / k6.sh write here) — keep the dir, ignore outputs
+deploy/loadtest/reports/*.md
+!deploy/loadtest/reports/.gitkeep
 
 # ---- DB migration dumps (generated artifacts) ----
 db/migration/
