@@ -1,0 +1,41 @@
+--
+-- PostgreSQL database cluster dump
+--
+
+\restrict FRxazfOFFGtnvzqb0SfHj6LKZDFOchz3LngFBC4kuQ7WwAsvtLI8oFLTPWCpqlo
+
+SET default_transaction_read_only = off;
+
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+
+--
+-- Roles
+--
+
+CREATE ROLE postgres;
+ALTER ROLE postgres WITH SUPERUSER INHERIT CREATEROLE CREATEDB LOGIN REPLICATION BYPASSRLS;
+CREATE ROLE wallet_admin;
+ALTER ROLE wallet_admin WITH NOSUPERUSER INHERIT CREATEROLE CREATEDB LOGIN NOREPLICATION NOBYPASSRLS;
+CREATE ROLE wallet_app;
+ALTER ROLE wallet_app WITH NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB LOGIN NOREPLICATION NOBYPASSRLS;
+CREATE ROLE wallet_eod;
+ALTER ROLE wallet_eod WITH NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB NOLOGIN NOREPLICATION NOBYPASSRLS;
+CREATE ROLE wallet_pii_ro;
+ALTER ROLE wallet_pii_ro WITH NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB LOGIN NOREPLICATION NOBYPASSRLS;
+
+--
+-- User Configurations
+--
+
+
+
+
+
+
+\unrestrict FRxazfOFFGtnvzqb0SfHj6LKZDFOchz3LngFBC4kuQ7WwAsvtLI8oFLTPWCpqlo
+
+--
+-- PostgreSQL database cluster dump complete
+--
+
