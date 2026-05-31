@@ -1266,11 +1266,11 @@ BEGIN
 
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE,
                           PARTITION_KEY, TOPIC, PAYLOAD)
-  VALUES ('WITHDRAW', v_track.TFR_INTERNAL_KEY::text,
+  VALUES ('WITHDRAW', v_track.TRAN_INTERNAL_ID::text,
           'wallet.withdraw.acked.v1', v_track.ACCT_NO, 'wallet.withdrawals',
           jsonb_build_object('ext_payout_ref', p_ext_payout_ref,
                              'treasury_batch_id', p_treasury_batch_id,
-                             'tfr_internal_key', v_track.TFR_INTERNAL_KEY,
+                             'tran_internal_id', v_track.TRAN_INTERNAL_ID,
                              'acked_at', clock_timestamp()))
   RETURNING EVENT_UUID INTO v_event_uuid;
 
@@ -1324,11 +1324,11 @@ BEGIN
 
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE,
                           PARTITION_KEY, TOPIC, PAYLOAD)
-  VALUES ('WITHDRAW', v_track.TFR_INTERNAL_KEY::text,
+  VALUES ('WITHDRAW', v_track.TRAN_INTERNAL_ID::text,
           'wallet.withdraw.completed.v1', v_track.ACCT_NO, 'wallet.withdrawals',
           jsonb_build_object('ext_payout_ref', p_ext_payout_ref,
                              'napas_ref', p_napas_ref,
-                             'tfr_internal_key', v_track.TFR_INTERNAL_KEY,
+                             'tran_internal_id', v_track.TRAN_INTERNAL_ID,
                              'settled_at', clock_timestamp()))
   RETURNING EVENT_UUID INTO v_event_uuid;
 
@@ -1375,10 +1375,10 @@ BEGIN
 
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE,
                           PARTITION_KEY, TOPIC, PAYLOAD)
-  VALUES ('WITHDRAW', v_track.TFR_INTERNAL_KEY::text,
+  VALUES ('WITHDRAW', v_track.TRAN_INTERNAL_ID::text,
           'wallet.withdraw.disbursing.v1', v_track.ACCT_NO, 'wallet.withdrawals',
           jsonb_build_object('ext_payout_ref', p_ext_payout_ref,
-                             'tfr_internal_key', v_track.TFR_INTERNAL_KEY))
+                             'tran_internal_id', v_track.TRAN_INTERNAL_ID))
   RETURNING EVENT_UUID INTO v_event_uuid;
 
   RETURN QUERY SELECT v_track.ACCT_NO, v_track.STATUS, v_event_uuid;
@@ -1434,7 +1434,7 @@ $$;
 -- Name: post_merchant_withdraw(character varying, numeric, character varying, character varying, boolean, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.post_merchant_withdraw(p_group_id character varying, p_amount numeric, p_reference character varying, p_ext_payout_ref character varying DEFAULT NULL::character varying, p_auto_sweep boolean DEFAULT true, p_channel character varying DEFAULT 'MOBILE'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tfr_internal_key bigint, status character varying, amount numeric, fee_gross numeric, vat_amount numeric, total_deducted numeric, settlement_balance_after numeric, event_uuid uuid)
+CREATE FUNCTION public.post_merchant_withdraw(p_group_id character varying, p_amount numeric, p_reference character varying, p_ext_payout_ref character varying DEFAULT NULL::character varying, p_auto_sweep boolean DEFAULT true, p_channel character varying DEFAULT 'MOBILE'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tran_internal_id bigint, status character varying, amount numeric, fee_gross numeric, vat_amount numeric, total_deducted numeric, settlement_balance_after numeric, event_uuid uuid)
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public', 'pg_catalog'
     AS $$
@@ -1474,7 +1474,7 @@ BEGIN
   -- Phase 1: idempotency
   SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
   IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tfr_internal_key')::bigint,
+    RETURN QUERY SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
       'DUPLICATE'::varchar,
       (v_existing.OBJECT_RESPONE_DATA::jsonb->>'amount')::numeric,
       (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
@@ -1546,7 +1546,7 @@ BEGIN
   -- TRAN_HIST: MERCHWD (principal) + FEEMW (fee), fee leg → origin via TFR_SEQ_NO
   INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
      TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-     TFR_INTERNAL_KEY, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+     TRAN_INTERNAL_ID, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
   VALUES (v_settle.INTERNAL_KEY, 'MERCHWD', CURRENT_DATE, CURRENT_DATE,
      p_amount, 'DR', v_settle.ACTUAL_BAL + v_total, v_settle.ACTUAL_BAL + v_fee,
      v_tfr, p_reference, v_settle.CCY, p_channel, 'WLT', 'Merchant withdraw', p_group_id)
@@ -1555,7 +1555,7 @@ BEGIN
   IF v_fee > 0 THEN
     INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
        TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-       TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+       TRAN_INTERNAL_ID, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
     VALUES (v_settle.INTERNAL_KEY, 'FEEMW', CURRENT_DATE, CURRENT_DATE,
        v_fee, 'DR', v_settle.ACTUAL_BAL + v_fee, v_settle.ACTUAL_BAL,
        v_tfr, v_seq_base, p_reference, v_settle.CCY, 'WLT', 'Fee + VAT for merchant withdraw', p_group_id);
@@ -1579,7 +1579,7 @@ BEGIN
   -- Outbox: Treasury consumes for batch disbursement (MWD-09)
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE, PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('MERCHANT_WITHDRAW', v_tfr::text, 'wallet.merchant_withdraw.posted.v1', p_group_id, 'wallet.withdrawals',
-          jsonb_build_object('tfr_internal_key', v_tfr, 'group_id', p_group_id, 'settlement_acct', v_settle.ACCT_NO,
+          jsonb_build_object('tran_internal_id', v_tfr, 'group_id', p_group_id, 'settlement_acct', v_settle.ACCT_NO,
                              'amount', p_amount, 'fee_gross', v_fee, 'vat_amount', v_vat,
                              'ext_payout_ref', p_ext_payout_ref, 'ccy', v_settle.CCY),
           jsonb_build_object('traceparent', current_setting('app.trace_id', TRUE)))
@@ -1587,7 +1587,7 @@ BEGIN
 
   -- Phase 5: close idempotency
   UPDATE WLT_API_MESSAGE SET PROCESS_STATUS='SUCCESS', HTTP_STATUS=200,
-     OBJECT_RESPONE_DATA = jsonb_build_object('tfr_internal_key', v_tfr, 'amount', p_amount,
+     OBJECT_RESPONE_DATA = jsonb_build_object('tran_internal_id', v_tfr, 'amount', p_amount,
        'fee_gross', v_fee, 'vat_amount', v_vat, 'total_deducted', v_total,
        'settlement_balance_after', v_settle.ACTUAL_BAL, 'event_uuid', v_event)::text,
      PROCESSED_AT = clock_timestamp()
@@ -1639,7 +1639,7 @@ BEGIN
   END IF;
 
   v_grp      := v_orig.OBJECT_REQUEST_DATA::jsonb->>'group_id';
-  v_orig_tfr := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'tfr_internal_key')::bigint;
+  v_orig_tfr := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint;
   v_amt      := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'amount')::numeric;
   v_fee      := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric;
   v_vat      := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric;
@@ -1648,7 +1648,7 @@ BEGIN
   SELECT * INTO v_settle FROM WLT_ACCT WHERE GROUP_ID = v_grp AND ACCT_ROLE = 'SETTLEMENT' FOR UPDATE;
   SELECT * INTO v_def    FROM WLT_TRAN_DEF WHERE TRAN_TYPE = 'MERCHWD';
   SELECT GL_CODE_LIAB INTO v_liab_gl FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_settle.ACCT_TYPE;
-  SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST WHERE TFR_INTERNAL_KEY = v_orig_tfr AND TRAN_TYPE = 'MERCHWD' LIMIT 1;
+  SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST WHERE TRAN_INTERNAL_ID = v_orig_tfr AND TRAN_TYPE = 'MERCHWD' LIMIT 1;
 
   INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
   VALUES (v_rref, p_channel, 'MERCHANT_WITHDRAW_REVERSAL',
@@ -1664,7 +1664,7 @@ BEGIN
   -- RVMWD (credit-back principal)
   INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
      TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-     TFR_INTERNAL_KEY, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+     TRAN_INTERNAL_ID, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
   VALUES (v_settle.INTERNAL_KEY, 'RVMWD', CURRENT_DATE, CURRENT_DATE,
      v_amt, 'CR', v_settle.ACTUAL_BAL - v_amt - v_fee, v_settle.ACTUAL_BAL - v_fee,
      v_rev_tfr, v_rref, v_orig_seq, v_settle.CCY, p_channel, 'WLT',
@@ -1674,7 +1674,7 @@ BEGIN
   IF v_fee > 0 THEN
     INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
        TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-       TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+       TRAN_INTERNAL_ID, TFR_SEQ_NO, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
     VALUES (v_settle.INTERNAL_KEY, 'RVFEE', CURRENT_DATE, CURRENT_DATE,
        v_fee, 'CR', v_settle.ACTUAL_BAL - v_fee, v_settle.ACTUAL_BAL,
        v_rev_tfr, v_seq_base, v_rref, v_orig_seq, v_settle.CCY, 'WLT',
@@ -1715,7 +1715,7 @@ END $$;
 -- Name: post_sweep_shard(character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.post_sweep_shard(p_shard_acct_no character varying, p_trigger character varying DEFAULT 'PERIODIC'::character varying, p_triggered_by character varying DEFAULT 'SWEEP_WORKER'::character varying) RETURNS TABLE(swept_amount numeric, settlement_bal_after numeric, tfr_internal_key bigint)
+CREATE FUNCTION public.post_sweep_shard(p_shard_acct_no character varying, p_trigger character varying DEFAULT 'PERIODIC'::character varying, p_triggered_by character varying DEFAULT 'SWEEP_WORKER'::character varying) RETURNS TABLE(swept_amount numeric, settlement_bal_after numeric, tran_internal_id bigint)
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public', 'pg_catalog'
     AS $$
@@ -1769,7 +1769,7 @@ BEGIN
   -- TRAN_HIST: SWEEPO (shard) + SWEEPI (settlement), linked by tfr key
   INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
      TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-     TFR_INTERNAL_KEY, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID, SHARD_INDEX)
+     TRAN_INTERNAL_ID, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID, SHARD_INDEX)
   VALUES (v_shard.INTERNAL_KEY, 'SWEEPO', CURRENT_DATE, CURRENT_DATE,
      v_swept, 'DR', v_shard_before, v_shard.ACTUAL_BAL,
      v_tfr, 'SWEEP-'||v_tfr, v_shard.CCY, 'SWEEP', 'WLT', 'Sweep out to settlement',
@@ -1778,7 +1778,7 @@ BEGIN
 
   INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
      TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-     TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+     TRAN_INTERNAL_ID, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
   VALUES (v_settle.INTERNAL_KEY, 'SWEEPI', CURRENT_DATE, CURRENT_DATE,
      v_swept, 'CR', v_settle.ACTUAL_BAL - v_swept, v_settle.ACTUAL_BAL,
      v_tfr, v_seq_out, 'SWEEP-'||v_tfr, v_settle.CCY, 'SWEEP', 'WLT', 'Sweep in from shard',
@@ -1793,7 +1793,7 @@ BEGIN
 
   INSERT INTO WLT_SWEEP_LOG (GROUP_ID, SHARD_ACCT_NO, SETTLEMENT_ACCT_NO, SWEPT_AMOUNT,
                              SHARD_BAL_BEFORE, SHARD_BAL_AFTER, SETTLEMENT_BAL_AFTER,
-                             TFR_INTERNAL_KEY, TRIGGER_TYPE, TRIGGERED_BY, STATUS)
+                             TRAN_INTERNAL_ID, TRIGGER_TYPE, TRIGGERED_BY, STATUS)
   VALUES (v_shard.GROUP_ID, p_shard_acct_no, v_settle.ACCT_NO, v_swept,
           v_shard_before, v_shard.ACTUAL_BAL, v_settle.ACTUAL_BAL, v_tfr, p_trigger, p_triggered_by, 'SUCCESS');
 
@@ -1805,7 +1805,7 @@ END $$;
 -- Name: post_topup(character varying, numeric, character varying, jsonb, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.post_topup(p_acct_no character varying, p_amount numeric, p_reference character varying, p_metadata jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT 'TREASURY'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tfr_internal_key bigint, status character varying, new_balance numeric, event_uuid uuid)
+CREATE FUNCTION public.post_topup(p_acct_no character varying, p_amount numeric, p_reference character varying, p_metadata jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT 'TREASURY'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tran_internal_id bigint, status character varying, new_balance numeric, event_uuid uuid)
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public', 'pg_catalog'
     AS $$
@@ -1834,7 +1834,7 @@ BEGIN
    WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
   IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
     RETURN QUERY
-    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tfr_internal_key')::bigint,
+    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
            'DUPLICATE'::varchar,
            (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
            (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
@@ -1892,7 +1892,7 @@ BEGIN
   INSERT INTO WLT_TRAN_HIST (
     INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-    TFR_INTERNAL_KEY, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
+    TRAN_INTERNAL_ID, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
     TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
   ) VALUES (
     v_acct.INTERNAL_KEY, 'TOPUP', CURRENT_DATE, CURRENT_DATE,
@@ -1923,7 +1923,7 @@ BEGIN
                           PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('TRANSACTION', v_tfr_key::text, 'wallet.topup.posted.v1',
           p_acct_no, 'wallet.transactions',
-          jsonb_build_object('tfr_internal_key', v_tfr_key, 'acct_no', p_acct_no,
+          jsonb_build_object('tran_internal_id', v_tfr_key, 'acct_no', p_acct_no,
                              'client_no', v_acct.CLIENT_NO, 'amount', p_amount,
                              'ccy', v_acct.CCY, 'value_date', CURRENT_DATE),
           jsonb_build_object('traceparent', current_setting('app.trace_id', TRUE)))
@@ -1934,7 +1934,7 @@ BEGIN
      SET PROCESS_STATUS      = 'SUCCESS',
          HTTP_STATUS         = 200,
          OBJECT_RESPONE_DATA = jsonb_build_object(
-           'tfr_internal_key', v_tfr_key,
+           'tran_internal_id', v_tfr_key,
            'new_balance',      v_acct.ACTUAL_BAL,
            'event_uuid',       v_event_uuid)::text,
          PROCESSED_AT        = clock_timestamp()
@@ -1982,12 +1982,12 @@ BEGIN
 
   v_acct_no  := v_orig.OBJECT_REQUEST_DATA::jsonb->>'acct_no';
   v_amt      := (v_orig.OBJECT_REQUEST_DATA::jsonb->>'amount')::numeric;
-  v_orig_tfr := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'tfr_internal_key')::bigint;
+  v_orig_tfr := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint;
 
   SELECT * INTO v_acct FROM WLT_ACCT WHERE ACCT_NO = v_acct_no FOR UPDATE;
   SELECT * INTO v_def  FROM WLT_TRAN_DEF WHERE TRAN_TYPE = 'RVTPUP';
   SELECT GL_CODE_LIAB INTO v_liab_gl FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct.ACCT_TYPE;
-  SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST WHERE TFR_INTERNAL_KEY = v_orig_tfr AND TRAN_TYPE = 'TOPUP' LIMIT 1;
+  SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST WHERE TRAN_INTERNAL_ID = v_orig_tfr AND TRAN_TYPE = 'TOPUP' LIMIT 1;
 
   INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
   VALUES (v_rref, p_channel, 'TOPUP_REVERSAL',
@@ -2016,7 +2016,7 @@ BEGIN
   -- RVTPUP leg (DR wallet)
   INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
      TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-     TFR_INTERNAL_KEY, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+     TRAN_INTERNAL_ID, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
   VALUES (v_acct.INTERNAL_KEY, 'RVTPUP', CURRENT_DATE, CURRENT_DATE,
      v_amt, 'DR', v_acct.ACTUAL_BAL + v_amt, v_acct.ACTUAL_BAL,
      v_rev_tfr, v_rref, v_orig_seq, v_acct.CCY, p_channel, 'WLT',
@@ -2049,7 +2049,7 @@ END $$;
 -- Name: post_transfer(character varying, character varying, numeric, character varying, character varying, jsonb, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.post_transfer(p_from_acct_no character varying, p_to_acct_no character varying, p_amount numeric, p_reference character varying, p_tran_type character varying DEFAULT 'TRFOUT'::character varying, p_metadata jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT 'MOBILE'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tfr_internal_key bigint, status character varying, new_balance_from numeric, new_balance_to numeric, fee_gross numeric, vat_amount numeric, event_uuid uuid)
+CREATE FUNCTION public.post_transfer(p_from_acct_no character varying, p_to_acct_no character varying, p_amount numeric, p_reference character varying, p_tran_type character varying DEFAULT 'TRFOUT'::character varying, p_metadata jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT 'MOBILE'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tran_internal_id bigint, status character varying, new_balance_from numeric, new_balance_to numeric, fee_gross numeric, vat_amount numeric, event_uuid uuid)
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public', 'pg_catalog'
     AS $$
@@ -2091,7 +2091,7 @@ BEGIN
   SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
   IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
     RETURN QUERY
-    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tfr_internal_key')::bigint,
+    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
            'DUPLICATE'::varchar,
            (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance_from')::numeric,
            (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance_to')::numeric,
@@ -2256,7 +2256,7 @@ BEGIN
   INSERT INTO WLT_TRAN_HIST (
     INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-    TFR_INTERNAL_KEY, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
+    TRAN_INTERNAL_ID, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
     TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
   ) VALUES
     (v_acct_a.INTERNAL_KEY, p_tran_type, CURRENT_DATE, CURRENT_DATE,
@@ -2268,7 +2268,7 @@ BEGIN
   INSERT INTO WLT_TRAN_HIST (
     INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-    TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
+    TRAN_INTERNAL_ID, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
     TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
   ) VALUES
     (v_acct_b.INTERNAL_KEY, 'TRFIN',  CURRENT_DATE, CURRENT_DATE,
@@ -2280,7 +2280,7 @@ BEGIN
     INSERT INTO WLT_TRAN_HIST (
       INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
       TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-      TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_MODULE,
+      TRAN_INTERNAL_ID, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_MODULE,
       TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
     ) VALUES
       (v_acct_a.INTERNAL_KEY, v_def.FEE_TRAN_TYPE, CURRENT_DATE, CURRENT_DATE,
@@ -2324,7 +2324,7 @@ BEGIN
                           PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('TRANSACTION', v_tfr_key::text, 'wallet.transfer.posted.v1',
           v_tfr_key::text, 'wallet.transactions',
-          jsonb_build_object('tfr_internal_key', v_tfr_key,
+          jsonb_build_object('tran_internal_id', v_tfr_key,
                              'from_acct', p_from_acct_no, 'to_acct', p_to_acct_no,
                              'from_client', v_acct_a.CLIENT_NO, 'to_client', v_acct_b.CLIENT_NO,
                              'amount', p_amount, 'fee_gross', v_fee_gross, 'vat_amount', v_vat_amt,
@@ -2337,7 +2337,7 @@ BEGIN
      SET PROCESS_STATUS      = 'SUCCESS',
          HTTP_STATUS         = 200,
          OBJECT_RESPONE_DATA = jsonb_build_object(
-           'tfr_internal_key', v_tfr_key,
+           'tran_internal_id', v_tfr_key,
            'new_balance_from', v_acct_a.ACTUAL_BAL,
            'new_balance_to',   v_acct_b.ACTUAL_BAL,
            'fee_gross',        v_fee_gross,
@@ -2397,7 +2397,7 @@ BEGIN
   v_from := v_orig.OBJECT_REQUEST_DATA::jsonb->>'from';
   v_to   := v_orig.OBJECT_REQUEST_DATA::jsonb->>'to';
   v_amt  := (v_orig.OBJECT_REQUEST_DATA::jsonb->>'amount')::numeric;
-  v_orig_tfr := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'tfr_internal_key')::bigint;
+  v_orig_tfr := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint;
   v_fee  := COALESCE((v_orig.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric, 0);
   v_vat  := COALESCE((v_orig.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric, 0);
   v_net  := v_fee - v_vat;
@@ -2413,7 +2413,7 @@ BEGIN
 
   SELECT GL_CODE_LIAB INTO v_a_gl FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_a.ACCT_TYPE;
   SELECT GL_CODE_LIAB INTO v_b_gl FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_b.ACCT_TYPE;
-  SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST WHERE TFR_INTERNAL_KEY = v_orig_tfr AND TRAN_TYPE IN ('TRFOUT','TRFOUTF') LIMIT 1;
+  SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST WHERE TRAN_INTERNAL_ID = v_orig_tfr AND TRAN_TYPE IN ('TRFOUT','TRFOUTF') LIMIT 1;
 
   -- Guard the refund (credit) leg into sender A. The original post_transfer
   -- blocks crediting a closed or credit-blocked (AML/court) wallet; the reversal
@@ -2452,7 +2452,7 @@ BEGIN
   -- TRAN_HIST: RVTRF on B (DR claw-back) + RVTRF on A (CR refund) + RVFEE on A (CR fee refund)
   INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
      TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-     TFR_INTERNAL_KEY, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+     TRAN_INTERNAL_ID, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
   VALUES (v_b.INTERNAL_KEY, 'RVTRF', CURRENT_DATE, CURRENT_DATE,
      v_amt, 'DR', v_b.ACTUAL_BAL + v_amt, v_b.ACTUAL_BAL,
      v_rev_tfr, v_rref, v_orig_seq, v_b.CCY, p_channel, 'WLT',
@@ -2461,7 +2461,7 @@ BEGIN
 
   INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
      TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-     TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+     TRAN_INTERNAL_ID, TFR_SEQ_NO, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
   VALUES (v_a.INTERNAL_KEY, 'RVTRF', CURRENT_DATE, CURRENT_DATE,
      v_amt, 'CR', v_a.ACTUAL_BAL - v_amt - v_fee, v_a.ACTUAL_BAL - v_fee,
      v_rev_tfr, v_seq_base, v_rref, v_orig_seq, v_a.CCY, p_channel, 'WLT',
@@ -2470,7 +2470,7 @@ BEGIN
   IF v_fee > 0 THEN
     INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
        TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-       TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+       TRAN_INTERNAL_ID, TFR_SEQ_NO, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
     VALUES (v_a.INTERNAL_KEY, 'RVFEE', CURRENT_DATE, CURRENT_DATE,
        v_fee, 'CR', v_a.ACTUAL_BAL - v_fee, v_a.ACTUAL_BAL,
        v_rev_tfr, v_seq_base, v_rref, v_orig_seq, v_a.CCY, 'WLT',
@@ -2512,7 +2512,7 @@ END $$;
 -- Name: post_withdraw(character varying, numeric, character varying, character varying, character varying, character varying, jsonb, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.post_withdraw(p_acct_no character varying, p_amount numeric, p_reference character varying, p_ext_payout_ref character varying, p_beneficiary_bank character varying, p_beneficiary_acct character varying, p_metadata jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT 'MOBILE'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tfr_internal_key bigint, status character varying, new_balance numeric, fee_gross numeric, vat_amount numeric, event_uuid uuid)
+CREATE FUNCTION public.post_withdraw(p_acct_no character varying, p_amount numeric, p_reference character varying, p_ext_payout_ref character varying, p_beneficiary_bank character varying, p_beneficiary_acct character varying, p_metadata jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT 'MOBILE'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tran_internal_id bigint, status character varying, new_balance numeric, fee_gross numeric, vat_amount numeric, event_uuid uuid)
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public', 'pg_catalog'
     AS $$
@@ -2555,7 +2555,7 @@ BEGIN
   SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
   IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
     RETURN QUERY
-    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tfr_internal_key')::bigint,
+    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
            'DUPLICATE'::varchar,
            (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
            (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
@@ -2669,7 +2669,7 @@ BEGIN
   INSERT INTO WLT_TRAN_HIST (
     INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-    TFR_INTERNAL_KEY, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
+    TRAN_INTERNAL_ID, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
     TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
   ) VALUES
     (v_acct.INTERNAL_KEY, 'WDRAW', CURRENT_DATE, CURRENT_DATE,
@@ -2682,7 +2682,7 @@ BEGIN
     INSERT INTO WLT_TRAN_HIST (
       INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
       TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-      TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_MODULE,
+      TRAN_INTERNAL_ID, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_MODULE,
       TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
     ) VALUES
       (v_acct.INTERNAL_KEY, 'FEEWD', CURRENT_DATE, CURRENT_DATE,
@@ -2720,7 +2720,7 @@ BEGIN
 
   -- WITHDRAW_TRACK (disbursement state machine — see HLD §6.3)
   INSERT INTO WLT_WITHDRAW_TRACK (
-    TFR_INTERNAL_KEY, ACCT_NO, CLIENT_NO, AMOUNT, FEE_GROSS, CCY,
+    TRAN_INTERNAL_ID, ACCT_NO, CLIENT_NO, AMOUNT, FEE_GROSS, CCY,
     EXT_PAYOUT_REF, BENEFICIARY_BANK, BENEFICIARY_ACCT_ENC, STATUS
   ) VALUES (
     v_tfr_key, p_acct_no, v_acct.CLIENT_NO, p_amount, v_fee_gross, v_acct.CCY,
@@ -2732,7 +2732,7 @@ BEGIN
                           PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('WITHDRAW', v_tfr_key::text, 'wallet.withdraw.posted.v1',
           p_acct_no, 'wallet.withdrawals',
-          jsonb_build_object('tfr_internal_key', v_tfr_key,
+          jsonb_build_object('tran_internal_id', v_tfr_key,
                              'acct_no', p_acct_no, 'client_no', v_acct.CLIENT_NO,
                              'amount', p_amount, 'fee_gross', v_fee_gross,
                              'vat_amount', v_vat_amt, 'ccy', v_acct.CCY,
@@ -2750,7 +2750,7 @@ BEGIN
      SET PROCESS_STATUS      = 'SUCCESS',
          HTTP_STATUS         = 200,
          OBJECT_RESPONE_DATA = jsonb_build_object(
-           'tfr_internal_key', v_tfr_key,
+           'tran_internal_id', v_tfr_key,
            'new_balance',      v_acct.ACTUAL_BAL,
            'fee_gross',        v_fee_gross,
            'vat_amount',       v_vat_amt,
@@ -2831,14 +2831,14 @@ BEGIN
   INSERT INTO WLT_TRAN_HIST (
     INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-    TFR_INTERNAL_KEY, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE,
+    TRAN_INTERNAL_ID, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE,
     TRAN_DESC, GROUP_ID, SHARD_INDEX
   ) VALUES (
     v_acct.INTERNAL_KEY, 'RVWD', CURRENT_DATE, CURRENT_DATE,
     v_track.AMOUNT, 'CR',
     v_acct.ACTUAL_BAL - v_track.AMOUNT - v_track.FEE_GROSS,
     v_acct.ACTUAL_BAL - v_track.FEE_GROSS,
-    v_rev_tfr_key, 'RVWD-' || p_ext_payout_ref, v_track.TFR_INTERNAL_KEY,
+    v_rev_tfr_key, 'RVWD-' || p_ext_payout_ref, v_track.TRAN_INTERNAL_ID,
     v_acct.CCY, p_channel, 'WLT',
     'Reverse withdraw: ' || COALESCE(p_fail_code, '?'),
     v_acct.GROUP_ID, v_acct.SHARD_INDEX);
@@ -2848,13 +2848,13 @@ BEGIN
     INSERT INTO WLT_TRAN_HIST (
       INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
       TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
-      TFR_INTERNAL_KEY, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_MODULE,
+      TRAN_INTERNAL_ID, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_MODULE,
       TRAN_DESC, GROUP_ID, SHARD_INDEX
     ) VALUES (
       v_acct.INTERNAL_KEY, 'RVFEE', CURRENT_DATE, CURRENT_DATE,
       v_track.FEE_GROSS, 'CR',
       v_acct.ACTUAL_BAL - v_track.FEE_GROSS, v_acct.ACTUAL_BAL,
-      v_rev_tfr_key, 'RVFEE-' || p_ext_payout_ref, v_track.TFR_INTERNAL_KEY,
+      v_rev_tfr_key, 'RVFEE-' || p_ext_payout_ref, v_track.TRAN_INTERNAL_ID,
       v_acct.CCY, 'WLT',
       'Refund fee + VAT', v_acct.GROUP_ID, v_acct.SHARD_INDEX);
   END IF;
@@ -2898,7 +2898,7 @@ BEGIN
          FAIL_REASON       = COALESCE(FAIL_REASON, p_fail_reason),
          TREASURY_FINAL_AT = COALESCE(TREASURY_FINAL_AT, clock_timestamp()),
          VERSION           = VERSION + 1
-   WHERE TFR_INTERNAL_KEY = v_track.TFR_INTERNAL_KEY;
+   WHERE TRAN_INTERNAL_ID = v_track.TRAN_INTERNAL_ID;
 
   -- OUTBOX
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE,
@@ -2908,7 +2908,7 @@ BEGIN
           'wallet.withdrawals',
           jsonb_build_object('ext_payout_ref', p_ext_payout_ref,
                              'reversal_tfr_key', v_rev_tfr_key,
-                             'orig_tfr_key', v_track.TFR_INTERNAL_KEY,
+                             'orig_tfr_key', v_track.TRAN_INTERNAL_ID,
                              'amount', v_track.AMOUNT + v_track.FEE_GROSS,
                              'fail_code', p_fail_code,
                              'reason', p_fail_reason,
@@ -3958,7 +3958,7 @@ CREATE TABLE public.wlt_sweep_log (
     shard_bal_before numeric(18,2) NOT NULL,
     shard_bal_after numeric(18,2) NOT NULL,
     settlement_bal_after numeric(18,2) NOT NULL,
-    tfr_internal_key bigint,
+    tran_internal_id bigint,
     trigger_type character varying(16) NOT NULL,
     triggered_by character varying(40),
     status character varying(8) DEFAULT 'SUCCESS'::character varying NOT NULL,
@@ -4039,7 +4039,7 @@ CREATE TABLE public.wlt_tran_hist (
     cr_dr_maint_ind character varying(2) NOT NULL,
     previous_bal_amt numeric(18,2) NOT NULL,
     actual_bal_amt numeric(18,2) NOT NULL,
-    tfr_internal_key bigint,
+    tran_internal_id bigint,
     tfr_seq_no bigint,
     reference character varying(64) NOT NULL,
     orig_seq_no bigint,
@@ -4122,7 +4122,7 @@ CREATE TABLE public.wlt_trial_balance_proof (
 --
 
 CREATE TABLE public.wlt_withdraw_track (
-    tfr_internal_key bigint NOT NULL,
+    tran_internal_id bigint NOT NULL,
     acct_no character varying(20) NOT NULL,
     client_no character varying(48) NOT NULL,
     amount numeric(18,2) NOT NULL,
@@ -4439,7 +4439,7 @@ ALTER TABLE ONLY public.wlt_withdraw_track
 --
 
 ALTER TABLE ONLY public.wlt_withdraw_track
-    ADD CONSTRAINT wlt_withdraw_track_pkey PRIMARY KEY (tfr_internal_key);
+    ADD CONSTRAINT wlt_withdraw_track_pkey PRIMARY KEY (tran_internal_id);
 
 
 --
@@ -4614,7 +4614,7 @@ CREATE INDEX idx_hist_ref ON ONLY public.wlt_tran_hist USING btree (reference);
 -- Name: idx_hist_tfr; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_hist_tfr ON ONLY public.wlt_tran_hist USING btree (tfr_internal_key, tfr_seq_no);
+CREATE INDEX idx_hist_tfr ON ONLY public.wlt_tran_hist USING btree (tran_internal_id, tfr_seq_no);
 
 
 --

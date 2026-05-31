@@ -50,7 +50,7 @@ func (r *PgWalletRepo) GetAccount(ctx context.Context, acctNo string) (*domain.A
 func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error) {
 	// post_date range ($4/$5) also drives partition pruning on WLT_TRAN_HIST.
 	const sql = `
-		SELECT h.seq_no, h.tfr_internal_key, h.tran_type, h.cr_dr_maint_ind,
+		SELECT h.seq_no, h.tran_internal_id, h.tran_type, h.cr_dr_maint_ind,
 		       h.tran_amt::text, h.ccy, h.actual_bal_amt::text,
 		       h.post_date, h.value_date, h.reference, COALESCE(h.narrative, '')
 		  FROM WLT_TRAN_HIST h
@@ -72,7 +72,7 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 	for rows.Next() {
 		var e domain.TxEntry
 		if err := rows.Scan(
-			&e.SeqNo, &e.TFRInternalKey, &e.TranType, &e.DRCR,
+			&e.SeqNo, &e.TranInternalID, &e.TranType, &e.DRCR,
 			&e.Amount, &e.Ccy, &e.BalanceAfter,
 			&e.PostDate, &e.ValueDate, &e.Reference, &e.Narrative,
 		); err != nil {
@@ -98,7 +98,7 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 	return out, nil
 }
 
-// GetTransaction returns every leg of a transaction (by TFR_INTERNAL_KEY),
+// GetTransaction returns every leg of a transaction (by TRAN_INTERNAL_ID),
 // ordered primary-leg-first. Unknown id → 404.
 func (r *PgWalletRepo) GetTransaction(ctx context.Context, tfrKey int64) ([]domain.TxLeg, error) {
 	const sql = `
@@ -108,7 +108,7 @@ func (r *PgWalletRepo) GetTransaction(ctx context.Context, tfrKey int64) ([]doma
 		       h.reference, COALESCE(h.narrative, '')
 		  FROM WLT_TRAN_HIST h
 		  LEFT JOIN WLT_ACCT a ON a.internal_key = h.internal_key
-		 WHERE h.tfr_internal_key = $1
+		 WHERE h.tran_internal_id = $1
 		 ORDER BY h.tfr_seq_no NULLS FIRST, h.seq_no
 	`
 	rows, err := r.pool.Query(ctx, sql, tfrKey)
@@ -133,7 +133,7 @@ func (r *PgWalletRepo) GetTransaction(ctx context.Context, tfrKey int64) ([]doma
 		return nil, mapErrIfPg(err)
 	}
 	if len(out) == 0 {
-		return nil, domain.NotFound("transaction not found: tfr_internal_key", nil)
+		return nil, domain.NotFound("transaction not found: tran_internal_id", nil)
 	}
 	return out, nil
 }

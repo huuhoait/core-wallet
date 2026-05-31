@@ -6,7 +6,7 @@ import "time"
 // the account statement. Amounts are decimal strings (never float money).
 type TxEntry struct {
 	SeqNo          int64
-	TFRInternalKey *int64 // transaction id grouping all legs; NULL on legacy rows
+	TranInternalID *int64 // transaction id grouping all legs; NULL on legacy rows
 	TranType       string
 	DRCR           string // 'DR' | 'CR'
 	Amount         string

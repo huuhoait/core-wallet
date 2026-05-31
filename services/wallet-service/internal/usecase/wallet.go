@@ -32,7 +32,7 @@ func (s *WalletService) Topup(ctx context.Context, in domain.TopupInput) (*domai
 	}
 	s.log.InfoContext(ctx, "topup posted",
 		slog.String("reference", in.Reference),
-		slog.Int64("tfr_internal_key", res.TFRInternalKey),
+		slog.Int64("tfr_internal_key", res.TranInternalID),
 		slog.String("event_uuid", res.EventUUID.String()),
 		slog.String("status", res.Status))
 	return res, nil
@@ -49,7 +49,7 @@ func (s *WalletService) Transfer(ctx context.Context, in domain.TransferInput) (
 	}
 	s.log.InfoContext(ctx, "transfer posted",
 		slog.String("reference", in.Reference),
-		slog.Int64("tfr_internal_key", res.TFRInternalKey),
+		slog.Int64("tfr_internal_key", res.TranInternalID),
 		slog.String("event_uuid", res.EventUUID.String()),
 		slog.String("status", res.Status))
 	return res, nil
@@ -64,7 +64,7 @@ func (s *WalletService) Withdraw(ctx context.Context, in domain.WithdrawInput) (
 	s.log.InfoContext(ctx, "withdraw posted",
 		slog.String("reference", in.Reference),
 		slog.String("ext_payout_ref", in.ExtPayoutRef),
-		slog.Int64("tfr_internal_key", res.TFRInternalKey),
+		slog.Int64("tfr_internal_key", res.TranInternalID),
 		slog.String("event_uuid", res.EventUUID.String()),
 		slog.String("status", res.Status))
 	return res, nil
@@ -79,7 +79,7 @@ func (s *WalletService) MerchantWithdraw(ctx context.Context, in domain.Merchant
 	s.log.InfoContext(ctx, "merchant withdraw posted",
 		slog.String("reference", in.Reference),
 		slog.String("group_id", in.GroupID),
-		slog.Int64("tfr_internal_key", res.TFRInternalKey),
+		slog.Int64("tfr_internal_key", res.TranInternalID),
 		slog.String("event_uuid", res.EventUUID.String()),
 		slog.String("status", res.Status))
 	return res, nil

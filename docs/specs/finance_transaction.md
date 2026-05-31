@@ -42,7 +42,7 @@ History (6) is **read-only** and does not go through the pipeline.
 | Concept | Meaning |
 |-----------|---------|
 | `REFERENCE` | Idempotency key sent by the client; unique per request |
-| `TFR_INTERNAL_KEY` | Group ID linking the legs of one business operation (transfer = 2 base legs + 3 fee/VAT legs) |
+| `TRAN_INTERNAL_ID` | Group ID linking the legs of one business operation (transfer = 2 base legs + 3 fee/VAT legs) |
 | `SEQ_NO` | Unique ID per `WLT_TRAN_HIST` row (IDENTITY) |
 | `ORIG_SEQ_NO` | Points to the `SEQ_NO` of the original transaction (only on reversal rows) |
 | `POST_DATE` vs `VALUE_DATE` | Posting date vs value date (for interest/reconciliation) |
@@ -609,7 +609,7 @@ This convention is **mandatory** for every multi-account lock. Violation → dea
 |----|------|
 | REV-01 | Do not UPDATE the original row. Generate a new row with `TRAN_TYPE = REVERSAL_TRAN_TYPE` |
 | REV-02 | `ORIG_SEQ_NO` points to the `SEQ_NO` of the original row |
-| REV-03 | New `TFR_INTERNAL_KEY` (separate group for the reversal) |
+| REV-03 | New `TRAN_INTERNAL_ID` (separate group for the reversal) |
 | REV-04 | Must refund **both fee + VAT** if the original transaction had them |
 | REV-05 | Do not reverse twice (check for an existing reversal linked via `ORIG_SEQ_NO`) |
 | REV-06 | Reversal must be within the **time window** per type (see 6.4) |
@@ -653,7 +653,7 @@ sequenceDiagram
   
   rect rgba(200,230,255,0.4)
     GO->>DB: SELECT * FROM post_reversal($1..$4) — ref, original_seq_no, reason, actor
-    Note over DB: Phase 1 plpgsql:<br/>- Read original tran + all fee legs with the same TFR_INTERNAL_KEY<br/>- REV-05 check (not yet reversed), REV-06 time window<br/>- REV-08 hard-stop: restraint purpose ∈ {COURT_ORDER, AML_HOLD}<br/>  on any affected wallet → REJECTED REVERSAL_BLOCKED_BY_RESTRAINT<br/>- Compute reversal deltas per affected acct
+    Note over DB: Phase 1 plpgsql:<br/>- Read original tran + all fee legs with the same TRAN_INTERNAL_ID<br/>- REV-05 check (not yet reversed), REV-06 time window<br/>- REV-08 hard-stop: restraint purpose ∈ {COURT_ORDER, AML_HOLD}<br/>  on any affected wallet → REJECTED REVERSAL_BLOCKED_BY_RESTRAINT<br/>- Compute reversal deltas per affected acct
     Note over DB: Phase 2 plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE affected accts ordered INTERNAL_KEY ASC<br/>  (CR reversal may fail if B has already spent everything → BALANCE_INSUFFICIENT_TO_REVERSE)<br/>- INSERT WLT_TRAN_HIST reversal × N (principal + fee + VAT legs reversed)<br/>- INSERT WLT_GL_BATCH reversed × M<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, ..., reversal_tran_id, payload)
     DB-->>GO: row
   end
@@ -773,7 +773,7 @@ Response 200:
   "status":       "SUCCESS",
   "tran_type":    "TRFOUT",
   ...
-  "legs": [                                   -- same TFR_INTERNAL_KEY
+  "legs": [                                   -- same TRAN_INTERNAL_ID
     { "seq_no": 20045, "type":"TRFOUT", "amount":-1000000, ... },
     { "seq_no": 20046, "type":"TRFIN",  "amount":+1000000, ... },
     { "seq_no": 20047, "type":"FEETRF", "amount":-5500,    ... }
@@ -807,7 +807,7 @@ GET /v1/statements/{statement_id}
 | Pattern | Index used |
 |---------|-----------|
 | 1 wallet, date range, sort desc | `idx_hist_acct_date(INTERNAL_KEY, POST_DATE DESC)` — partition pruning by POST_DATE |
-| Lookup a single transfer (all legs) | `idx_hist_tfr(TFR_INTERNAL_KEY, TFR_SEQ_NO)` |
+| Lookup a single transfer (all legs) | `idx_hist_tfr(TRAN_INTERNAL_ID, TFR_SEQ_NO)` |
 | Search by reference | `idx_hist_ref(REFERENCE)` |
 | Reversal trace | `WHERE ORIG_SEQ_NO = ?` — full partition scan; consider an index if hot |
 
@@ -824,7 +824,7 @@ GET /v1/statements/{statement_id}
 | HIST-02 | Ops can view any wallet, audited in `WLT_OLTP_AUDIT` |
 | HIST-03 | Statement older than 18 months → 410 GONE_ONLINE; suggest requesting from archive |
 | HIST-04 | Reversed transactions still appear in history with the flag `is_reversed=true` |
-| HIST-05 | Fee/VAT legs appear as sub-legs of the original transaction in the mobile UI (grouped by `TFR_INTERNAL_KEY`) |
+| HIST-05 | Fee/VAT legs appear as sub-legs of the original transaction in the mobile UI (grouped by `TRAN_INTERNAL_ID`) |
 
 ---
 
@@ -1270,7 +1270,7 @@ def compute_fee(tran_def, tran_amt):
 
 ### 8.3 Fee posting — 3 additional legs
 
-Same `TFR_INTERNAL_KEY` as the original transaction:
+Same `TRAN_INTERNAL_ID` as the original transaction:
 
 ```
 1 row WLT_TRAN_HIST: TRAN_TYPE=FEE_TRAN_TYPE, DR wallet, amount=fee_gross

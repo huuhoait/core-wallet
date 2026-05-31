@@ -15,7 +15,7 @@
 - v1.6: Patched schema gap — add DDL for `WLT_ACCT_TYPE` (§2.1b, previously existed only in the mermaid ERD without a CREATE TABLE) and seed the missing GL `401.03` (broken FK with `WLT_GL_MAP`). The procedure that creates clients/opens wallets and the bulk data generator are split into a separate file `wallet_seed.sql`.
 - v1.5: Upgrade target to **PostgreSQL 17**. Remove `seq_tran_hist`, use `IDENTITY` directly on partitioned `WLT_TRAN_HIST` (newly supported in PG17). Add partition lifecycle with `MERGE/SPLIT PARTITION` (PG17 native, no need for detach + reinsert).
 - v1.4: Migrate all DDL/DML to **PostgreSQL 16** dialect — `VARCHAR2→VARCHAR`, `NUMBER→BIGINT/NUMERIC/SMALLINT`, `CLOB→TEXT`, `SYSDATE/SYSTIMESTAMP→NOW()/CURRENT_DATE`, sequence (`.NEXTVAL→nextval()`), declarative partitioning (range + sub-hash), `MERGE` → `INSERT ... ON CONFLICT`, generated columns `STORED`, LZ4 compression for payload TEXT, materialized view `REFRESH CONCURRENTLY`.
-- v1.3: Add **Fee & VAT** — extend `WLT_TRAN_DEF` with fee config columns (FEE_TYPE, FEE_AMT, FEE_RATE, FEE_MIN, FEE_MAX, VAT_RATE, FEE_GL_CODE, VAT_GL_CODE). Posting engine generates additional fee + VAT legs into the same `TFR_INTERNAL_KEY`. No new tables created.
+- v1.3: Add **Fee & VAT** — extend `WLT_TRAN_DEF` with fee config columns (FEE_TYPE, FEE_AMT, FEE_RATE, FEE_MIN, FEE_MAX, VAT_RATE, FEE_GL_CODE, VAT_GL_CODE). Posting engine generates additional fee + VAT legs into the same `TRAN_INTERNAL_ID`. No new tables created.
 - v1.2: Narrow scope — remove FX, BIC/SWIFT, Settlement Instructions, Org structure, Reference codes, BRD Onboarding flow.
 - v1.1: Refactor to 2-tier FM + WLT.
 - v1.0: Initial version.
@@ -224,7 +224,7 @@ erDiagram
         VARCHAR CR_DR_MAINT_IND
         NUMERIC PREVIOUS_BAL_AMT
         NUMERIC ACTUAL_BAL_AMT
-        BIGINT  TFR_INTERNAL_KEY
+        BIGINT  TRAN_INTERNAL_ID
         BIGINT  TFR_SEQ_NO
         VARCHAR REFERENCE
         BIGINT  ORIG_SEQ_NO
@@ -306,7 +306,7 @@ erDiagram
 - 1 `FM_CLIENT` → N `WLT_ACCT` (one customer can open multiple wallets)
 - 1 `FM_CLIENT` → 1 `WLT_CLIENT_KYC` (KYC tier per client)
 - 1 `WLT_ACCT` → 1 row/day in `WLT_ACCT_BAL` (snapshot)
-- 1 transfer transaction → 2 `WLT_TRAN_HIST` rows linked by `TFR_INTERNAL_KEY`
+- 1 transfer transaction → 2 `WLT_TRAN_HIST` rows linked by `TRAN_INTERNAL_ID`
 - 1 `WLT_TRAN_HIST` → ≥ 2 `WLT_GL_BATCH` rows (double-entry into GL)
 - 1 `FM_NOS_VOS` → 1 corresponding `FM_GL_MAST.GL_CODE` (each nostro has 1 GL)
 - 1 posting transaction → 1 `WLT_OUTBOX` row (atomic with `WLT_TRAN_HIST` insert; ≥ 2 for fee/VAT-carrying transfers if downstream needs per-leg events)
@@ -319,7 +319,7 @@ erDiagram
 ### 2.0 FM tables (read-only from WLT's perspective) — reference DDL
 
 > **Target RDBMS**: PostgreSQL 17+. Conventions:
-> `VARCHAR(n)` = bounded string; `TEXT` for unbounded payload; `BIGINT`/`SMALLINT` for integers; `NUMERIC(p,s)` for money/rates; `DATE` for plain date (no time); `TIMESTAMPTZ` for time instants with hour + timezone. Auto-inc PK uses `GENERATED ALWAYS AS IDENTITY` (PG17 supports IDENTITY on partitioned tables too). Use a dedicated sequence only when a value must be shared across multiple rows (e.g. `TFR_INTERNAL_KEY` linking the legs of a single transfer).
+> `VARCHAR(n)` = bounded string; `TEXT` for unbounded payload; `BIGINT`/`SMALLINT` for integers; `NUMERIC(p,s)` for money/rates; `DATE` for plain date (no time); `TIMESTAMPTZ` for time instants with hour + timezone. Auto-inc PK uses `GENERATED ALWAYS AS IDENTITY` (PG17 supports IDENTITY on partitioned tables too). Use a dedicated sequence only when a value must be shared across multiple rows (e.g. `TRAN_INTERNAL_ID` linking the legs of a single transfer).
 
 In T24 these tables already exist. If built from scratch, the essential structure can be summarized as:
 
@@ -675,10 +675,10 @@ INSERT INTO WLT_TRAN_DEF VALUES
 The **Transaction History** table is the heart of the wallet ledger system, storing every balance change of each account (`INTERNAL_KEY`).
 - **Properties**: Designed with an **append-only** mechanism (insert only, no update), ensuring the integrity and immutability of accounting data. Every reversal generates a new row with the opposite sign rather than updating the original row.
 - **Scale**: This is the largest-volume table in the system, therefore designed to minimize complex constraints and is mandated to apply a **partitioning** strategy (currently partitioned by `POST_DATE`) to optimize storage cost and speed up writes.
-- **Linking**: Uses `TFR_INTERNAL_KEY` and `TFR_SEQ_NO` to chain together the legs of the same transfer transaction.
+- **Linking**: Uses `TRAN_INTERNAL_ID` and `TFR_SEQ_NO` to chain together the legs of the same transfer transaction.
 ```sql
--- Sequence for TFR_INTERNAL_KEY — links the legs of a single transfer
--- (Not using IDENTITY because multiple different rows share a single TFR_INTERNAL_KEY value)
+-- Sequence for TRAN_INTERNAL_ID — links the legs of a single transfer
+-- (Not using IDENTITY because multiple different rows share a single TRAN_INTERNAL_ID value)
 CREATE SEQUENCE seq_tfr AS BIGINT CACHE 1000;
 
 CREATE TABLE WLT_TRAN_HIST (
@@ -693,7 +693,7 @@ CREATE TABLE WLT_TRAN_HIST (
   CR_DR_MAINT_IND     VARCHAR(2)    NOT NULL,
   PREVIOUS_BAL_AMT    NUMERIC(18,2) NOT NULL,
   ACTUAL_BAL_AMT      NUMERIC(18,2) NOT NULL,
-  TFR_INTERNAL_KEY    BIGINT,
+  TRAN_INTERNAL_ID    BIGINT,
   TFR_SEQ_NO          BIGINT,
   REFERENCE           VARCHAR(64)   NOT NULL,
   ORIG_SEQ_NO         BIGINT,
@@ -731,7 +731,7 @@ CREATE TABLE wlt_tran_hist_2026_01_h01 PARTITION OF wlt_tran_hist_2026_01 FOR VA
 
 -- Indexes — created on the parent, PG auto-propagates to each partition
 CREATE INDEX idx_hist_acct_date  ON WLT_TRAN_HIST(INTERNAL_KEY, POST_DATE DESC);
-CREATE INDEX idx_hist_tfr        ON WLT_TRAN_HIST(TFR_INTERNAL_KEY, TFR_SEQ_NO);
+CREATE INDEX idx_hist_tfr        ON WLT_TRAN_HIST(TRAN_INTERNAL_ID, TFR_SEQ_NO);
 CREATE INDEX idx_hist_ref        ON WLT_TRAN_HIST(REFERENCE);
 CREATE INDEX idx_hist_group_date ON WLT_TRAN_HIST(GROUP_ID, POST_DATE DESC) WHERE GROUP_ID IS NOT NULL;
 
@@ -867,7 +867,7 @@ CREATE TABLE WLT_SWEEP_LOG (
   SHARD_BAL_BEFORE     NUMERIC(18,2) NOT NULL,
   SHARD_BAL_AFTER      NUMERIC(18,2) NOT NULL,
   SETTLEMENT_BAL_AFTER NUMERIC(18,2) NOT NULL,
-  TFR_INTERNAL_KEY     BIGINT,                          -- link → WLT_TRAN_HIST sweep tran
+  TRAN_INTERNAL_ID     BIGINT,                          -- link → WLT_TRAN_HIST sweep tran
   TRIGGER_TYPE         VARCHAR(16)   NOT NULL,          -- 'PERIODIC' | 'THRESHOLD' | 'URGENT' | 'EOD'
   TRIGGERED_BY         VARCHAR(40),                     -- worker_id, 'WITHDRAW_TRIGGERED', ...
   STATUS               VARCHAR(8)    NOT NULL DEFAULT 'SUCCESS', -- 'SUCCESS' | 'CONFLICT' | 'SKIPPED' | 'FAILED'
@@ -1037,10 +1037,10 @@ CREATE TABLE WLT_OUTBOX (
   EVENT_ID            BIGINT        GENERATED ALWAYS AS IDENTITY,
   EVENT_UUID          UUID          NOT NULL DEFAULT gen_random_uuid(),
   AGGREGATE_TYPE      VARCHAR(20)   NOT NULL,        -- 'TRANSACTION','WALLET','RESTRAINT','SWEEP','WITHDRAW'
-  AGGREGATE_ID        VARCHAR(64)   NOT NULL,        -- TFR_INTERNAL_KEY / ACCT_NO / RESTRAINT SEQ_NO
+  AGGREGATE_ID        VARCHAR(64)   NOT NULL,        -- TRAN_INTERNAL_ID / ACCT_NO / RESTRAINT SEQ_NO
   EVENT_TYPE          VARCHAR(40)   NOT NULL,        -- 'wallet.topup.posted.v1','wallet.transfer.posted.v1', ...
   EVENT_VERSION       VARCHAR(8)    NOT NULL DEFAULT 'v1',
-  PARTITION_KEY       VARCHAR(64)   NOT NULL,        -- Kafka partition key (ACCT_NO | GROUP_ID | TFR_INTERNAL_KEY)
+  PARTITION_KEY       VARCHAR(64)   NOT NULL,        -- Kafka partition key (ACCT_NO | GROUP_ID | TRAN_INTERNAL_ID)
   TOPIC               VARCHAR(60)   NOT NULL,        -- 'wallet.transactions','wallet.withdrawals',...
   PAYLOAD             JSONB         NOT NULL,        -- event body (CloudEvents-style envelope, see below)
   HEADERS             JSONB,                          -- W3C traceparent, correlation_id, source service
@@ -1089,7 +1089,7 @@ ALTER TABLE WLT_OUTBOX ALTER COLUMN PAYLOAD SET COMPRESSION lz4;
   "subject":     "ACCT_NO:9701000000000099",
   "traceparent": "00-...-...-01",                    // W3C trace context from HEADERS
   "data": {
-    "tfr_internal_key":          1234567890,
+    "tran_internal_id":          1234567890,
     "acct_no":                   "9701000000000099",
     "client_no":                 "C0001234",
     "amount":                    500000,
@@ -1110,7 +1110,7 @@ ALTER TABLE WLT_OUTBOX ALTER COLUMN PAYLOAD SET COMPRESSION lz4;
 
 | Event family | `PARTITION_KEY` | Reason |
 |--------------|-----------------|--------|
-| `wallet.transfer.posted.v1` | `TFR_INTERNAL_KEY::text` | Both legs go to the same partition → downstream join is in-partition |
+| `wallet.transfer.posted.v1` | `TRAN_INTERNAL_ID::text` | Both legs go to the same partition → downstream join is in-partition |
 | `wallet.topup.posted.v1` | `ACCT_NO` | Per-wallet ordering preserved |
 | `wallet.withdraw.posted.v1` | `ACCT_NO` | Per-wallet ordering preserved |
 | `wallet.withdraw.reversed.v1` | `ACCT_NO` | Same partition as the original `posted` |
@@ -1178,7 +1178,7 @@ Outbox is **not** the audit trail — `WLT_TRAN_HIST` is. After 7 days a `SENT` 
 CREATE OR REPLACE FUNCTION post_withdraw(
   p_acct_no        VARCHAR, p_amount NUMERIC, p_reference VARCHAR,
   p_ext_payout_ref VARCHAR, p_beneficiary JSONB, p_trace_id VARCHAR
-) RETURNS TABLE(tfr_internal_key BIGINT, event_uuid UUID)
+) RETURNS TABLE(tran_internal_id BIGINT, event_uuid UUID)
 LANGUAGE plpgsql AS $$
 DECLARE
   v_tfr_key BIGINT; v_event_uuid UUID;
@@ -1197,7 +1197,7 @@ BEGIN
                           TOPIC, PAYLOAD, HEADERS)
   VALUES ('TRANSACTION', v_tfr_key::text, 'wallet.withdraw.posted.v1',
           p_acct_no, 'wallet.withdrawals',
-          jsonb_build_object('tfr_internal_key', v_tfr_key,
+          jsonb_build_object('tran_internal_id', v_tfr_key,
                              'acct_no', p_acct_no, 'amount', p_amount,
                              'ext_payout_ref', p_ext_payout_ref,
                              'beneficiary', p_beneficiary),
@@ -1241,7 +1241,7 @@ END $$;
 
 ```sql
 CREATE TABLE WLT_WITHDRAW_TRACK (
-  TFR_INTERNAL_KEY    BIGINT        PRIMARY KEY,        -- = WLT_TRAN_HIST.TFR_INTERNAL_KEY of the withdraw
+  TRAN_INTERNAL_ID    BIGINT        PRIMARY KEY,        -- = WLT_TRAN_HIST.TRAN_INTERNAL_ID of the withdraw
   ACCT_NO             VARCHAR(20)   NOT NULL,           -- → WLT_ACCT
   CLIENT_NO           VARCHAR(48)   NOT NULL,           -- → FM_CLIENT (denorm for fast lookup)
   AMOUNT              NUMERIC(18,2) NOT NULL,           -- net payout amount (excludes fee+VAT)
@@ -1258,7 +1258,7 @@ CREATE TABLE WLT_WITHDRAW_TRACK (
   TREASURY_ACK_AT     TIMESTAMPTZ,
   TREASURY_FINAL_AT   TIMESTAMPTZ,
   REVERSED_AT         TIMESTAMPTZ,
-  REVERSAL_TFR_KEY    BIGINT,                           -- = TFR_INTERNAL_KEY of the RVWD posting
+  REVERSAL_TFR_KEY    BIGINT,                           -- = TRAN_INTERNAL_ID of the RVWD posting
   -- Failure
   FAIL_CODE           VARCHAR(40),                     -- 'NAPAS_INSUFFICIENT_FUNDS','BENEF_CLOSED','SLA_TIMEOUT',...
   FAIL_REASON         VARCHAR(500),
@@ -1310,13 +1310,13 @@ BEGIN
 
   -- Post the credit-back: RVWD reverses WDRAW + RVFEE reverses FEEWD (refund fee + VAT)
   v_rev_tfr_key := nextval('seq_tfr');
-  INSERT INTO WLT_TRAN_HIST (..., TRAN_TYPE, CR_DR_MAINT_IND, TFR_INTERNAL_KEY, REFERENCE, ORIG_SEQ_NO, ...)
+  INSERT INTO WLT_TRAN_HIST (..., TRAN_TYPE, CR_DR_MAINT_IND, TRAN_INTERNAL_ID, REFERENCE, ORIG_SEQ_NO, ...)
   SELECT ...,
          CASE TRAN_TYPE WHEN 'WDRAW' THEN 'RVWD' WHEN 'FEEWD' THEN 'RVFEE' END,
          CASE CR_DR_MAINT_IND WHEN 'DR' THEN 'CR' ELSE 'DR' END,
          v_rev_tfr_key, 'RVWD-' || p_ext_payout_ref, SEQ_NO, ...
     FROM WLT_TRAN_HIST
-   WHERE TFR_INTERNAL_KEY = v_track.TFR_INTERNAL_KEY
+   WHERE TRAN_INTERNAL_ID = v_track.TRAN_INTERNAL_ID
      AND TRAN_TYPE IN ('WDRAW','FEEWD');
   -- ...matching WLT_GL_BATCH legs flipped DR↔CR...
   -- Credit the customer wallet
@@ -1333,7 +1333,7 @@ BEGIN
          FAIL_REASON       = COALESCE(FAIL_REASON, p_fail_reason),
          TREASURY_FINAL_AT = COALESCE(TREASURY_FINAL_AT, NOW()),
          VERSION = VERSION + 1
-   WHERE TFR_INTERNAL_KEY = v_track.TFR_INTERNAL_KEY;
+   WHERE TRAN_INTERNAL_ID = v_track.TRAN_INTERNAL_ID;
 
   -- Outbox event so notifications + DW + fraud see the reversal
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE, PARTITION_KEY, TOPIC, PAYLOAD)
@@ -1360,7 +1360,7 @@ END $$;
 | `mark_withdraw_completed(p_ext_payout_ref, p_napas_ref)` | NAPAS settlement succeeded — terminal | `EXT_PAYOUT_REF` | `ACKED`,`DISBURSING` |
 | `post_withdraw_reversal(p_ext_payout_ref, p_fail_code, p_fail_reason, p_initiator)` | NAPAS rejected or SLA timeout — credit back + terminal | `EXT_PAYOUT_REF` | `SUBMITTED`,`ACKED`,`DISBURSING`,`FAILED` |
 
-All four update via `WHERE TFR_INTERNAL_KEY = ? AND VERSION = ?` for optimistic concurrency, and all four emit an outbox event so downstream consumers see every state change.
+All four update via `WHERE TRAN_INTERNAL_ID = ? AND VERSION = ?` for optimistic concurrency, and all four emit an outbox event so downstream consumers see every state change.
 
 #### SLA timeout janitor (pg_cron, every 60s)
 
@@ -1646,7 +1646,7 @@ Indexes `idx_caudit_client_time` already optimize this exact query shape.
 
 ```sql
 -- What did client C0001234 look like at the time of transaction tfr=1234567890?
-SELECT CLIENT_INFO FROM WLT_TRAN_HIST WHERE TFR_INTERNAL_KEY = 1234567890 LIMIT 1;
+SELECT CLIENT_INFO FROM WLT_TRAN_HIST WHERE TRAN_INTERNAL_ID = 1234567890 LIMIT 1;
 
 -- Show me every change to C0001234 in 2026 with the actor and reason
 SELECT CHANGED_AT, TABLE_NAME, CHANGED_BY, CHANGE_SOURCE, CHANGE_REASON, CHANGED_FIELDS

@@ -13,7 +13,7 @@
 | # | Principle | Implication in this ledger |
 |---|-----------|----------------------------|
 | 1 | Customer wallet balance is a **liability** of WalletCo, not revenue | `201.01.*`, `201.02.*` are class-`L` accounts |
-| 2 | **Double-entry**: every operation balances Σ DR = Σ CR | Posting engine writes ≥2 `WLT_GL_BATCH` legs per `TFR_INTERNAL_KEY` |
+| 2 | **Double-entry**: every operation balances Σ DR = Σ CR | Posting engine writes ≥2 `WLT_GL_BATCH` legs per `TRAN_INTERNAL_ID` |
 | 3 | **TKĐBTT (escrow) ≥ total real wallet balance** (SBV) | Invariant: `Σ(101.01.*)+Σ(101.02.*) ≥ Σ(201.01.*+201.02.*)` |
 | 4 | Money "in transit" never nets directly — it parks in **clearing/suspense** | `109.*` accounts; must drain to 0 each EOD |
 | 5 | Promotional money is **not escrow-backed** | `201.03.*` funded by expense `502.01`, excluded from invariant #3 |
@@ -92,7 +92,7 @@ Numbering: `LLL.GG.SSS` = class . group . sub-account. Type: A=Asset, L=Liabilit
 
 ## 3. Posting rules per transaction type
 
-Legs reference `WLT_TRAN_DEF` (`CONTRA_GL_CODE`, `FEE_GL_CODE`, `VAT_GL_CODE`) and `WLT_ACCT_TYPE.GL_CODE_LIAB`. Each block = one `TFR_INTERNAL_KEY`.
+Legs reference `WLT_TRAN_DEF` (`CONTRA_GL_CODE`, `FEE_GL_CODE`, `VAT_GL_CODE`) and `WLT_ACCT_TYPE.GL_CODE_LIAB`. Each block = one `TRAN_INTERNAL_ID`.
 
 **TOPUP — top-up from bank** (`WLT_TRAN_DEF['TOPUP']`)
 ```

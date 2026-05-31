@@ -23,7 +23,7 @@ func (s *WalletService) ListTransactions(ctx context.Context, q domain.TxListQue
 	return s.repo.ListTransactions(ctx, q)
 }
 
-// GetTransaction returns all legs of a transaction by its TFR_INTERNAL_KEY.
+// GetTransaction returns all legs of a transaction by its TRAN_INTERNAL_ID.
 func (s *WalletService) GetTransaction(ctx context.Context, tfrKey int64) ([]domain.TxLeg, error) {
 	return s.repo.GetTransaction(ctx, tfrKey)
 }

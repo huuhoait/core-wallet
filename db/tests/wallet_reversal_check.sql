@@ -6,8 +6,8 @@
 --
 -- Liên kết reversal -> giao dịch gốc (chuẩn kép vì SP lưu khác nhau theo loại):
 --   • RVTRF / RVTPUP  : orig_seq_no = SEQ_NO của bút toán gốc
---   • RVWD            : orig_seq_no = TFR_INTERNAL_KEY của lệnh rút gốc (từ withdraw_track)
---   → keymap ánh xạ cả seq_no LẪN tfr_internal_key của giao dịch gốc về tfr_internal_key.
+--   • RVWD            : orig_seq_no = TRAN_INTERNAL_ID của lệnh rút gốc (từ withdraw_track)
+--   → keymap ánh xạ cả seq_no LẪN tran_internal_id của giao dịch gốc về tran_internal_id.
 --
 -- Phạm vi = tháng hiện tại (đổi date_trunc('month',CURRENT_DATE) nếu cần).
 --
@@ -20,7 +20,7 @@ WITH
 mn AS (SELECT date_trunc('month', CURRENT_DATE)::date AS d),
 -- 1 dòng / giao dịch reversal
 rev AS (
-  SELECT r.tfr_internal_key                                   AS rev_key,
+  SELECT r.tran_internal_id                                   AS rev_key,
          min(r.orig_seq_no)                                   AS orig_link,
          string_agg(DISTINCT r.tran_type,'+' ORDER BY r.tran_type) AS rev_types,
          max(r.time_stamp)                                    AS rev_time,
@@ -29,24 +29,24 @@ rev AS (
          max(r.tran_amt) FILTER (WHERE r.tran_type IN ('RVTRF','RVWD','RVTPUP')) AS rev_principal
   FROM wlt_tran_hist r, mn
   WHERE r.tran_type LIKE 'RV%' AND r.post_date >= mn.d
-  GROUP BY r.tfr_internal_key
+  GROUP BY r.tran_internal_id
 ),
 -- 1 dòng / giao dịch gốc (không phải RV)
 orig AS (
-  SELECT o.tfr_internal_key,
+  SELECT o.tran_internal_id,
          min(o.reference)                                     AS ref,
          string_agg(DISTINCT o.tran_type,'+' ORDER BY o.tran_type) AS types,
          max(o.tran_amt) FILTER (WHERE o.tran_type IN ('TRFOUT','TRFOUTF','WDRAW','TOPUP')) AS principal
   FROM wlt_tran_hist o, mn
-  WHERE o.tran_type NOT LIKE 'RV%' AND o.post_date >= mn.d AND o.tfr_internal_key IS NOT NULL
-  GROUP BY o.tfr_internal_key
+  WHERE o.tran_type NOT LIKE 'RV%' AND o.post_date >= mn.d AND o.tran_internal_id IS NOT NULL
+  GROUP BY o.tran_internal_id
 ),
--- ánh xạ mọi khóa có thể (seq_no & tfr_internal_key) -> giao dịch gốc
+-- ánh xạ mọi khóa có thể (seq_no & tran_internal_id) -> giao dịch gốc
 keymap AS (
-  SELECT o.seq_no AS link, o.tfr_internal_key AS orig_txn
+  SELECT o.seq_no AS link, o.tran_internal_id AS orig_txn
   FROM wlt_tran_hist o, mn WHERE o.tran_type NOT LIKE 'RV%' AND o.post_date >= mn.d
   UNION
-  SELECT o.tfr_internal_key AS link, o.tfr_internal_key AS orig_txn
+  SELECT o.tran_internal_id AS link, o.tran_internal_id AS orig_txn
   FROM wlt_tran_hist o, mn WHERE o.tran_type NOT LIKE 'RV%' AND o.post_date >= mn.d
 ),
 -- mỗi reversal -> giao dịch gốc
@@ -54,7 +54,7 @@ resolved AS (
   SELECT rev.*, km.orig_txn, o.ref AS orig_ref, o.types AS orig_types, o.principal AS orig_principal
   FROM rev
   LEFT JOIN keymap km ON km.link = rev.orig_link
-  LEFT JOIN orig   o  ON o.tfr_internal_key = km.orig_txn
+  LEFT JOIN orig   o  ON o.tran_internal_id = km.orig_txn
 ),
 checks(ord, area, name, ok, detail) AS (
   SELECT 0,'—','CONTEXT', TRUE,

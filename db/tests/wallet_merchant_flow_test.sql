@@ -62,7 +62,7 @@ BEGIN
      format('swept=%s settlement=%s group_total=%s', v_swept, v_setbal, v_tot));
 
   -- ───── TC3: merchant_withdraw settlement-sufficient → POSTED ─────
-  SELECT tfr_internal_key, status, fee_gross, vat_amount, settlement_balance_after
+  SELECT tran_internal_id, status, fee_gross, vat_amount, settlement_balance_after
     INTO v_tfr, v_st, v_fee, v_vat, v_setafter
     FROM post_merchant_withdraw(GA, 1000000, 'MWD-GA-1', 'PAYOUT-GA-1', true, 'MOBILE', 'test');
   INSERT INTO _t(name,ok,detail) VALUES
@@ -108,7 +108,7 @@ BEGIN
   END;
 
   -- ───── TC8: idempotency (same reference → DUPLICATE, single debit) ─────
-  SELECT tfr_internal_key, settlement_balance_after INTO v_idem_tfr, v_setbal
+  SELECT tran_internal_id, settlement_balance_after INTO v_idem_tfr, v_setbal
     FROM post_merchant_withdraw(GA, 100000, 'MWD-IDEM-1', NULL, true, 'MOBILE', 'test');
   SELECT status, settlement_balance_after INTO v_st2, v_setbal_dup
     FROM post_merchant_withdraw(GA, 100000, 'MWD-IDEM-1', NULL, true, 'MOBILE', 'test');

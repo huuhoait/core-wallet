@@ -8,6 +8,23 @@ condensed from the HLD changelog.
 
 ## [Unreleased]
 
+### Changed — Rename `tfr_internal_key` → `tran_internal_id` (US-9.14, 2026-05-31)
+- The per-transaction grouping key was misnamed `tfr_internal_key` (`tfr`="transfer")
+  although it links the legs of **every** posting type (topup/transfer/withdraw/
+  merchant/reversal). Renamed for clarity:
+  - **DB column** on `WLT_TRAN_HIST` (+ all partitions), `WLT_WITHDRAW_TRACK`,
+    `WLT_SWEEP_LOG`; indexes follow.
+  - **All SPs** (`db/export/schema.sql`): bodies, params, `RETURNS TABLE` columns,
+    and the idempotency-cache / outbox `jsonb` keys (consistent write+read).
+  - **Go** internals: `TFRInternalKey`→`TranInternalID` + repo SQL `SELECT`/`WHERE`.
+  - SQL test suites + DLD/HLD/spec docs.
+- **API kept backward-compatible** — the HTTP JSON response field stays
+  `tfr_internal_key` / `reversal_tfr_key` (Go DTO json tags) and the route param
+  stays `:tfr_key`; only events/internals move to `tran_internal_id`. Siblings
+  `TFR_SEQ_NO` / `seq_tfr` are out of scope (unchanged).
+- Verified: fresh `docker compose up` re-init (0 errors, 202 columns renamed),
+  all SQL assertion suites pass, `go build` + `go test -race` green.
+
 ### Added — Load-test scenarios: merchant topup, fee reversal, restraint (2026-05-31)
 - **3 new pgbench scripts** wired into the `run.sh` / `stress.sh` 8-way mix:
   - `deploy/loadtest/merchant_topup.sql` — consumer→merchant **SETTLEMENT** payment

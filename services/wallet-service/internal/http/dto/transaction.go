@@ -70,7 +70,7 @@ func TxListRespFrom(q domain.TxListQuery, entries []domain.TxEntry) TxListRespon
 	items := make([]TxEntryResponse, 0, len(entries))
 	for _, e := range entries {
 		items = append(items, TxEntryResponse{
-			SeqNo: e.SeqNo, TransactionID: e.TFRInternalKey, TranType: e.TranType,
+			SeqNo: e.SeqNo, TransactionID: e.TranInternalID, TranType: e.TranType,
 			DRCR: e.DRCR, Amount: e.Amount, Ccy: e.Ccy, BalanceAfter: e.BalanceAfter,
 			PostDate: e.PostDate.Format("2006-01-02"), ValueDate: e.ValueDate.Format("2006-01-02"),
 			Reference: e.Reference, Narrative: e.Narrative,
