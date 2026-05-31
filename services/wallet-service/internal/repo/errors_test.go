@@ -33,6 +33,11 @@ func TestMapPgError_SQLSTATE(t *testing.T) {
 		{"acct_not_active→403", "P0022", "ACCT_NOT_ACTIVE: status=C", domain.CodeAcctNotActive, http.StatusForbidden, false},
 		{"cr_restraint_active→423", "P0029", "CR_RESTRAINT_ACTIVE: refund target X is credit-blocked", domain.CodeCRRestraintActive, http.StatusLocked, false},
 		{"insufficient_funds→422", "P0026", "INSUFFICIENT_FUNDS: receiver X", domain.CodeInsufficientFunds, http.StatusUnprocessableEntity, false},
+		// Merchant hot-wallet group lifecycle (activate_hot_wallet).
+		{"invalid_shard_count→422", "P0052", "INVALID_SHARD_COUNT: 5 (allowed: 4, 8, 16)", domain.CodeInvalidShardCount, http.StatusUnprocessableEntity, false},
+		{"group_already_activated→409", "P0053", "GROUP_ALREADY_ACTIVATED: GF01 already has 4 shard(s)", domain.CodeGroupAlreadyActivated, http.StatusConflict, false},
+		{"settlement_not_found→404 (family)", "P0054", "SETTLEMENT_NOT_FOUND: group GF01 has no settlement account", "SETTLEMENT_NOT_FOUND", http.StatusNotFound, false},
+		{"group_not_found→404 (family)", "P0050", "GROUP_NOT_FOUND: GF01", "GROUP_NOT_FOUND", http.StatusNotFound, false},
 		{"non_P0_permission→internal 500 (no leak)", "42501", "permission denied for table WLT_ACCT", domain.CodeInternal, http.StatusInternalServerError, false},
 	}
 

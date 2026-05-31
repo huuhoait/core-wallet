@@ -68,4 +68,8 @@ type WalletRepository interface {
 	// Account (wallet) lifecycle (open_account / update_account_status).
 	OpenAccount(ctx context.Context, in domain.AccountOpenInput) (*domain.AccountOpenResult, error)
 	UpdateAccountStatus(ctx context.Context, in domain.AccountStatusInput) (*domain.AccountStatusResult, error)
+
+	// Merchant hot-wallet group lifecycle (activate_hot_wallet) — promote a cold
+	// group (0 shards) to N hot SHARD sub-accounts.
+	ActivateHotWallet(ctx context.Context, in domain.ActivateHotWalletInput) (*domain.ActivateHotWalletResult, error)
 }

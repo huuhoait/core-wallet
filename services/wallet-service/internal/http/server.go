@@ -88,6 +88,11 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			accounts.GET("/:acct_no", h.GetAccount)              // account profile (no client PII)
 			accounts.GET("/:acct_no/balance", h.GetBalance)      // realtime + historical (?as_of_date=)
 		}
+		// ── Merchant groups: hot-wallet lifecycle (cold → N shards) ──
+		groups := v1.Group("/merchant-groups")
+		{
+			groups.POST("/:group_id/activate", h.ActivateHotWallet) // promote cold group → 4|8|16 shards
+		}
 		ops := v1.Group("/ops/accounts")
 		{
 			ops.GET("/:acct_no/balance", h.GetBalanceOps)

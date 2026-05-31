@@ -542,7 +542,7 @@ CREATE TABLE WLT_ACCT_GROUP (
   GROUP_ID             VARCHAR(20)   PRIMARY KEY,         -- e.g. 'MCH_KIA', 'AGT_BIG_VIETTEL'
   CLIENT_NO            VARCHAR(48)   NOT NULL,            -- → FM_CLIENT (merchant/agent legal entity)
   GROUP_TYPE           VARCHAR(12)   NOT NULL,            -- 'MERCHANT' | 'AGENT' | 'NOSTRO_HOT'
-  SHARD_COUNT          SMALLINT      NOT NULL DEFAULT 32,
+  SHARD_COUNT          SMALLINT      NOT NULL DEFAULT 0,  -- 0 on creation (no shards); activate to 4/8/16 when hot (4 = hot default)
   SETTLEMENT_ACCT_NO   VARCHAR(20)   NOT NULL,            -- → WLT_ACCT[ACCT_ROLE='SETTLEMENT']
   SHARD_THRESHOLD      NUMERIC(18,2) NOT NULL DEFAULT 200000, -- sweep if shard > X
   SHARD_BUFFER         NUMERIC(18,2) NOT NULL DEFAULT 50000,  -- keep Y on the shard
@@ -553,7 +553,7 @@ CREATE TABLE WLT_ACCT_GROUP (
   CONSTRAINT fk_group_client     FOREIGN KEY (CLIENT_NO)          REFERENCES FM_CLIENT(CLIENT_NO),
   CONSTRAINT fk_group_settlement FOREIGN KEY (SETTLEMENT_ACCT_NO) REFERENCES WLT_ACCT(ACCT_NO) DEFERRABLE INITIALLY DEFERRED,
   CONSTRAINT chk_group_type      CHECK (GROUP_TYPE IN ('MERCHANT','AGENT','NOSTRO_HOT')),
-  CONSTRAINT chk_shard_count     CHECK (SHARD_COUNT IN (8, 16, 32, 64))
+  CONSTRAINT chk_shard_count     CHECK (SHARD_COUNT IN (0, 4, 8, 16))  -- 0 = no shard (just-created), 4|8|16 = hot tiers
 );
 
 CREATE INDEX idx_group_client ON WLT_ACCT_GROUP(CLIENT_NO);
@@ -561,6 +561,8 @@ CREATE INDEX idx_group_status ON WLT_ACCT_GROUP(GROUP_STATUS);
 ```
 
 > **DEFERRABLE FK** is necessary because of the chicken-and-egg situation: creating the settlement_acct first requires a group_id, but group_id requires settlement_acct_no. Provision via the SP `provision_acct_group(...)` in the same TX (see §3.7).
+
+> **Hot-wallet activation.** Groups are created **cold** (`SHARD_COUNT = 0`, settlement only). `activate_hot_wallet(p_group_id, p_shard_count := 4)` promotes a cold group to a hot wallet: it materialises N empty `SHARD` sub-accounts (`SHARD_INDEX` 0..N-1, balance 0 — no funds move, so no ledger entry, same invariant as `open_account`) and flips `SHARD_COUNT` to the hot tier (4/8/16; 4 = default). Activation is one-way from cold — re-activating raises `GROUP_ALREADY_ACTIVATED` (P0053); an unsupported count raises `INVALID_SHARD_COUNT` (P0052). `SECURITY DEFINER` (wallet_app holds only SELECT on `WLT_ACCT_GROUP`). HTTP: `POST /v1/merchant-groups/:group_id/activate`.
 
 ### 2.3 WLT_ACCT_BAL (daily snapshot)
 

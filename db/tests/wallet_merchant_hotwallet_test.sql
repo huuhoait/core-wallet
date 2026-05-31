@@ -41,7 +41,7 @@ BEGIN
      shard_threshold, shard_buffer, sweep_interval_sec, group_status)
   VALUES
     (v_grp, v_mc, 'MERCHANT', 8, '97019000000001', 50000000, 10000000, 60, 'A');
-  -- shard_count is the CONFIGURED count (must be 8/16/32/64); we materialise 4
+  -- shard_count is the CONFIGURED count (must be 0/4/8/16); we materialise 4
   -- physical shards for the test → active_shards = 4.
 
   INSERT INTO WLT_ACCT
