@@ -8,8 +8,8 @@ import (
 
 // CreateClientRequest — POST /v1/clients. client_type is one of IND (individual),
 // CORP (corporate) or MER (merchant) — validated by the SP (→ 422 INVALID_CLIENT_TYPE)
-// so both layers agree on the code. CORP and MER are organization-like and create
-// only the FM_CLIENT row; IND also creates FM_CLIENT_INDVL.
+// so both layers agree on the code. All types create FM_CLIENT + one FM_CLIENT_KYC
+// row; IND personal fields fold into FM_CLIENT_KYC.extra_data JSONB (US-1.15).
 type CreateClientRequest struct {
 	ClientName     string `json:"client_name"              binding:"required,max=200"`
 	ClientType     string `json:"client_type"              binding:"required"`

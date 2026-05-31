@@ -30,11 +30,10 @@ BEGIN
     CONTINUE WHEN EXISTS (SELECT 1 FROM FM_CLIENT WHERE client_no = v_c);
     INSERT INTO FM_CLIENT(client_no,global_id,global_id_type,client_name,client_type,country_loc,country_citizen,status)
       VALUES(v_c,'LTID'||lpad(i::text,9,'0'),'CCCD','LoadUser '||i,'IND','VN','VN','A');
-    INSERT INTO FM_CLIENT_INDVL(client_no,surname,given_name_1,sex,resident_status)
-      VALUES(v_c,'Load','User'||i,'M','R');
-    INSERT INTO WLT_CLIENT_KYC(client_no,phone_no_enc,phone_no_hash,kyc_tier,status)
+    INSERT INTO FM_CLIENT_KYC(client_no,phone_no_enc,phone_no_hash,kyc_tier,status,extra_data)
       VALUES(v_c, convert_to('03'||lpad(i::text,8,'0'),'UTF8'),
-             digest('LTU03'||lpad(i::text,8,'0'),'sha256'),'2','A');
+             digest('LTU03'||lpad(i::text,8,'0'),'sha256'),'2','A',
+             jsonb_build_object('surname','Load','given_name','User'||i,'sex','M','resident_status','R'));
     INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,acct_role)
       VALUES('LT'||lpad(i::text,10,'0'), v_c,'CONSUMER','VND','A','STANDALONE');
     PERFORM post_topup('LT'||lpad(i::text,10,'0'), 1000000000000,
@@ -48,7 +47,7 @@ BEGIN
     CONTINUE WHEN EXISTS (SELECT 1 FROM WLT_ACCT_GROUP WHERE group_id = v_g);
     INSERT INTO FM_CLIENT(client_no,global_id,global_id_type,client_name,client_type,country_loc,country_citizen,status)
       VALUES(v_c,'LTGID'||lpad(i::text,8,'0'),'CCCD','LoadMerchant '||i,'MER','VN','VN','A');
-    INSERT INTO WLT_CLIENT_KYC(client_no,phone_no_enc,phone_no_hash,kyc_tier,status)
+    INSERT INTO FM_CLIENT_KYC(client_no,phone_no_enc,phone_no_hash,kyc_tier,status)
       VALUES(v_c, convert_to('09'||lpad(i::text,8,'0'),'UTF8'),
              digest('LTM09'||lpad(i::text,8,'0'),'sha256'),'3','A');
     INSERT INTO WLT_ACCT_GROUP(group_id,client_no,group_type,shard_count,settlement_acct_no,shard_threshold,shard_buffer,sweep_interval_sec,group_status)

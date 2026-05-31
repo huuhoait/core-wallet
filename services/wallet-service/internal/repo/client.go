@@ -119,17 +119,20 @@ func (r *PgWalletRepo) GetClient(ctx context.Context, clientNo string) (*domain.
 // stay encrypted at rest and are not decrypted here. Unknown client_no → 404.
 // READ-ONLY: no TX, no audit GUCs.
 func (r *PgWalletRepo) GetClientFull(ctx context.Context, clientNo string) (*domain.ClientFullView, error) {
+	// IND personal details now live in FM_CLIENT_KYC.extra_data JSONB (US-1.15);
+	// FM_CLIENT_INDVL was folded in and dropped. Read them via ->> on the KYC row.
 	const q = `
 		SELECT c.client_no, c.client_name, c.client_type, c.global_id, c.global_id_type,
 		       c.country_loc, c.country_citizen, c.client_grp, c.acct_exec, c.status,
 		       c.registered_date, c.created_at, c.updated_at,
-		       i.surname, i.given_name_1, i.birth_date, i.sex, i.resident_status, i.marital_status,
+		       k.extra_data->>'surname', k.extra_data->>'given_name',
+		       (k.extra_data->>'birth_date')::date, k.extra_data->>'sex',
+		       k.extra_data->>'resident_status', k.extra_data->>'marital_status',
 		       k.kyc_tier, k.kyc_status, k.risk_level, k.verified_at
 		  FROM FM_CLIENT c
-		  LEFT JOIN FM_CLIENT_INDVL i ON i.client_no = c.client_no
 		  LEFT JOIN LATERAL (
-		    SELECT k2.kyc_tier, k2.status AS kyc_status, k2.risk_level, k2.verified_at
-		      FROM WLT_CLIENT_KYC k2
+		    SELECT k2.kyc_tier, k2.status AS kyc_status, k2.risk_level, k2.verified_at, k2.extra_data
+		      FROM FM_CLIENT_KYC k2
 		     WHERE k2.client_no = c.client_no
 		     ORDER BY k2.kyc_id DESC
 		     LIMIT 1

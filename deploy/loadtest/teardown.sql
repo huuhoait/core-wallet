@@ -64,8 +64,7 @@ DELETE FROM wlt_acct         WHERE acct_no  LIKE 'LT%';
 DELETE FROM wlt_acct_group   WHERE group_id LIKE 'LTG%';
 
 -- 3) Client master & its child tables.
-DELETE FROM wlt_client_kyc        WHERE client_no IN (SELECT client_no FROM _lt_client);
-DELETE FROM fm_client_indvl       WHERE client_no IN (SELECT client_no FROM _lt_client);
+DELETE FROM fm_client_kyc         WHERE client_no IN (SELECT client_no FROM _lt_client);
 DELETE FROM fm_client_identifiers WHERE client_no IN (SELECT client_no FROM _lt_client);
 DELETE FROM fm_client_contact     WHERE client_no IN (SELECT client_no FROM _lt_client);
 DELETE FROM fm_client_banks       WHERE client_no IN (SELECT client_no FROM _lt_client);

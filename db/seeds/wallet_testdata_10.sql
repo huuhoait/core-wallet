@@ -1,8 +1,8 @@
 -- =============================================================================
 -- wallet_testdata_10.sql — Create 10 client/wallet sets for transaction testing
 -- =============================================================================
--- Schema-correct as of live DB (2026-05): WLT_CLIENT_KYC encrypts phone (pgcrypto),
--- WLT_ACCT.internal_key & WLT_CLIENT_KYC.kyc_id are IDENTITY, WLT_ACCT.calc_bal is
+-- Schema-correct as of live DB (2026-05): FM_CLIENT_KYC encrypts phone (pgcrypto),
+-- WLT_ACCT.internal_key & FM_CLIENT_KYC.kyc_id are IDENTITY, WLT_ACCT.calc_bal is
 -- GENERATED. Test key is fixed ('wallet-test-key') — transactions do not decrypt
 -- phone, so this is sufficient for posting tests.
 -- Re-running creates ANOTHER 10 (sequences advance; phone hashes stay unique
@@ -12,7 +12,7 @@
 CREATE SEQUENCE IF NOT EXISTS seq_client  AS BIGINT START 1000000000 CACHE 100;
 CREATE SEQUENCE IF NOT EXISTS seq_acct_no AS BIGINT START 5000000000 CACHE 100;
 
--- ---- fn_create_client : FM_CLIENT + (INDVL) + IDENTIFIERS + KYC -------------
+-- ---- fn_create_client : FM_CLIENT + IDENTIFIERS + KYC (IND in extra_data) ----
 CREATE OR REPLACE FUNCTION fn_create_client(
   p_client_name VARCHAR, p_global_id VARCHAR, p_phone VARCHAR,
   p_email VARCHAR DEFAULT NULL, p_client_type VARCHAR DEFAULT 'IND',
@@ -29,21 +29,22 @@ BEGIN
   VALUES (v_client_no, p_global_id, 'CCCD', p_client_name,
      p_client_type, 'VN', 'VN', 'A');
 
-  IF p_client_type = 'IND' THEN
-    INSERT INTO FM_CLIENT_INDVL (CLIENT_NO, SURNAME, GIVEN_NAME_1, SEX, RESIDENT_STATUS)
-    VALUES (v_client_no, split_part(p_client_name,' ',1), split_part(p_client_name,' ',-1), 'M','R');
-  END IF;
-
   INSERT INTO FM_CLIENT_IDENTIFIERS (CLIENT_NO, GLOBAL_ID, GLOBAL_ID_TYPE, IS_CURRENT, NATIONALITY)
   VALUES (v_client_no, p_global_id, 'CCCD', 1, 'VN');
 
-  INSERT INTO WLT_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS)
+  -- IND personal details fold into extra_data JSONB (US-1.15)
+  INSERT INTO FM_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS, EXTRA_DATA)
   VALUES (
     v_client_no,
     pgp_sym_encrypt(p_phone, v_key),
     digest(p_phone, 'sha256'),
     CASE WHEN p_email IS NULL THEN NULL ELSE pgp_sym_encrypt(p_email, v_key) END,
-    p_kyc_tier, 'A');
+    p_kyc_tier, 'A',
+    CASE WHEN p_client_type = 'IND'
+         THEN jsonb_build_object('surname', split_part(p_client_name,' ',1),
+                                 'given_name', split_part(p_client_name,' ',-1),
+                                 'sex','M','resident_status','R')
+         ELSE '{}'::jsonb END);
 
   RETURN v_client_no;
 END $$;

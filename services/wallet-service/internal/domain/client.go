@@ -2,8 +2,9 @@ package domain
 
 import "time"
 
-// ClientCreateInput creates a client master record (create_client SP).
-// No KYC/onboarding — identity only (FM_CLIENT + FM_CLIENT_INDVL when IND).
+// ClientCreateInput creates a client master record (create_client SP): FM_CLIENT
+// plus one FM_CLIENT_KYC row (tier 1 / status P, phone captured later by onboarding).
+// IND personal fields (Surname/GivenName/BirthDate/Sex) fold into extra_data JSONB.
 type ClientCreateInput struct {
 	ClientName     string
 	ClientType     string // 'IND' | 'CORP' | 'MER' (SP-validated; CORP/MER are org-like)

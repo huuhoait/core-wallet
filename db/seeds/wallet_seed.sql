@@ -43,8 +43,9 @@ CREATE SEQUENCE IF NOT EXISTS seq_acct_no AS BIGINT START 1 CACHE 100;
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- fn_create_client: Create FM_CLIENT + FM_CLIENT_INDVL + FM_CLIENT_IDENTIFIERS
---                   + WLT_CLIENT_KYC in a single transaction.
+-- fn_create_client: Create FM_CLIENT + FM_CLIENT_IDENTIFIERS + FM_CLIENT_KYC
+--                   (IND details folded into FM_CLIENT_KYC.extra_data — US-1.15)
+--                   in a single transaction.
 -- Returns: CLIENT_NO
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_create_client(
@@ -69,16 +70,6 @@ BEGIN
     (v_client_no, p_global_id, 'CCCD', p_client_name,
      p_client_type, 'VN', 'VN', 'A');
 
-  IF p_client_type = 'IND' THEN
-    INSERT INTO FM_CLIENT_INDVL
-      (CLIENT_NO, SURNAME, GIVEN_NAME_1, SEX, RESIDENT_STATUS)
-    VALUES
-      (v_client_no,
-       split_part(p_client_name, ' ', 1),
-       split_part(p_client_name, ' ', -1),
-       'M', 'R');
-  END IF;
-
   INSERT INTO FM_CLIENT_IDENTIFIERS
     (CLIENT_NO, GLOBAL_ID, GLOBAL_ID_TYPE, IS_CURRENT, NATIONALITY)
   VALUES
@@ -87,14 +78,20 @@ BEGIN
   -- PII at rest: phone/email encrypted (pgp_sym_encrypt), phone also SHA-256
   -- hashed for the unique index uk_kyc_phone_hash. Test key is fixed — posting
   -- tests never decrypt phone, so this matches wallet_testdata_10.sql.
-  INSERT INTO WLT_CLIENT_KYC
-    (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS)
+  -- IND personal details fold into extra_data JSONB (US-1.15).
+  INSERT INTO FM_CLIENT_KYC
+    (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS, EXTRA_DATA)
   VALUES
     (v_client_no,
      pgp_sym_encrypt(p_phone, v_key),
      digest(p_phone, 'sha256'),
      CASE WHEN p_email IS NULL THEN NULL ELSE pgp_sym_encrypt(p_email, v_key) END,
-     p_kyc_tier, 'A');
+     p_kyc_tier, 'A',
+     CASE WHEN p_client_type = 'IND'
+          THEN jsonb_build_object('surname', split_part(p_client_name, ' ', 1),
+                                  'given_name', split_part(p_client_name, ' ', -1),
+                                  'sex', 'M', 'resident_status', 'R')
+          ELSE '{}'::jsonb END);
 
   RETURN v_client_no;
 END $$;
@@ -213,7 +210,7 @@ ORDER BY relname;
 SELECT 'orphan WLT_ACCT.CLIENT_NO' AS check, COUNT(*) FROM WLT_ACCT a
 WHERE NOT EXISTS (SELECT 1 FROM FM_CLIENT c WHERE c.CLIENT_NO = a.CLIENT_NO)
 UNION ALL
-SELECT 'orphan WLT_CLIENT_KYC.CLIENT_NO', COUNT(*) FROM WLT_CLIENT_KYC k
+SELECT 'orphan FM_CLIENT_KYC.CLIENT_NO', COUNT(*) FROM FM_CLIENT_KYC k
 WHERE NOT EXISTS (SELECT 1 FROM FM_CLIENT c WHERE c.CLIENT_NO = k.CLIENT_NO);
 
 
@@ -236,9 +233,8 @@ BEGIN
     WLT_API_MESSAGE,
     WLT_ACCT_BAL,
     WLT_ACCT,
-    WLT_CLIENT_KYC,
+    FM_CLIENT_KYC,
     FM_CLIENT_IDENTIFIERS,
-    FM_CLIENT_INDVL,
     FM_CLIENT
   CASCADE;
 
