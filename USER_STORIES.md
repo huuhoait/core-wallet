@@ -66,7 +66,7 @@ docs alone).
 | US-2.3 | As a user, I withdraw to bank (DR wallet / CR nostro, fee + VAT) | ✅ | SP `post_withdraw`; `POST /v1/finance/withdraw`. |
 | US-2.4 | As a merchant, I withdraw with hot-shard sweep + settlement | ✅ | SP `post_merchant_withdraw`, `post_sweep_shard`, `fn_resolve_shard_acct_no`; `POST /v1/finance/merchant-withdraw`. |
 | US-2.5 | As finance, fees + VAT are computed and posted as separate legs | ✅ | Fee/VAT engine inside posting SPs; GL revenue + VAT payable. |
-| US-2.7 | As risk/ops, each posting carries metadata + a client-info snapshot | ✅ | SP `fn_validate_metadata`, `fn_build_client_info`; `WLT_TRAN_HIST.METADATA` / `CLIENT_INFO`. |
+| US-2.7 | As risk/ops, each posting carries a metadata bag | ✅ | SP `fn_validate_metadata`; `WLT_TRAN_HIST.METADATA` (≤1KB, P1-forbidden). Client-info snapshot **retired**: `CLIENT_INFO` + `fn_build_client_info` removed (write-only, no reader); redundant `TRAN_DATE`/`EFFECT_DATE` also dropped (they always equalled `POST_DATE`). |
 
 > **Cross-cutting (✅):** posting is **idempotent** by `reference` (`ON CONFLICT` /
 > duplicate guard in `wallet_sp.sql`), and honours holds via `WLT_RESTRAINTS`.

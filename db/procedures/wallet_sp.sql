@@ -9,9 +9,8 @@
 --   - Phase 0  input guards
 --   - Phase 1  idempotency gate (WLT_API_MESSAGE FOR UPDATE)
 --   - Phase 2  validate (no lock — pure SELECTs)
---   - Phase 3  build CLIENT_INFO snapshot
---   - Phase 4  atomic posting (UPDATE WLT_ACCT VERSION-CAS → INSERTs → OUTBOX)
---   - Phase 5  close idempotency
+--   - Phase 3  atomic posting (UPDATE WLT_ACCT VERSION-CAS → INSERTs → OUTBOX)
+--   - Phase 4  close idempotency
 --
 -- Audit context: every SP calls set_config('audit.actor', ..., TRUE) and
 -- set_config('audit.channel', ..., TRUE) at entry. Trigger trg_audit_cols
@@ -33,27 +32,6 @@ ALTER DATABASE wallet SET app.pii_dek = 'dev_only_change_in_prod_kms';
 -- =============================================================================
 -- §1. HELPER FUNCTIONS
 -- =============================================================================
-
--- Build the CLIENT_INFO JSONB snapshot from FM_CLIENT + FM_CLIENT_INDVL + WLT_CLIENT_KYC.
--- STABLE = same input → same output within a TX, can be inlined by planner.
-CREATE OR REPLACE FUNCTION fn_build_client_info(p_client_no VARCHAR)
-RETURNS JSONB
-LANGUAGE sql STABLE AS $$
-  SELECT jsonb_build_object(
-    'client_no',         c.CLIENT_NO,
-    'kyc_tier',          k.KYC_TIER,
-    'name_initials',     left(coalesce(c.CLIENT_SHORT, c.CLIENT_NAME, ''), 3),
-    'residence_status',  i.RESIDENT_STATUS,
-    'country_loc',       c.COUNTRY_LOC,
-    'country_citizen',   c.COUNTRY_CITIZEN,
-    'risk_level',        k.RISK_LEVEL,
-    'customer_segment',  c.CLIENT_GRP
-  )
-    FROM FM_CLIENT c
-    LEFT JOIN FM_CLIENT_INDVL i ON i.CLIENT_NO = c.CLIENT_NO
-    LEFT JOIN WLT_CLIENT_KYC  k ON k.CLIENT_NO = c.CLIENT_NO
-   WHERE c.CLIENT_NO = p_client_no
-$$;
 
 -- Validate METADATA JSONB (size ≤ 1 KB, no P1 keys).
 CREATE OR REPLACE FUNCTION fn_validate_metadata(p_metadata JSONB)
@@ -101,7 +79,6 @@ DECLARE
   v_acct_type   WLT_ACCT_TYPE%ROWTYPE;
   v_tfr_key     BIGINT;
   v_event_uuid  UUID;
-  v_client_info JSONB;
   v_existing    WLT_API_MESSAGE%ROWTYPE;
 BEGIN
   -- Audit context (defensive — Go middleware should also set these)
@@ -158,7 +135,6 @@ BEGIN
   SELECT * INTO v_acct_type FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct.ACCT_TYPE;
 
   -- ─── Phase 3: build client snapshot ────────────────────────────────
-  v_client_info := fn_build_client_info(v_acct.CLIENT_NO);
 
   -- ─── Phase 4: atomic posting ───────────────────────────────────────
   v_tfr_key := nextval('seq_tfr');
@@ -176,15 +152,15 @@ BEGIN
 
   -- TRAN_HIST (1 leg: TOPUP)
   INSERT INTO WLT_TRAN_HIST (
-    INTERNAL_KEY, TRAN_TYPE, TRAN_DATE, EFFECT_DATE, POST_DATE, VALUE_DATE,
+    INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
     TFR_INTERNAL_KEY, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
-    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA, CLIENT_INFO
+    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
   ) VALUES (
-    v_acct.INTERNAL_KEY, 'TOPUP', CURRENT_DATE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE,
+    v_acct.INTERNAL_KEY, 'TOPUP', CURRENT_DATE, CURRENT_DATE,
     p_amount, 'CR', v_acct.ACTUAL_BAL - p_amount, v_acct.ACTUAL_BAL,
     v_tfr_key, p_reference, v_acct.CCY, p_channel, 'WLT',
-    'Topup from Treasury', left(p_metadata->>'narrative',250), v_acct.GROUP_ID, v_acct.SHARD_INDEX, p_metadata, v_client_info
+    'Topup from Treasury', left(p_metadata->>'narrative',250), v_acct.GROUP_ID, v_acct.SHARD_INDEX, p_metadata
   );
 
   -- BATCH (2 GL legs: DR nostro / CR wallet liability)
@@ -282,8 +258,6 @@ DECLARE
   v_cur_bal     NUMERIC(18,2);   -- re-read on CAS miss to classify the failure
   v_cur_restr   NUMERIC(18,2);
   v_event_uuid  UUID;
-  v_client_info_a JSONB;
-  v_client_info_b JSONB;
   v_existing    WLT_API_MESSAGE%ROWTYPE;
 BEGIN
   PERFORM set_config('audit.actor',   v_actor,   TRUE);
@@ -402,8 +376,6 @@ BEGIN
   END IF;
 
   -- ─── Phase 3: client snapshots ─────────────────────────────────────
-  v_client_info_a := fn_build_client_info(v_acct_a.CLIENT_NO);
-  v_client_info_b := fn_build_client_info(v_acct_b.CLIENT_NO);
 
   -- ─── Phase 4: atomic posting (ordered locking by INTERNAL_KEY ASC) ──
   v_tfr_key := nextval('seq_tfr');
@@ -467,39 +439,39 @@ BEGIN
   -- Insert the TRFOUT (origin) leg first and capture its SEQ_NO so the fee
   -- leg can point back to it via TFR_SEQ_NO.
   INSERT INTO WLT_TRAN_HIST (
-    INTERNAL_KEY, TRAN_TYPE, TRAN_DATE, EFFECT_DATE, POST_DATE, VALUE_DATE,
+    INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
     TFR_INTERNAL_KEY, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
-    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA, CLIENT_INFO
+    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
   ) VALUES
-    (v_acct_a.INTERNAL_KEY, p_tran_type, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE,
+    (v_acct_a.INTERNAL_KEY, p_tran_type, CURRENT_DATE, CURRENT_DATE,
      p_amount, 'DR', v_acct_a.ACTUAL_BAL + v_total_debit, v_acct_a.ACTUAL_BAL + v_fee_gross,
      v_tfr_key, p_reference, v_acct_a.CCY, p_channel, 'WLT',
-     'Transfer out', left(p_metadata->>'narrative',250), v_acct_a.GROUP_ID, v_acct_a.SHARD_INDEX, p_metadata, v_client_info_a)
+     'Transfer out', left(p_metadata->>'narrative',250), v_acct_a.GROUP_ID, v_acct_a.SHARD_INDEX, p_metadata)
   RETURNING SEQ_NO INTO v_out_seq;
 
   INSERT INTO WLT_TRAN_HIST (
-    INTERNAL_KEY, TRAN_TYPE, TRAN_DATE, EFFECT_DATE, POST_DATE, VALUE_DATE,
+    INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
     TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
-    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA, CLIENT_INFO
+    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
   ) VALUES
-    (v_acct_b.INTERNAL_KEY, 'TRFIN',  CURRENT_DATE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE,
+    (v_acct_b.INTERNAL_KEY, 'TRFIN',  CURRENT_DATE, CURRENT_DATE,
      p_amount, 'CR', v_acct_b.ACTUAL_BAL - p_amount, v_acct_b.ACTUAL_BAL,
      v_tfr_key, v_out_seq, p_reference, v_acct_b.CCY, p_channel, 'WLT',
-     'Transfer in',  left(p_metadata->>'narrative',250), v_acct_b.GROUP_ID, v_acct_b.SHARD_INDEX, p_metadata, v_client_info_b);
+     'Transfer in',  left(p_metadata->>'narrative',250), v_acct_b.GROUP_ID, v_acct_b.SHARD_INDEX, p_metadata);
 
   IF v_fee_gross > 0 THEN
     INSERT INTO WLT_TRAN_HIST (
-      INTERNAL_KEY, TRAN_TYPE, TRAN_DATE, EFFECT_DATE, POST_DATE, VALUE_DATE,
+      INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
       TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
       TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_MODULE,
-      TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA, CLIENT_INFO
+      TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
     ) VALUES
-      (v_acct_a.INTERNAL_KEY, v_def.FEE_TRAN_TYPE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE,
+      (v_acct_a.INTERNAL_KEY, v_def.FEE_TRAN_TYPE, CURRENT_DATE, CURRENT_DATE,
        v_fee_gross, 'DR', v_acct_a.ACTUAL_BAL + v_fee_gross, v_acct_a.ACTUAL_BAL,
        v_tfr_key, v_out_seq, p_reference, v_acct_a.CCY, 'WLT',
-       'Fee + VAT for transfer', left(p_metadata->>'narrative',250), v_acct_a.GROUP_ID, v_acct_a.SHARD_INDEX, p_metadata, v_client_info_a);
+       'Fee + VAT for transfer', left(p_metadata->>'narrative',250), v_acct_a.GROUP_ID, v_acct_a.SHARD_INDEX, p_metadata);
   END IF;
 
   -- BATCH (5 GL legs: 2 transfer + 3 fee/VAT if fee > 0)
@@ -610,7 +582,6 @@ DECLARE
   v_cur_bal     NUMERIC(18,2);   -- re-read on CAS miss to classify the failure
   v_cur_restr   NUMERIC(18,2);
   v_event_uuid  UUID;
-  v_client_info JSONB;
   v_benef_enc   BYTEA;
   v_dek         TEXT := current_setting('app.pii_dek', TRUE);
   v_existing    WLT_API_MESSAGE%ROWTYPE;
@@ -715,7 +686,6 @@ BEGIN
   END IF;
 
   -- Phase 3: snapshot
-  v_client_info := fn_build_client_info(v_acct.CLIENT_NO);
 
   -- Phase 4: atomic posting
   v_tfr_key := nextval('seq_tfr');
@@ -745,28 +715,28 @@ BEGIN
 
   -- TRAN_HIST × 2
   INSERT INTO WLT_TRAN_HIST (
-    INTERNAL_KEY, TRAN_TYPE, TRAN_DATE, EFFECT_DATE, POST_DATE, VALUE_DATE,
+    INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
     TFR_INTERNAL_KEY, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
-    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA, CLIENT_INFO
+    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
   ) VALUES
-    (v_acct.INTERNAL_KEY, 'WDRAW', CURRENT_DATE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE,
+    (v_acct.INTERNAL_KEY, 'WDRAW', CURRENT_DATE, CURRENT_DATE,
      p_amount, 'DR', v_acct.ACTUAL_BAL + v_total_debit, v_acct.ACTUAL_BAL + v_fee_gross,
      v_tfr_key, p_reference, v_acct.CCY, p_channel, 'WLT',
-     'Withdraw to bank', left(p_metadata->>'narrative',250), v_acct.GROUP_ID, v_acct.SHARD_INDEX, p_metadata, v_client_info)
+     'Withdraw to bank', left(p_metadata->>'narrative',250), v_acct.GROUP_ID, v_acct.SHARD_INDEX, p_metadata)
   RETURNING SEQ_NO INTO v_out_seq;
 
   IF v_fee_gross > 0 THEN
     INSERT INTO WLT_TRAN_HIST (
-      INTERNAL_KEY, TRAN_TYPE, TRAN_DATE, EFFECT_DATE, POST_DATE, VALUE_DATE,
+      INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
       TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
       TFR_INTERNAL_KEY, TFR_SEQ_NO, REFERENCE, CCY, SOURCE_MODULE,
-      TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA, CLIENT_INFO
+      TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
     ) VALUES
-      (v_acct.INTERNAL_KEY, 'FEEWD', CURRENT_DATE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE,
+      (v_acct.INTERNAL_KEY, 'FEEWD', CURRENT_DATE, CURRENT_DATE,
        v_fee_gross, 'DR', v_acct.ACTUAL_BAL + v_fee_gross, v_acct.ACTUAL_BAL,
        v_tfr_key, v_out_seq, p_reference, v_acct.CCY, 'WLT',
-       'Fee + VAT for withdraw', left(p_metadata->>'narrative',250), v_acct.GROUP_ID, v_acct.SHARD_INDEX, p_metadata, v_client_info);
+       'Fee + VAT for withdraw', left(p_metadata->>'narrative',250), v_acct.GROUP_ID, v_acct.SHARD_INDEX, p_metadata);
   END IF;
 
   -- BATCH × 5
@@ -871,7 +841,6 @@ DECLARE
   v_orig_def    WLT_TRAN_DEF%ROWTYPE;
   v_rev_tfr_key BIGINT;
   v_event_uuid  UUID;
-  v_client_info JSONB;
   v_orig_legs   RECORD;
 BEGIN
   PERFORM set_config('audit.actor',   v_actor,   TRUE);
@@ -906,7 +875,6 @@ BEGIN
   SELECT * INTO v_orig_def  FROM WLT_TRAN_DEF  WHERE TRAN_TYPE = 'WDRAW';
 
   -- Client snapshot (current — for reversal audit)
-  v_client_info := fn_build_client_info(v_acct.CLIENT_NO);
 
   -- Atomic: credit back ACTUAL_BAL + post RVWD/RVFEE legs + flip GL legs
   v_rev_tfr_key := nextval('seq_tfr');
@@ -922,34 +890,34 @@ BEGIN
 
   -- RVWD leg (credit-back of principal)
   INSERT INTO WLT_TRAN_HIST (
-    INTERNAL_KEY, TRAN_TYPE, TRAN_DATE, EFFECT_DATE, POST_DATE, VALUE_DATE,
+    INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
     TFR_INTERNAL_KEY, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE,
-    TRAN_DESC, GROUP_ID, SHARD_INDEX, CLIENT_INFO
+    TRAN_DESC, GROUP_ID, SHARD_INDEX
   ) VALUES (
-    v_acct.INTERNAL_KEY, 'RVWD', CURRENT_DATE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE,
+    v_acct.INTERNAL_KEY, 'RVWD', CURRENT_DATE, CURRENT_DATE,
     v_track.AMOUNT, 'CR',
     v_acct.ACTUAL_BAL - v_track.AMOUNT - v_track.FEE_GROSS,
     v_acct.ACTUAL_BAL - v_track.FEE_GROSS,
     v_rev_tfr_key, 'RVWD-' || p_ext_payout_ref, v_track.TFR_INTERNAL_KEY,
     v_acct.CCY, p_channel, 'WLT',
     'Reverse withdraw: ' || COALESCE(p_fail_code, '?'),
-    v_acct.GROUP_ID, v_acct.SHARD_INDEX, v_client_info);
+    v_acct.GROUP_ID, v_acct.SHARD_INDEX);
 
   -- RVFEE leg (refund fee + VAT) if fee was collected
   IF v_track.FEE_GROSS > 0 THEN
     INSERT INTO WLT_TRAN_HIST (
-      INTERNAL_KEY, TRAN_TYPE, TRAN_DATE, EFFECT_DATE, POST_DATE, VALUE_DATE,
+      INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
       TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
       TFR_INTERNAL_KEY, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_MODULE,
-      TRAN_DESC, GROUP_ID, SHARD_INDEX, CLIENT_INFO
+      TRAN_DESC, GROUP_ID, SHARD_INDEX
     ) VALUES (
-      v_acct.INTERNAL_KEY, 'RVFEE', CURRENT_DATE, CURRENT_DATE, CURRENT_DATE, CURRENT_DATE,
+      v_acct.INTERNAL_KEY, 'RVFEE', CURRENT_DATE, CURRENT_DATE,
       v_track.FEE_GROSS, 'CR',
       v_acct.ACTUAL_BAL - v_track.FEE_GROSS, v_acct.ACTUAL_BAL,
       v_rev_tfr_key, 'RVFEE-' || p_ext_payout_ref, v_track.TFR_INTERNAL_KEY,
       v_acct.CCY, 'WLT',
-      'Refund fee + VAT', v_acct.GROUP_ID, v_acct.SHARD_INDEX, v_client_info);
+      'Refund fee + VAT', v_acct.GROUP_ID, v_acct.SHARD_INDEX);
   END IF;
 
   -- Mirror GL legs flipped
@@ -1205,7 +1173,6 @@ GRANT EXECUTE ON FUNCTION mark_withdraw_acked(VARCHAR, VARCHAR, VARCHAR, VARCHAR
 GRANT EXECUTE ON FUNCTION mark_withdraw_disbursing(VARCHAR, VARCHAR, VARCHAR) TO wallet_app;
 GRANT EXECUTE ON FUNCTION mark_withdraw_completed(VARCHAR, VARCHAR, VARCHAR, VARCHAR) TO wallet_app;
 
-GRANT EXECUTE ON FUNCTION fn_build_client_info(VARCHAR) TO wallet_app;
 GRANT EXECUTE ON FUNCTION fn_validate_metadata(JSONB)   TO wallet_app;
 
 -- Sequence
