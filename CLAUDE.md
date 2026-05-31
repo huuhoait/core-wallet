@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Core Wallet is a double-entry e-wallet **ledger**. The defining architectural decision: the Go service is a **thin RPC client** — it validates input and calls **one PostgreSQL stored function per operation**. All balance validation, double-entry posting, fee/VAT, and reversal logic live in plpgsql, executed atomically inside a single DB transaction. When changing business behavior, the change usually belongs in `db/procedures/*.sql`, not in Go.
+Core Wallet is a double-entry e-wallet **ledger**. The defining architectural decision: the Go service is a **thin RPC client** — it validates input and calls **one PostgreSQL stored function per operation**. All balance validation, double-entry posting, fee/VAT, and reversal logic live in plpgsql, executed atomically inside a single DB transaction. When changing business behavior, the change usually belongs in the PL/pgSQL stored functions (consolidated in `db/export/schema.sql`), not in Go.
 
 **Scope boundary:** internal synchronous posting only (top-up, transfer, withdraw, merchant settlement, fee/VAT, reversal). External rails (NAPAS, partner banks, card 3DS, MT940 recon) are deliberately out of scope and belong to a separate Treasury Service — do not add them here.
 
@@ -47,11 +47,7 @@ docker compose up -d                 # PG17 + PgBouncer + Adminer
 docker compose logs -f postgres      # wait for "ready to accept connections"
 ```
 
-**Critical init nuance:** docker only auto-loads `db/ddl/wallet_schema.sql` + `db/procedures/wallet_sp.sql` on first volume init. The remaining procedures (`wallet_sp_balance/merchant/topup_reversal/transfer_reversal/restraint/client`) and all seeds (`db/seeds/`) must be applied **manually** afterward — see README "Getting started". A fresh feature in a not-yet-loaded SP file will silently be missing until you load it. After editing any `wallet_sp*.sql`, re-apply it:
-
-```bash
-docker compose exec -T postgres psql -U postgres -d wallet -f /dev/stdin < db/procedures/wallet_sp.sql
-```
+**DB init:** on first volume init docker loads the entire DB from three pg_dump-generated files in `db/export/`, mounted into `/docker-entrypoint-initdb.d/` in order: `01-schema.sql` (all DDL — tables, indexes, SP functions, triggers), `02-partitions.sql` (creates the monthly + hash partitions), `03-seed.sql` (GL/COA/tran-type reference data). A plain `docker compose up` therefore yields a complete, ready DB — **no manual psql steps**. To change schema or an SP, edit `db/export/schema.sql` (or apply to a running DB) and re-init / regenerate — see `db/export/README.md` for the `pg_dump` regenerate commands. After any change, validate with `docker compose down -v && up`.
 
 SQL test suites (run against a seeded DB) and load tests:
 
@@ -96,11 +92,11 @@ Every write goes through `PgWalletRepo.withTx` (`internal/repo/postgres.go`). Ea
 4. Calls exactly one SP (`post_topup`, `post_transfer`, `post_withdraw`, `post_merchant_withdraw`, the reversals, `mark_withdraw_*`, etc.), passing positional params.
 5. Commits. A deferred unconditional `Rollback` uses a **fresh context** (not the caller's, which may already be timed out) so cleanup always reaches the server.
 
-When adding a new write operation: add the SP in `db/procedures/`, add the method to the `WalletRepository` port, implement it in `postgres.go` following this exact pattern, then wire usecase → handler → route.
+When adding a new write operation: add the SP function in `db/export/schema.sql`, add the method to the `WalletRepository` port, implement it in `postgres.go` following this exact pattern, then wire usecase → handler → route.
 
 ### Error model — keep Go and SQL in sync
 
-`domain.Error` carries a stable `Code`, an `HTTPStatus`, a client-safe `Detail`, and a wrapped `Cause`. **The codes in `internal/domain/errors.go` mirror the `RAISE EXCEPTION` codes in `db/procedures/wallet_sp.sql`** — when you add or change an SP error, update both sides. `mapPgError` (in `repo/errors.go`) translates pg/ctx/lock/statement-timeout failures into the right `domain.Error`; the HTTP layer renders an RFC 7807 envelope with ISO 20022 reason mapping (`domain/iso20022.go`). Read-only balance/account queries skip the audit TX.
+`domain.Error` carries a stable `Code`, an `HTTPStatus`, a client-safe `Detail`, and a wrapped `Cause`. **The codes in `internal/domain/errors.go` mirror the `RAISE EXCEPTION` codes in the SP functions (`db/export/schema.sql`)** — when you add or change an SP error, update both sides. `mapPgError` (in `repo/errors.go`) translates pg/ctx/lock/statement-timeout failures into the right `domain.Error`; the HTTP layer renders an RFC 7807 envelope with ISO 20022 reason mapping (`domain/iso20022.go`). Read-only balance/account queries skip the audit TX.
 
 ### Timeout layering (inner fires first)
 
@@ -108,11 +104,12 @@ PG `lock_timeout` 1.5s → PG `statement_timeout` 2.5s → pgx → HTTP request 
 
 ## Database layout
 
-The DB is the source of truth for the ledger.
+The DB is the source of truth for the ledger. It is defined by three pg_dump-generated files in `db/export/`, loaded in order by docker-init (regenerate commands in `db/export/README.md`):
 
-- `db/ddl/` — `wallet_schema.sql` is the docker-init schema and the single source of truth for the DDL.
-- `db/procedures/wallet_sp*.sql` — posting SPs. Posting uses a **deferred-locking** pattern: Phase 1 validates with no lock, Phase 2 does the atomic balance UPDATE.
-- `db/seeds/` — chart of accounts (`coa/`), tran-type extensions, fixtures.
+- `db/export/schema.sql` — all DDL: tables (incl. the 4 partitioned **parents**, no child partitions), sequences, indexes, constraints, the PL/pgSQL posting functions + procedures, and triggers (incl. the balanced-posting constraint trigger). Posting uses a **deferred-locking** pattern: Phase 1 validates with no lock, Phase 2 does the atomic balance UPDATE.
+- `db/export/partitions.sql` — `fn_ensure_wallet_partitions(from, to)` creates the monthly partitions (`wlt_tran_hist` also HASH-subpartitioned, modulus 32) + a DEFAULT per parent. Idempotent; re-run to roll partitions forward.
+- `db/export/seed.sql` — reference/master data only (GL master `fm_gl_mast`, COA map `wlt_gl_map`, tran types `wlt_tran_def`, currency, account types).
+- `db/seeds/` — demo / load-test fixtures (`wallet_testdata_10.sql`, the `wallet_seed.sql` bulk generator, `coa/` source); **not** part of the init export.
 - `db/tests/` — SQL assertion suites (accounting balance, merchant flow, reconciliation, reversal).
 
 Key tables: `WLT_ACCT`, `WLT_ACCT_BAL`, `WLT_TRAN_HIST`, `WLT_OUTBOX` (transactional outbox), `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`. Load-test data is prefixed `LT*`/`PB*` (clients `LTC*`/`LTGC*`, groups `LTG*`, refs `LT-*`/`PB-*`) so `deploy/loadtest/teardown.sql` can scope cleanup without touching baseline `C*` data.
