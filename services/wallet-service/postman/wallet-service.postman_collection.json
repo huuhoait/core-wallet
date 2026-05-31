@@ -365,6 +365,147 @@
               }
             }
           ]
+        },
+        {
+          "name": "GET client (masked profile)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/clients/{{client_no}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients",
+                "{{client_no}}"
+              ]
+            },
+            "description": "Masked client + KYC profile (name, CCCD, phone all masked). Run create-client/onboard first to set {{client_no}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404', ()=>pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if(pm.response.code===200){ const b=pm.response.json(); pm.test('masked fields', ()=>{ pm.expect(b.client_no).to.be.a('string'); pm.expect(b).to.have.property('client_name_masked'); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST submit KYC (tier-2)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/clients/{{client_no}}/kyc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients",
+                "{{client_no}}",
+                "kyc"
+              ]
+            },
+            "description": "Update KYC (US-1.2): set tier/status/risk + eKYC evidence. Reaching tier>=2 stamps verified_at.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"kyc_tier\":\"2\",\"status\":\"A\",\"risk_level\":\"L\",\"ekyc_provider\":\"VNPAY-eKYC\",\"ekyc_ref\":\"EKYC-{{$timestamp}}\",\"face_match_score\":0.97,\"liveness_result\":\"PASS\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 4xx', ()=>pm.expect(pm.response.code).to.be.oneOf([200,404,422]));",
+                  "if(pm.response.code===200){ const b=pm.response.json(); pm.test('tier 2', ()=>pm.expect(b.kyc_tier).to.equal('2')); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET client UNMASKED (ops, wallet_pii_ro)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/ops/clients/{{client_no}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "ops",
+                "clients",
+                "{{client_no}}"
+              ]
+            },
+            "description": "Unmasked client profile (raw name + CCCD), ops/PII path. Requires the PII read pool (DB_PII_DSN -> wallet_pii_ro) to be configured; if it is unset the unmask query returns 500 (the masked GET /v1/clients/:id still works)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200/404 (500 when PII pool unset)', ()=>pm.expect(pm.response.code).to.be.oneOf([200,404,500]));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -2068,6 +2209,189 @@
                   "if (body.status === 'DUPLICATE') {",
                   "  console.log('Idempotency verified — same tfr_key + event_uuid returned');",
                   "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Onboarding",
+      "item": [
+        {
+          "name": "POST onboard (IND consumer)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/onboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "onboard"
+              ]
+            },
+            "description": "One-call onboarding (US-1.1): create client + KYC (phone) + first zero-balance wallet. Captures {{client_no}}/{{acct_no_a}}. phone is a fresh valid 10-digit VN number (pre-request).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"client_name\":\"Le Van C\",\"client_type\":\"IND\",\"phone\":\"{{onb_phone}}\",\"global_id\":\"079{{$timestamp}}\",\"global_id_type\":\"CCCD\",\"email\":\"c@demo.local\",\"acct_type\":\"CONSUMER\",\"ccy\":\"VND\",\"birthdate\":\"1990-01-15\",\"sex\":\"M\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('onb_phone', '09'+String(Date.now()).slice(-8));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 or 4xx', ()=>pm.expect(pm.response.code).to.be.oneOf([201,409,422]));",
+                  "if(pm.response.code===201){ const b=pm.response.json(); pm.environment.set('client_no',b.client_no); pm.environment.set('acct_no_a',b.acct_no); pm.test('client+acct',()=>{ pm.expect(b.client_no).to.be.a('string'); pm.expect(b.acct_no).to.be.a('string'); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST onboard (MER merchant)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/onboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "onboard"
+              ]
+            },
+            "description": "Onboard a MERCHANT (US-1.7): client_type=MER, acct_type=MERCHANT. CORP/MER MUST send extra_data.business_reg_no + legal_rep (BR-09 -> 422 ORG_FIELDS_REQUIRED otherwise). phone is a fresh valid 10-digit VN number (pre-request).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"client_name\":\"Coffee Shop LLC\",\"client_type\":\"MER\",\"phone\":\"{{onb_phone_m}}\",\"global_id\":\"031{{$timestamp}}\",\"global_id_type\":\"MST\",\"acct_type\":\"MERCHANT\",\"ccy\":\"VND\",\"extra_data\":{\"business_reg_no\":\"0312345678\",\"legal_rep\":\"Nguyen Van D\"}}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('onb_phone_m', '08'+String(Date.now()).slice(-8));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 or 4xx', ()=>pm.expect(pm.response.code).to.be.oneOf([201,409,422]));",
+                  "if(pm.response.code===201){ const b=pm.response.json(); pm.environment.set('merchant_client_no',b.client_no); pm.environment.set('acct_no_merchant',b.acct_no); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Merchant Groups",
+      "item": [
+        {
+          "name": "POST activate hot wallet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/merchant-groups/{{group_id}}/activate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "merchant-groups",
+                "{{group_id}}",
+                "activate"
+              ]
+            },
+            "description": "Promote a cold merchant group (0 shards) to hot (US-1.9). shard_count omitted -> 4 (tiers 4/8/16). One-way: re-activate -> 409 GROUP_ALREADY_ACTIVATED.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"shard_count\":4}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ok or handled', ()=>pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
+                  "if([200,201].includes(pm.response.code)){ const b=pm.response.json(); pm.test('shards created',()=>pm.expect(b.shard_acct_nos).to.be.an('array')); }"
                 ]
               }
             }
