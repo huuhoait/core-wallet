@@ -4,6 +4,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
@@ -24,6 +25,71 @@ func (r *PgWalletRepo) CreateClient(ctx context.Context, in domain.ClientCreateI
 			nullStr(in.Surname), nullStr(in.GivenName), nullDate(in.BirthDate), nullStr(in.Sex),
 			in.Audit.Actor)
 		return row.Scan(&out.ClientNo, &out.Status, &out.Timestamp)
+	})
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return &out, nil
+}
+
+// OnboardClient runs onboard_client (US-1.1/1.7): create the client, its
+// FM_CLIENT_KYC row (phone captured — no OTP) and the first zero-balance wallet
+// in ONE TX. ExtraData (type-specific bag) is passed as jsonb; nil → {}.
+func (r *PgWalletRepo) OnboardClient(ctx context.Context, in domain.OnboardInput) (*domain.OnboardResult, error) {
+	extraJSON := "{}"
+	if in.ExtraData != nil {
+		b, err := json.Marshal(in.ExtraData)
+		if err != nil {
+			return nil, domain.InvalidRequest("extra_data not serialisable", err)
+		}
+		extraJSON = string(b) // pgx: pass JSON as text for $::jsonb (raw []byte → bytea)
+	}
+	var out domain.OnboardResult
+	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
+		const q = `
+			SELECT client_no, acct_no, internal_key, kyc_tier, kyc_status, balance, ccy, created_at
+			  FROM onboard_client($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+			                      $11::date, $12, $13::date, $14::date, $15, $16::jsonb, $17)
+		`
+		row := tx.QueryRow(ctx, q,
+			in.ClientName, in.ClientType, in.Phone,
+			nullStr(in.GlobalID), nullStr(in.GlobalIDType), nullStr(in.Email),
+			nullStr(in.CountryLoc), nullStr(in.CountryCitizen),
+			nullStr(in.AcctType), nullStr(in.Ccy),
+			nullDate(in.BirthDate), nullStr(in.Sex), nullDate(in.DateIssue),
+			nullDate(in.ExpireDate), nullStr(in.PlaceIssue),
+			extraJSON, in.Audit.Actor)
+		return row.Scan(&out.ClientNo, &out.AcctNo, &out.InternalKey, &out.KycTier,
+			&out.KycStatus, &out.Balance, &out.Ccy, &out.CreatedAt)
+	})
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return &out, nil
+}
+
+// UpdateKYC runs update_kyc (US-1.2): patch the centralized FM_CLIENT_KYC row
+// (eKYC fields, tier, risk) and MERGE extra_data. Nil/empty args are unchanged.
+func (r *PgWalletRepo) UpdateKYC(ctx context.Context, in domain.KycUpdateInput) (*domain.KycResult, error) {
+	var extraArg any // nil → SQL NULL → SP leaves extra_data unchanged
+	if in.ExtraData != nil {
+		b, err := json.Marshal(in.ExtraData)
+		if err != nil {
+			return nil, domain.InvalidRequest("extra_data not serialisable", err)
+		}
+		extraArg = string(b) // pgx: pass JSON as text for $::jsonb
+	}
+	var out domain.KycResult
+	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
+		const q = `
+			SELECT client_no, kyc_tier, status, risk_level, verified_at
+			  FROM update_kyc($1, $2, $3, $4, $5, $6, $7::numeric, $8, $9::jsonb, $10)
+		`
+		row := tx.QueryRow(ctx, q,
+			in.ClientNo, nullStr(in.KycTier), nullStr(in.Status), nullStr(in.RiskLevel),
+			nullStr(in.EkycProvider), nullStr(in.EkycRef), in.FaceMatchScore,
+			nullStr(in.LivenessResult), extraArg, in.Audit.Actor)
+		return row.Scan(&out.ClientNo, &out.KycTier, &out.Status, &out.RiskLevel, &out.VerifiedAt)
 	})
 	if err != nil {
 		return nil, mapErrIfPg(err)
@@ -119,17 +185,22 @@ func (r *PgWalletRepo) GetClient(ctx context.Context, clientNo string) (*domain.
 // stay encrypted at rest and are not decrypted here. Unknown client_no → 404.
 // READ-ONLY: no TX, no audit GUCs.
 func (r *PgWalletRepo) GetClientFull(ctx context.Context, clientNo string) (*domain.ClientFullView, error) {
+	// FM_CLIENT_INDVL was folded into FM_CLIENT_KYC (US-1.15). birthdate/sex are
+	// flat real columns; surname/given_name/resident_status/marital_status remain
+	// in extra_data JSONB.
 	const q = `
 		SELECT c.client_no, c.client_name, c.client_type, c.global_id, c.global_id_type,
 		       c.country_loc, c.country_citizen, c.client_grp, c.acct_exec, c.status,
 		       c.registered_date, c.created_at, c.updated_at,
-		       i.surname, i.given_name_1, i.birth_date, i.sex, i.resident_status, i.marital_status,
+		       k.extra_data->>'surname', k.extra_data->>'given_name',
+		       k.birthdate, k.sex,
+		       k.extra_data->>'resident_status', k.extra_data->>'marital_status',
 		       k.kyc_tier, k.kyc_status, k.risk_level, k.verified_at
 		  FROM FM_CLIENT c
-		  LEFT JOIN FM_CLIENT_INDVL i ON i.client_no = c.client_no
 		  LEFT JOIN LATERAL (
-		    SELECT k2.kyc_tier, k2.status AS kyc_status, k2.risk_level, k2.verified_at
-		      FROM WLT_CLIENT_KYC k2
+		    SELECT k2.kyc_tier, k2.status AS kyc_status, k2.risk_level, k2.verified_at,
+		           k2.extra_data, k2.birthdate, k2.sex
+		      FROM FM_CLIENT_KYC k2
 		     WHERE k2.client_no = c.client_no
 		     ORDER BY k2.kyc_id DESC
 		     LIMIT 1

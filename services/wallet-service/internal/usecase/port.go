@@ -56,6 +56,11 @@ type WalletRepository interface {
 	CreateClient(ctx context.Context, in domain.ClientCreateInput) (*domain.ClientResult, error)
 	UpdateClient(ctx context.Context, in domain.ClientUpdateInput) (*domain.ClientResult, error)
 
+	// Onboarding (US-1.1/1.7): create client + KYC + first wallet in one TX (no OTP).
+	OnboardClient(ctx context.Context, in domain.OnboardInput) (*domain.OnboardResult, error)
+	// KYC update / tier upgrade (US-1.2): patch FM_CLIENT_KYC (eKYC, tier, extra_data).
+	UpdateKYC(ctx context.Context, in domain.KycUpdateInput) (*domain.KycResult, error)
+
 	// Client profile reads (read-only). GetClient → masked (v_client_masked,
 	// wallet_app); GetClientFull → unmasked PII (wallet_pii_ro, /v1/ops only).
 	GetClient(ctx context.Context, clientNo string) (*domain.ClientView, error)

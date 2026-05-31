@@ -235,6 +235,7 @@ CREATE FUNCTION public.create_client(p_client_name character varying, p_client_t
 DECLARE
   v_no      VARCHAR(48);
   v_created TIMESTAMPTZ;
+  v_extra   JSONB;
 BEGIN
   -- Unified client types: IND (individual), CORP (corporate), MER (merchant).
   -- CORP and MER are organization-like and handled identically below (no INDVL row).
@@ -259,14 +260,171 @@ BEGIN
        p_client_type, COALESCE(p_country_loc, 'VN'), COALESCE(p_country_citizen, 'VN'), 'A')
   RETURNING created_at INTO v_created;
 
-  -- Individuals carry the personal-detail sub-row; CORP/MER are the bare FM_CLIENT
-  -- row (no FM_CLIENT_ORG table in scope yet — add an org branch here if needed).
+  -- Centralized KYC (US-1.15): exactly one FM_CLIENT_KYC row per client; type-specific
+  -- identity lives in extra_data JSONB (FM_CLIENT_INDVL folded in). The onboarding flow
+  -- captures the phone later, so the phone columns stay NULL here (tier 1 / status P).
   IF p_client_type = 'IND' THEN
-    INSERT INTO FM_CLIENT_INDVL(client_no, surname, given_name_1, birth_date, sex, resident_status)
-    VALUES (v_no, p_surname, p_given_name, p_birth_date, p_sex, 'R');
+    v_extra := jsonb_strip_nulls(jsonb_build_object(
+      'surname',         p_surname,
+      'given_name',      p_given_name,
+      'resident_status', 'R'));
+  ELSE
+    v_extra := '{}'::jsonb;   -- ORG (CORP/MER): legal_rep/ubo/business_reg_no set via onboarding
   END IF;
 
+  -- Identity document + personal birth/sex are flat real columns; the rest of
+  -- the type-specific bag stays in extra_data.
+  INSERT INTO FM_CLIENT_KYC(client_no, kyc_tier, status, extra_data,
+       global_id, global_id_type, birthdate, sex)
+  VALUES (v_no, '1', 'P', v_extra,
+       p_global_id,
+       CASE WHEN p_global_id IS NULL THEN NULL ELSE COALESCE(p_global_id_type, 'CCCD') END,
+       p_birth_date, p_sex);
+
   RETURN QUERY SELECT v_no, 'A'::varchar, v_created;
+END;
+$$;
+
+
+--
+-- Name: onboard_client(...); Type: FUNCTION; Schema: public; Owner: -
+--
+-- US-1.1 (OTP-free) + US-1.7: step 1 of onboarding — create the client, its
+-- centralized FM_CLIENT_KYC row (tier 1, phone captured here — no OTP), and open
+-- the first zero-balance wallet, all in ONE transaction. Type-specific identity
+-- (IND surname/given_name/…, ORG legal_rep/ubo/business_reg_no/…) rides extra_data.
+--
+
+CREATE FUNCTION public.onboard_client(p_client_name character varying, p_client_type character varying, p_phone character varying, p_global_id character varying DEFAULT NULL::character varying, p_global_id_type character varying DEFAULT NULL::character varying, p_email character varying DEFAULT NULL::character varying, p_country_loc character varying DEFAULT 'VN'::character varying, p_country_citizen character varying DEFAULT 'VN'::character varying, p_acct_type character varying DEFAULT 'CONSUMER'::character varying, p_ccy character varying DEFAULT 'VND'::character varying, p_birth_date date DEFAULT NULL::date, p_sex character varying DEFAULT NULL::character varying, p_date_issue date DEFAULT NULL::date, p_expire_date date DEFAULT NULL::date, p_place_issue character varying DEFAULT NULL::character varying, p_extra_data jsonb DEFAULT '{}'::jsonb, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(client_no character varying, acct_no character varying, internal_key bigint, kyc_tier character varying, kyc_status character varying, balance numeric, ccy character varying, created_at timestamp with time zone)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+#variable_conflict use_column
+DECLARE
+  v_no      VARCHAR(48);
+  v_created TIMESTAMPTZ;
+  v_dek     TEXT  := current_setting('app.pii_dek', TRUE);
+  v_extra   JSONB := COALESCE(p_extra_data, '{}'::jsonb);
+  v_ccy     VARCHAR(4) := COALESCE(p_ccy, 'VND');
+  v_acct    VARCHAR(20);
+  v_key     BIGINT;
+BEGIN
+  IF p_client_type IS NULL OR p_client_type NOT IN ('IND','CORP','MER') THEN
+    RAISE EXCEPTION 'INVALID_CLIENT_TYPE' USING ERRCODE = 'P0070';
+  END IF;
+  IF p_client_name IS NULL OR length(btrim(p_client_name)) = 0 THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: client_name required' USING ERRCODE = 'P0071';
+  END IF;
+  IF p_phone IS NULL OR p_phone !~ '^0[0-9]{9}$' THEN
+    RAISE EXCEPTION 'INVALID_PHONE_FORMAT: %', p_phone USING ERRCODE = 'P0076';
+  END IF;
+  IF v_dek IS NULL OR v_dek = '' THEN
+    RAISE EXCEPTION 'PII_DEK_NOT_SET — set ALTER DATABASE ... SET app.pii_dek=...'
+      USING ERRCODE = 'P0030';
+  END IF;
+  IF jsonb_typeof(v_extra) <> 'object' THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: extra_data must be a JSON object' USING ERRCODE = 'P0071';
+  END IF;
+  -- BR-09 (US-1.7): organizations must carry the legal identity in extra_data.
+  IF p_client_type IN ('CORP','MER')
+     AND NOT (v_extra ? 'business_reg_no' AND v_extra ? 'legal_rep') THEN
+    RAISE EXCEPTION 'ORG_FIELDS_REQUIRED: business_reg_no + legal_rep' USING ERRCODE = 'P0077';
+  END IF;
+  IF p_global_id IS NOT NULL AND EXISTS (
+       SELECT 1 FROM FM_CLIENT
+        WHERE global_id = p_global_id
+          AND global_id_type = COALESCE(p_global_id_type, 'CCCD')) THEN
+    RAISE EXCEPTION 'CLIENT_ALREADY_EXISTS' USING ERRCODE = 'P0072';
+  END IF;
+  IF EXISTS (SELECT 1 FROM FM_CLIENT_KYC WHERE phone_no_hash = digest(p_phone, 'sha256')) THEN
+    RAISE EXCEPTION 'PHONE_ALREADY_REGISTERED' USING ERRCODE = 'P0075';
+  END IF;
+
+  v_no := 'C' || LPAD(nextval('seq_client')::text, 10, '0');
+
+  INSERT INTO FM_CLIENT(client_no, global_id, global_id_type, client_name,
+       client_type, country_loc, country_citizen, status)
+  VALUES (v_no, p_global_id, p_global_id_type, p_client_name,
+       p_client_type, COALESCE(p_country_loc, 'VN'), COALESCE(p_country_citizen, 'VN'), 'A')
+  RETURNING created_at INTO v_created;
+
+  -- Centralized KYC (US-1.15): phone is captured at registration (no OTP); the
+  -- client is active at tier 1 (receive-only — tier 2+ unlocked via update_kyc).
+  INSERT INTO FM_CLIENT_KYC(client_no, phone_no_enc, phone_no_hash, email_enc,
+       kyc_tier, status, extra_data,
+       global_id, global_id_type, date_issue, expire_date, place_issue, birthdate, sex)
+  VALUES (v_no,
+       pgp_sym_encrypt(p_phone, v_dek, 'cipher-algo=aes256'),
+       digest(p_phone, 'sha256'),
+       CASE WHEN p_email IS NULL THEN NULL
+            ELSE pgp_sym_encrypt(p_email, v_dek, 'cipher-algo=aes256') END,
+       '1', 'A', v_extra,
+       p_global_id,
+       CASE WHEN p_global_id IS NULL THEN NULL ELSE COALESCE(p_global_id_type, 'CCCD') END,
+       p_date_issue, p_expire_date, p_place_issue, p_birth_date, p_sex);
+
+  -- Open the first wallet (zero balance) in the same TX — reuses the acct-type /
+  -- per-client count guards in open_account.
+  SELECT o.acct_no, o.internal_key INTO v_acct, v_key
+    FROM open_account(v_no, COALESCE(p_acct_type, 'CONSUMER'), v_ccy, p_actor) o;
+
+  RETURN QUERY SELECT v_no, v_acct, v_key, '1'::varchar, 'A'::varchar, 0::numeric, v_ccy, v_created;
+END;
+$$;
+
+
+--
+-- Name: update_kyc(...); Type: FUNCTION; Schema: public; Owner: -
+--
+-- US-1.2: step 2 of onboarding — submit/update KYC info (eKYC result) and raise
+-- the tier. Patches the centralized FM_CLIENT_KYC row; non-null args overwrite,
+-- p_extra_data is MERGED (jsonb ||). Reaching tier >= 2 stamps verified_at/by.
+--
+
+CREATE FUNCTION public.update_kyc(p_client_no character varying, p_kyc_tier character varying DEFAULT NULL::character varying, p_status character varying DEFAULT NULL::character varying, p_risk_level character varying DEFAULT NULL::character varying, p_ekyc_provider character varying DEFAULT NULL::character varying, p_ekyc_ref character varying DEFAULT NULL::character varying, p_face_match_score numeric DEFAULT NULL::numeric, p_liveness_result character varying DEFAULT NULL::character varying, p_extra_data jsonb DEFAULT NULL::jsonb, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(client_no character varying, kyc_tier character varying, status character varying, risk_level character varying, verified_at timestamp with time zone)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+#variable_conflict use_column
+DECLARE
+  v_tier     VARCHAR(4);
+  v_status   VARCHAR(4);
+  v_risk     VARCHAR(4);
+  v_verified TIMESTAMPTZ;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM FM_CLIENT WHERE client_no = p_client_no) THEN
+    RAISE EXCEPTION 'CLIENT_NOT_FOUND' USING ERRCODE = 'P0073';
+  END IF;
+  IF p_kyc_tier IS NOT NULL AND p_kyc_tier NOT IN ('0','1','2','3') THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: kyc_tier must be 0..3' USING ERRCODE = 'P0071';
+  END IF;
+  IF p_extra_data IS NOT NULL AND jsonb_typeof(p_extra_data) <> 'object' THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: extra_data must be a JSON object' USING ERRCODE = 'P0071';
+  END IF;
+
+  UPDATE FM_CLIENT_KYC
+     SET kyc_tier         = COALESCE(p_kyc_tier, kyc_tier),
+         status           = COALESCE(p_status, status),
+         risk_level       = COALESCE(p_risk_level, risk_level),
+         ekyc_provider    = COALESCE(p_ekyc_provider, ekyc_provider),
+         ekyc_ref         = COALESCE(p_ekyc_ref, ekyc_ref),
+         face_match_score = COALESCE(p_face_match_score, face_match_score),
+         liveness_result  = COALESCE(p_liveness_result, liveness_result),
+         extra_data       = CASE WHEN p_extra_data IS NULL THEN extra_data
+                                 ELSE extra_data || p_extra_data END,
+         verified_at      = CASE WHEN p_kyc_tier IS NOT NULL AND p_kyc_tier >= '2'
+                                 THEN NOW() ELSE verified_at END,
+         verified_by      = CASE WHEN p_kyc_tier IS NOT NULL AND p_kyc_tier >= '2'
+                                 THEN COALESCE(p_actor, verified_by) ELSE verified_by END
+   WHERE client_no = p_client_no
+   RETURNING kyc_tier, status, risk_level, verified_at
+        INTO v_tier, v_status, v_risk, v_verified;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'KYC_NOT_FOUND: %', p_client_no USING ERRCODE = 'P0078';
+  END IF;
+
+  RETURN QUERY SELECT p_client_no, v_tier, v_status, v_risk, v_verified;
 END;
 $$;
 
@@ -888,21 +1046,23 @@ BEGIN
   VALUES (v_client_no, p_global_id, 'CCCD', p_client_name,
      p_client_type, 'VN', 'VN', 'A');
 
-  IF p_client_type = 'IND' THEN
-    INSERT INTO FM_CLIENT_INDVL (CLIENT_NO, SURNAME, GIVEN_NAME_1, SEX, RESIDENT_STATUS)
-    VALUES (v_client_no, split_part(p_client_name,' ',1), split_part(p_client_name,' ',-1), 'M','R');
-  END IF;
-
-  INSERT INTO FM_CLIENT_IDENTIFIERS (CLIENT_NO, GLOBAL_ID, GLOBAL_ID_TYPE, IS_CURRENT, NATIONALITY)
-  VALUES (v_client_no, p_global_id, 'CCCD', 1, 'VN');
-
-  INSERT INTO WLT_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS)
+  -- Centralized KYC (US-1.15): surname/given_name in extra_data; the CCCD number
+  -- (global_id) + sex are flat real columns (FM_CLIENT_IDENTIFIERS flattened in).
+  INSERT INTO FM_CLIENT_KYC (CLIENT_NO, PHONE_NO_ENC, PHONE_NO_HASH, EMAIL_ENC, KYC_TIER, STATUS,
+       EXTRA_DATA, GLOBAL_ID, GLOBAL_ID_TYPE, SEX)
   VALUES (
     v_client_no,
     pgp_sym_encrypt(p_phone, v_key, 'cipher-algo=aes256'),
     digest(p_phone, 'sha256'),
     CASE WHEN p_email IS NULL THEN NULL ELSE pgp_sym_encrypt(p_email, v_key, 'cipher-algo=aes256') END,
-    p_kyc_tier, 'A');
+    p_kyc_tier, 'A',
+    CASE WHEN p_client_type = 'IND'
+         THEN jsonb_build_object('surname', split_part(p_client_name,' ',1),
+                                 'given_name', split_part(p_client_name,' ',-1),
+                                 'resident_status', 'R')
+         ELSE '{}'::jsonb END,
+    p_global_id, 'CCCD',
+    CASE WHEN p_client_type = 'IND' THEN 'M' ELSE NULL END);
 
   RETURN v_client_no;
 END $$;
@@ -2067,7 +2227,7 @@ DECLARE
   v_def         WLT_TRAN_DEF%ROWTYPE;
   v_def_fee     WLT_TRAN_DEF%ROWTYPE;
   v_def_in      WLT_TRAN_DEF%ROWTYPE;
-  v_kyc_a       WLT_CLIENT_KYC%ROWTYPE;
+  v_kyc_a       FM_CLIENT_KYC%ROWTYPE;
   v_fee_gross   NUMERIC(18,2) := 0;
   v_vat_amt     NUMERIC(18,2) := 0;
   v_fee_net     NUMERIC(18,2) := 0;
@@ -2152,7 +2312,7 @@ BEGIN
 
   SELECT * INTO v_acct_a_type FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct_a.ACCT_TYPE;
   SELECT * INTO v_acct_b_type FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct_b.ACCT_TYPE;
-  SELECT * INTO v_kyc_a       FROM WLT_CLIENT_KYC WHERE CLIENT_NO = v_acct_a.CLIENT_NO;
+  SELECT * INTO v_kyc_a       FROM FM_CLIENT_KYC WHERE CLIENT_NO = v_acct_a.CLIENT_NO;
   IF v_kyc_a.KYC_TIER < '1' THEN
     RAISE EXCEPTION 'TIER_INSUFFICIENT' USING ERRCODE = 'P0023';
   END IF;
@@ -2526,7 +2686,7 @@ DECLARE
   v_acct        WLT_ACCT%ROWTYPE;
   v_acct_type   WLT_ACCT_TYPE%ROWTYPE;
   v_def         WLT_TRAN_DEF%ROWTYPE;
-  v_kyc         WLT_CLIENT_KYC%ROWTYPE;
+  v_kyc         FM_CLIENT_KYC%ROWTYPE;
   v_fee_gross   NUMERIC(18,2) := 0;
   v_vat_amt     NUMERIC(18,2) := 0;
   v_fee_net     NUMERIC(18,2) := 0;
@@ -2587,7 +2747,7 @@ BEGIN
   END IF;
 
   SELECT * INTO v_acct_type FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct.ACCT_TYPE;
-  SELECT * INTO v_kyc       FROM WLT_CLIENT_KYC WHERE CLIENT_NO = v_acct.CLIENT_NO;
+  SELECT * INTO v_kyc       FROM FM_CLIENT_KYC WHERE CLIENT_NO = v_acct.CLIENT_NO;
   IF v_kyc.KYC_TIER < '2' THEN
     RAISE EXCEPTION 'TIER_INSUFFICIENT: tier=%, required >= 2', v_kyc.KYC_TIER
       USING ERRCODE = 'P0023';
@@ -3100,14 +3260,17 @@ BEGIN
    WHERE client_no = p_client_no
    RETURNING status, updated_at INTO v_status, v_updated;
 
+  -- IND personal details live in FM_CLIENT_KYC.extra_data (US-1.15); merge the
+  -- provided keys (jsonb_strip_nulls drops the absent ones so existing values stay).
   IF v_type = 'IND'
      AND (p_surname IS NOT NULL OR p_given_name IS NOT NULL
           OR p_birth_date IS NOT NULL OR p_sex IS NOT NULL) THEN
-    UPDATE FM_CLIENT_INDVL
-       SET surname      = COALESCE(p_surname, surname),
-           given_name_1 = COALESCE(p_given_name, given_name_1),
-           birth_date   = COALESCE(p_birth_date, birth_date),
-           sex          = COALESCE(p_sex, sex)
+    UPDATE FM_CLIENT_KYC
+       SET extra_data = extra_data || jsonb_strip_nulls(jsonb_build_object(
+             'surname',    p_surname,
+             'given_name', p_given_name,
+             'birth_date', p_birth_date,
+             'sex',        p_sex))
      WHERE client_no = p_client_no;
   END IF;
 
@@ -3209,46 +3372,14 @@ CREATE TABLE public.fm_client_contact (
 
 
 --
--- Name: fm_client_identifiers; Type: TABLE; Schema: public; Owner: -
+-- fm_client_identifiers removed: the primary identity doc is flattened into real
+-- FM_CLIENT_KYC columns (global_id/global_id_type/date_issue/expire_date/place_issue).
 --
 
-CREATE TABLE public.fm_client_identifiers (
-    client_no character varying(48) NOT NULL,
-    global_id character varying(64) NOT NULL,
-    global_id_type character varying(20) NOT NULL,
-    dt_of_issuance date,
-    expiry_date date,
-    place_of_issuance character varying(120),
-    is_current smallint DEFAULT 1 NOT NULL,
-    nationality character varying(8),
-    channel character varying(20),
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL
-);
-
-
 --
--- Name: fm_client_indvl; Type: TABLE; Schema: public; Owner: -
+-- fm_client_indvl removed (US-1.15): individual personal details folded into
+-- FM_CLIENT_KYC.extra_data JSONB. See create_client / update_client / fn_create_client.
 --
-
-CREATE TABLE public.fm_client_indvl (
-    client_no character varying(48) NOT NULL,
-    surname character varying(80),
-    given_name_1 character varying(80),
-    birth_date date,
-    sex character varying(4),
-    resident_status character varying(4),
-    marital_status character varying(4),
-    occupation_code character varying(24),
-    channel character varying(20),
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL
-);
-
 
 --
 -- Name: fm_currency; Type: TABLE; Schema: public; Owner: -
@@ -3350,21 +3481,39 @@ CREATE SEQUENCE public.seq_tfr
 
 
 --
--- Name: wlt_client_kyc; Type: TABLE; Schema: public; Owner: -
+-- Name: fm_client_kyc; Type: TABLE; Schema: public; Owner: -
+--
+-- Centralized KYC for ALL client types (IND/CORP/MER) — US-9.16 rename
+-- (WLT_CLIENT_KYC -> FM_CLIENT_KYC, it is client master-data) + US-1.15:
+-- type-specific identity lives in extra_data JSONB (FM_CLIENT_INDVL folded in;
+-- surname/given_name/resident_status + ORG legal_rep/ubo/business_reg_no);
+-- the primary identity document + personal birth/sex are FLAT real columns
+-- (global_id/global_id_type/date_issue/expire_date/place_issue/birthdate/sex —
+-- flattened out of the old FM_CLIENT_IDENTIFIERS table);
+-- related_docs JSONB replaces the old scalar doc_url. Phone is nullable: a client
+-- can exist before the onboarding flow captures/verifies a phone (no OTP).
 --
 
-CREATE TABLE public.wlt_client_kyc (
+CREATE TABLE public.fm_client_kyc (
     kyc_id bigint NOT NULL,
     client_no character varying(48) NOT NULL,
-    phone_no_enc bytea NOT NULL,
-    phone_no_hash bytea NOT NULL,
+    phone_no_enc bytea,
+    phone_no_hash bytea,
     email_enc bytea,
     kyc_tier character varying(4) DEFAULT '1'::character varying NOT NULL,
     ekyc_provider character varying(40),
     ekyc_ref character varying(80),
     face_match_score numeric(5,3),
     liveness_result character varying(8),
-    doc_url character varying(400),
+    global_id character varying(64),
+    global_id_type character varying(20),
+    date_issue date,
+    expire_date date,
+    place_issue character varying(120),
+    birthdate date,
+    sex character varying(4),
+    extra_data jsonb DEFAULT '{}'::jsonb NOT NULL,
+    related_docs jsonb DEFAULT '[]'::jsonb NOT NULL,
     status character varying(4) DEFAULT 'A'::character varying NOT NULL,
     risk_level character varying(4) DEFAULT 'L'::character varying NOT NULL,
     verified_at timestamp with time zone,
@@ -3374,6 +3523,8 @@ CREATE TABLE public.wlt_client_kyc (
     channel character varying(20),
     created_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL,
     updated_by character varying(64) DEFAULT 'SYSTEM'::character varying NOT NULL,
+    CONSTRAINT chk_kyc_extra_obj CHECK ((jsonb_typeof(extra_data) = 'object'::text)),
+    CONSTRAINT chk_kyc_reldocs_arr CHECK ((jsonb_typeof(related_docs) = 'array'::text)),
     CONSTRAINT chk_kyc_st CHECK (((status)::text = ANY (ARRAY[('A'::character varying)::text, ('B'::character varying)::text, ('C'::character varying)::text, ('P'::character varying)::text]))),
     CONSTRAINT chk_kyc_tier CHECK (((kyc_tier)::text = ANY (ARRAY[('0'::character varying)::text, ('1'::character varying)::text, ('2'::character varying)::text, ('3'::character varying)::text])))
 );
@@ -3397,9 +3548,9 @@ CREATE VIEW public.v_client_masked AS
     c.client_grp,
     c.acct_exec,
     c.status,
-    i.birth_date,
-    i.sex,
-    i.resident_status,
+    k.birthdate AS birth_date,
+    k.sex,
+    (k.extra_data ->> 'resident_status') AS resident_status,
     k.kyc_tier,
     k.status AS kyc_status,
     k.risk_level,
@@ -3408,14 +3559,16 @@ CREATE VIEW public.v_client_masked AS
             ELSE ('09xxxxx'::text || "right"(encode(k.phone_no_hash, 'hex'::text), 3))
         END AS phone_masked,
     k.verified_at
-   FROM ((public.fm_client c
-     LEFT JOIN public.fm_client_indvl i ON (((i.client_no)::text = (c.client_no)::text)))
+   FROM (public.fm_client c
      LEFT JOIN LATERAL ( SELECT k2.kyc_tier,
             k2.status,
             k2.risk_level,
             k2.phone_no_hash,
+            k2.extra_data,
+            k2.birthdate,
+            k2.sex,
             k2.verified_at
-           FROM public.wlt_client_kyc k2
+           FROM public.fm_client_kyc k2
           WHERE ((k2.client_no)::text = (c.client_no)::text)
           ORDER BY k2.kyc_id DESC
          LIMIT 1) k ON (true));
@@ -3433,7 +3586,7 @@ CREATE VIEW public.v_kyc_masked AS
     status,
     risk_level,
     verified_at
-   FROM public.wlt_client_kyc;
+   FROM public.fm_client_kyc;
 
 
 --
@@ -3721,11 +3874,11 @@ ALTER TABLE public.wlt_client_audit_log ALTER COLUMN audit_id ADD GENERATED ALWA
 
 
 --
--- Name: wlt_client_kyc_kyc_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: fm_client_kyc_kyc_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-ALTER TABLE public.wlt_client_kyc ALTER COLUMN kyc_id ADD GENERATED ALWAYS AS IDENTITY (
-    SEQUENCE NAME public.wlt_client_kyc_kyc_id_seq
+ALTER TABLE public.fm_client_kyc ALTER COLUMN kyc_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.fm_client_kyc_kyc_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -4174,20 +4327,7 @@ ALTER TABLE ONLY public.fm_client_contact
     ADD CONSTRAINT fm_client_contact_pkey PRIMARY KEY (client_no, contact_type);
 
 
---
--- Name: fm_client_identifiers fm_client_identifiers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.fm_client_identifiers
-    ADD CONSTRAINT fm_client_identifiers_pkey PRIMARY KEY (client_no, global_id, global_id_type);
-
-
---
--- Name: fm_client_indvl fm_client_indvl_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.fm_client_indvl
-    ADD CONSTRAINT fm_client_indvl_pkey PRIMARY KEY (client_no);
 
 
 --
@@ -4351,11 +4491,11 @@ ALTER TABLE ONLY public.wlt_client_audit_log
 
 
 --
--- Name: wlt_client_kyc wlt_client_kyc_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: fm_client_kyc fm_client_kyc_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.wlt_client_kyc
-    ADD CONSTRAINT wlt_client_kyc_pkey PRIMARY KEY (kyc_id);
+ALTER TABLE ONLY public.fm_client_kyc
+    ADD CONSTRAINT fm_client_kyc_pkey PRIMARY KEY (kyc_id);
 
 
 --
@@ -4625,14 +4765,14 @@ CREATE INDEX idx_hist_tfr ON ONLY public.wlt_tran_hist USING btree (tran_interna
 -- Name: idx_kyc_client; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_kyc_client ON public.wlt_client_kyc USING btree (client_no);
+CREATE INDEX idx_kyc_client ON public.fm_client_kyc USING btree (client_no);
 
 
 --
 -- Name: idx_kyc_tier; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_kyc_tier ON public.wlt_client_kyc USING btree (kyc_tier) WHERE ((status)::text = 'A'::text);
+CREATE INDEX idx_kyc_tier ON public.fm_client_kyc USING btree (kyc_tier) WHERE ((status)::text = 'A'::text);
 
 
 --
@@ -4751,7 +4891,7 @@ CREATE UNIQUE INDEX uk_cb_one_default ON public.fm_client_banks USING btree (cli
 -- Name: uk_kyc_phone_hash; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX uk_kyc_phone_hash ON public.wlt_client_kyc USING btree (phone_no_hash);
+CREATE UNIQUE INDEX uk_kyc_phone_hash ON public.fm_client_kyc USING btree (phone_no_hash) WHERE (phone_no_hash IS NOT NULL);
 
 
 --
@@ -4773,20 +4913,6 @@ CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.fm_client_banks 
 --
 
 CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.fm_client_contact FOR EACH ROW EXECUTE FUNCTION public.fn_set_audit_columns();
-
-
---
--- Name: fm_client_identifiers trg_audit_cols; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.fm_client_identifiers FOR EACH ROW EXECUTE FUNCTION public.fn_set_audit_columns();
-
-
---
--- Name: fm_client_indvl trg_audit_cols; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.fm_client_indvl FOR EACH ROW EXECUTE FUNCTION public.fn_set_audit_columns();
 
 
 --
@@ -4853,10 +4979,10 @@ CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.wlt_client_audit
 
 
 --
--- Name: wlt_client_kyc trg_audit_cols; Type: TRIGGER; Schema: public; Owner: -
+-- Name: fm_client_kyc trg_audit_cols; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.wlt_client_kyc FOR EACH ROW EXECUTE FUNCTION public.fn_set_audit_columns();
+CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.fm_client_kyc FOR EACH ROW EXECUTE FUNCTION public.fn_set_audit_columns();
 
 
 --
@@ -4937,10 +5063,10 @@ CREATE TRIGGER trg_audit_fm_client_bk AFTER INSERT OR DELETE OR UPDATE ON public
 
 
 --
--- Name: wlt_client_kyc trg_audit_wlt_kyc; Type: TRIGGER; Schema: public; Owner: -
+-- Name: fm_client_kyc trg_audit_fm_kyc; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_audit_wlt_kyc AFTER INSERT OR DELETE OR UPDATE ON public.wlt_client_kyc FOR EACH ROW EXECUTE FUNCTION public.fn_audit_client_change();
+CREATE TRIGGER trg_audit_fm_kyc AFTER INSERT OR DELETE OR UPDATE ON public.fm_client_kyc FOR EACH ROW EXECUTE FUNCTION public.fn_audit_client_change();
 
 
 --
@@ -5101,26 +5227,10 @@ ALTER TABLE ONLY public.wlt_acct_group
 
 
 --
--- Name: fm_client_identifiers fk_idf_client; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: fm_client_kyc fk_kyc_client; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.fm_client_identifiers
-    ADD CONSTRAINT fk_idf_client FOREIGN KEY (client_no) REFERENCES public.fm_client(client_no);
-
-
---
--- Name: fm_client_indvl fk_indvl_client; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.fm_client_indvl
-    ADD CONSTRAINT fk_indvl_client FOREIGN KEY (client_no) REFERENCES public.fm_client(client_no);
-
-
---
--- Name: wlt_client_kyc fk_kyc_client; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.wlt_client_kyc
+ALTER TABLE ONLY public.fm_client_kyc
     ADD CONSTRAINT fk_kyc_client FOREIGN KEY (client_no) REFERENCES public.fm_client(client_no);
 
 
@@ -5215,6 +5325,20 @@ GRANT ALL ON FUNCTION public.add_restraint(p_acct_no character varying, p_type c
 --
 
 GRANT ALL ON FUNCTION public.create_client(p_client_name character varying, p_client_type character varying, p_global_id character varying, p_global_id_type character varying, p_country_loc character varying, p_country_citizen character varying, p_surname character varying, p_given_name character varying, p_birth_date date, p_sex character varying, p_actor character varying) TO wallet_app;
+
+
+--
+-- Name: FUNCTION onboard_client(...); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.onboard_client(p_client_name character varying, p_client_type character varying, p_phone character varying, p_global_id character varying, p_global_id_type character varying, p_email character varying, p_country_loc character varying, p_country_citizen character varying, p_acct_type character varying, p_ccy character varying, p_birth_date date, p_sex character varying, p_date_issue date, p_expire_date date, p_place_issue character varying, p_extra_data jsonb, p_actor character varying) TO wallet_app;
+
+
+--
+-- Name: FUNCTION update_kyc(...); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.update_kyc(p_client_no character varying, p_kyc_tier character varying, p_status character varying, p_risk_level character varying, p_ekyc_provider character varying, p_ekyc_ref character varying, p_face_match_score numeric, p_liveness_result character varying, p_extra_data jsonb, p_actor character varying) TO wallet_app;
 
 
 --
@@ -5465,48 +5589,6 @@ GRANT SELECT ON TABLE public.fm_client_contact TO wallet_pii_ro;
 
 
 --
--- Name: TABLE fm_client_identifiers; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT ON TABLE public.fm_client_identifiers TO wallet_pii_ro;
-
-
---
--- Name: TABLE fm_client_indvl; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT ON TABLE public.fm_client_indvl TO wallet_pii_ro;
-
-
---
--- Name: COLUMN fm_client_indvl.client_no; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT(client_no) ON TABLE public.fm_client_indvl TO wallet_app;
-
-
---
--- Name: COLUMN fm_client_indvl.birth_date; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT(birth_date) ON TABLE public.fm_client_indvl TO wallet_app;
-
-
---
--- Name: COLUMN fm_client_indvl.sex; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT(sex) ON TABLE public.fm_client_indvl TO wallet_app;
-
-
---
--- Name: COLUMN fm_client_indvl.resident_status; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT(resident_status) ON TABLE public.fm_client_indvl TO wallet_app;
-
-
---
 -- Name: TABLE fm_currency; Type: ACL; Schema: public; Owner: -
 --
 
@@ -5547,10 +5629,10 @@ GRANT SELECT,USAGE ON SEQUENCE public.seq_tfr TO wallet_app;
 
 
 --
--- Name: TABLE wlt_client_kyc; Type: ACL; Schema: public; Owner: -
+-- Name: TABLE fm_client_kyc; Type: ACL; Schema: public; Owner: -
 --
 
-GRANT SELECT ON TABLE public.wlt_client_kyc TO wallet_pii_ro;
+GRANT SELECT ON TABLE public.fm_client_kyc TO wallet_pii_ro;
 
 
 --

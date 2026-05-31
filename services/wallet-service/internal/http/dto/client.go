@@ -8,8 +8,8 @@ import (
 
 // CreateClientRequest — POST /v1/clients. client_type is one of IND (individual),
 // CORP (corporate) or MER (merchant) — validated by the SP (→ 422 INVALID_CLIENT_TYPE)
-// so both layers agree on the code. CORP and MER are organization-like and create
-// only the FM_CLIENT row; IND also creates FM_CLIENT_INDVL.
+// so both layers agree on the code. All types create FM_CLIENT + one FM_CLIENT_KYC
+// row; IND personal fields fold into FM_CLIENT_KYC.extra_data JSONB (US-1.15).
 type CreateClientRequest struct {
 	ClientName     string `json:"client_name"              binding:"required,max=200"`
 	ClientType     string `json:"client_type"              binding:"required"`
@@ -43,6 +43,79 @@ type ClientResponse struct {
 
 func ClientRespFrom(r *domain.ClientResult) ClientResponse {
 	return ClientResponse{ClientNo: r.ClientNo, Status: r.Status, Timestamp: r.Timestamp}
+}
+
+// OnboardRequest — POST /v1/onboard (US-1.1/1.7). OTP-free: one call creates the
+// client, its KYC row (phone captured) and the first zero-balance wallet.
+// extra_data carries type-specific identity — for CORP/MER it MUST include
+// business_reg_no + legal_rep (BR-09, enforced by the SP → 422 ORG_FIELDS_REQUIRED).
+type OnboardRequest struct {
+	ClientName     string         `json:"client_name"               binding:"required,max=200"`
+	ClientType     string         `json:"client_type"               binding:"required,oneof=IND CORP MER"`
+	Phone          string         `json:"phone"                     binding:"required"`
+	GlobalID       string         `json:"global_id,omitempty"       binding:"omitempty,max=64"`
+	GlobalIDType   string         `json:"global_id_type,omitempty"  binding:"omitempty,max=12"`
+	Email          string         `json:"email,omitempty"           binding:"omitempty,email,max=120"`
+	CountryLoc     string         `json:"country_loc,omitempty"     binding:"omitempty,max=8"`
+	CountryCitizen string         `json:"country_citizen,omitempty" binding:"omitempty,max=8"`
+	AcctType       string         `json:"acct_type,omitempty"       binding:"omitempty,oneof=CONSUMER MERCHANT"`
+	Ccy            string         `json:"ccy,omitempty"             binding:"omitempty,len=3"`
+	// Flat identity columns (FM_CLIENT_KYC). Dates are YYYY-MM-DD.
+	BirthDate  string         `json:"birthdate,omitempty"    binding:"omitempty,datetime=2006-01-02"`
+	Sex        string         `json:"sex,omitempty"          binding:"omitempty,oneof=M F O"`
+	DateIssue  string         `json:"date_issue,omitempty"   binding:"omitempty,datetime=2006-01-02"`
+	ExpireDate string         `json:"expire_date,omitempty"  binding:"omitempty,datetime=2006-01-02"`
+	PlaceIssue string         `json:"place_issue,omitempty"  binding:"omitempty,max=120"`
+	ExtraData  map[string]any `json:"extra_data,omitempty"`
+}
+
+// OnboardResponse — onboard_client result.
+type OnboardResponse struct {
+	ClientNo    string    `json:"client_no"`
+	AcctNo      string    `json:"acct_no"`
+	InternalKey int64     `json:"internal_key"`
+	KycTier     string    `json:"kyc_tier"`
+	KycStatus   string    `json:"kyc_status"`
+	Balance     string    `json:"balance"`
+	Ccy         string    `json:"ccy"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+func OnboardRespFrom(r *domain.OnboardResult) OnboardResponse {
+	return OnboardResponse{
+		ClientNo: r.ClientNo, AcctNo: r.AcctNo, InternalKey: r.InternalKey,
+		KycTier: r.KycTier, KycStatus: r.KycStatus, Balance: r.Balance,
+		Ccy: r.Ccy, CreatedAt: r.CreatedAt,
+	}
+}
+
+// KycUpdateRequest — POST /v1/clients/:client_no/kyc (US-1.2). All fields optional;
+// reaching tier >= 2 stamps verified_at. extra_data (if present) is merged.
+type KycUpdateRequest struct {
+	KycTier        string         `json:"kyc_tier,omitempty"        binding:"omitempty,oneof=0 1 2 3"`
+	Status         string         `json:"status,omitempty"          binding:"omitempty,oneof=A B C P"`
+	RiskLevel      string         `json:"risk_level,omitempty"      binding:"omitempty,max=4"`
+	EkycProvider   string         `json:"ekyc_provider,omitempty"   binding:"omitempty,max=40"`
+	EkycRef        string         `json:"ekyc_ref,omitempty"        binding:"omitempty,max=80"`
+	FaceMatchScore *float64       `json:"face_match_score,omitempty" binding:"omitempty,gte=0,lte=1"`
+	LivenessResult string         `json:"liveness_result,omitempty" binding:"omitempty,max=8"`
+	ExtraData      map[string]any `json:"extra_data,omitempty"`
+}
+
+// KycResponse — update_kyc result.
+type KycResponse struct {
+	ClientNo   string     `json:"client_no"`
+	KycTier    string     `json:"kyc_tier"`
+	Status     string     `json:"status"`
+	RiskLevel  string     `json:"risk_level"`
+	VerifiedAt *time.Time `json:"verified_at,omitempty"`
+}
+
+func KycRespFrom(r *domain.KycResult) KycResponse {
+	return KycResponse{
+		ClientNo: r.ClientNo, KycTier: r.KycTier, Status: r.Status,
+		RiskLevel: r.RiskLevel, VerifiedAt: r.VerifiedAt,
+	}
 }
 
 // LinkBankRequest — POST /v1/clients/:client_no/banks. acct_no is plaintext;

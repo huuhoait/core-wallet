@@ -70,13 +70,17 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			finance.POST("/restraints/:id/release", h.ReleaseRestraint)
 		}
 
-		// ── Clients: master CRUD (identity only — no KYC/onboarding flow) ──
+		// ── Onboarding (OTP-free, US-1.1/1.7): client + KYC + first wallet in 1 TX ──
+		v1.POST("/onboard", h.Onboard)
+
+		// ── Clients: master CRUD + KYC update (US-1.2) ──
 		clients := v1.Group("/clients")
 		{
 			clients.POST("", h.CreateClient)
-			clients.GET("/:client_no", h.GetClient)                                  // MASKED profile (PII masked)
+			clients.GET("/:client_no", h.GetClient)                                   // MASKED profile (PII masked)
 			clients.PATCH("/:client_no", h.UpdateClient)
-			clients.POST("/:client_no/banks", h.LinkClientBank)                      // link a bank account
+			clients.POST("/:client_no/kyc", h.UpdateKYC)                              // submit/update eKYC + raise tier
+			clients.POST("/:client_no/banks", h.LinkClientBank)                       // link a bank account
 			clients.PUT("/:client_no/banks/:link_id/default", h.SetDefaultClientBank) // set default bank
 		}
 

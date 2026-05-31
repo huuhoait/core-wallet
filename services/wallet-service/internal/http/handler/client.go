@@ -38,6 +38,67 @@ func (h *Wallet) CreateClient(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.ClientRespFrom(res))
 }
 
+// POST /v1/onboard — OTP-free step 1 (US-1.1/1.7): create client + KYC + first
+// zero-balance wallet in one TX. CORP/MER require extra_data.business_reg_no +
+// legal_rep (BR-09 → 422 ORG_FIELDS_REQUIRED).
+func (h *Wallet) Onboard(c *gin.Context) {
+	var req dto.OnboardRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		renderValidationError(c, err)
+		return
+	}
+	res, err := h.svc.OnboardClient(c.Request.Context(), domain.OnboardInput{
+		ClientName:     req.ClientName,
+		ClientType:     req.ClientType,
+		Phone:          req.Phone,
+		GlobalID:       req.GlobalID,
+		GlobalIDType:   req.GlobalIDType,
+		Email:          req.Email,
+		CountryLoc:     req.CountryLoc,
+		CountryCitizen: req.CountryCitizen,
+		AcctType:       req.AcctType,
+		Ccy:            req.Ccy,
+		BirthDate:      req.BirthDate,
+		Sex:            req.Sex,
+		DateIssue:      req.DateIssue,
+		ExpireDate:     req.ExpireDate,
+		PlaceIssue:     req.PlaceIssue,
+		ExtraData:      req.ExtraData,
+		Audit:          middleware.FromGin(c),
+	})
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, dto.OnboardRespFrom(res))
+}
+
+// POST /v1/clients/:client_no/kyc — update KYC info / eKYC + raise tier (US-1.2).
+func (h *Wallet) UpdateKYC(c *gin.Context) {
+	var req dto.KycUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		renderValidationError(c, err)
+		return
+	}
+	res, err := h.svc.UpdateKYC(c.Request.Context(), domain.KycUpdateInput{
+		ClientNo:       c.Param("client_no"),
+		KycTier:        req.KycTier,
+		Status:         req.Status,
+		RiskLevel:      req.RiskLevel,
+		EkycProvider:   req.EkycProvider,
+		EkycRef:        req.EkycRef,
+		FaceMatchScore: req.FaceMatchScore,
+		LivenessResult: req.LivenessResult,
+		ExtraData:      req.ExtraData,
+		Audit:          middleware.FromGin(c),
+	})
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.KycRespFrom(res))
+}
+
 // GET /v1/clients/:client_no — MASKED client profile (wallet_app via
 // v_client_masked). Name + CCCD/passport masked; unknown client_no → 404.
 func (h *Wallet) GetClient(c *gin.Context) {
