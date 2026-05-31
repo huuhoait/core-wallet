@@ -8,16 +8,17 @@
 //   3. Run k6:         k6 run -e BASE_URL=http://localhost:8099 loadtest/k6_wallet.js
 //      tune:           k6 run -e NWALLET=200 -e NGROUP=20 -e PEAK=500 loadtest/k6_wallet.js
 //
-// Mix (single- and multi-call flows):
-//   topup 18% / transfer 18% / withdraw 12% / balance-read 10% /
-//   merchant-withdraw 12% / transfer+reversal 12% / topup+reversal 10% /
-//   withdraw+reversal 8%
+// Mix — mirrors the pgbench DB/SP tier (deploy/loadtest/run.sh) 1:1 so the HTTP
+// and DB tiers are directly comparable (weights /100):
+//   topup 20 / transfer 18 / withdraw 12 / reversal 10 / withdraw_reversal 10 /
+//   merchant_topup 12 / merchant_withdraw 10 / restraint 8
 //
-// A "reversal" flow posts an original then immediately reverses it (2 HTTP calls,
-// like loadtest/reversal.sql) so the reversal always finds a SUCCESS original:
-//   - transfer reversal  → POST /transactions/reverse        (by reference)
-//   - topup reversal     → POST /transactions/topup/reverse  (by reference)
-//   - withdraw reversal  → POST /treasury/withdrawals/:ext/reverse
+// Multi-call flows post an original then act on it (2 HTTP calls, like the matching
+// *.sql), so the second call always finds a SUCCESS original:
+//   - reversal          → transfer + POST /finance/reverse                  (reversal.sql)
+//   - withdraw_reversal → withdraw + POST /treasury/withdrawals/:ext/reverse (withdraw_reversal.sql)
+//   - merchant_topup    → consumer→settlement transfer LT→LTGS              (merchant_topup.sql)
+//   - restraint         → POST /finance/restraints + /:id/release           (restraint.sql)
 //
 // VERSION_CONFLICT surfaces as HTTP 409 (the Go layer does not auto-retry today);
 // it is counted as `conflict`, not a hard failure — a real client should retry.
@@ -51,6 +52,9 @@ const outcome = new Counter('outcome');
 const KNOWN_OUTCOMES = [
   // success
   'SUCCESS', 'DUPLICATE', 'BALANCE_OK', 'REVERSED', 'REVERSED_DUP', 'SETTLEMENT_SWEEP_REQUIRED',
+  'RESTRAINT_ADDED', 'RESTRAINT_RELEASED',
+  // restraint validation (add_restraint, §4.9)
+  'RESTRAINT_TYPE_INVALID', 'RESTRAINT_PURPOSE_INVALID', 'RESTRAINT_AMT_EXCEEDS_BALANCE',
   // business / errors
   'VERSION_CONFLICT', 'VERSION_CONFLICT_FROM', 'VERSION_CONFLICT_TO',
   'INSUFFICIENT_FUNDS', 'TIER_LIMIT_EXCEEDED',
@@ -94,6 +98,7 @@ export const options = {
 const H = { headers: { 'Content-Type': 'application/json', 'X-Caller-Subject': 'k6', 'X-Channel': 'MOBILE' } };
 const acct = (i) => 'LT' + String(i).padStart(10, '0');
 const grp  = (i) => 'LTG' + String(i).padStart(2, '0');
+const stl  = (i) => 'LTGS' + String(i).padStart(4, '0');   // group SETTLEMENT acct (8 chars — passes the HTTP acct_no validator; merchant_topup target)
 const ref  = (p) => `${p}-${__VU}-${__ITER}-${Date.now()}`;
 
 // outcomeLabel derives a single business label from a response: the success
@@ -114,6 +119,13 @@ function outcomeLabel(res) {
 
 function recordOutcome(res) {
   outcome.add(1, { code: outcomeLabel(res) });
+}
+
+// recordOutcomeAs labels a 2xx response with an explicit name (e.g. RESTRAINT_ADDED)
+// and otherwise falls back to the error-envelope code — for flows whose success
+// body carries no `status`/`code` of its own.
+function recordOutcomeAs(res, okLabel) {
+  outcome.add(1, { code: (res.status >= 200 && res.status < 300) ? okLabel : outcomeLabel(res) });
 }
 
 // classify a write/read response: SUCCESS(201) | DUPLICATE(200) | balance(200) |
@@ -141,42 +153,53 @@ function reverseIfPosted(origRes, reverseFn) {
   check(rev, { 'reversed': (r) => r.status === 200 });
 }
 
+// addReleaseRestraint mirrors restraint.sql: place a DEBIT/PLEDGE hold on a random
+// consumer wallet, then release it (balance-neutral). 2 HTTP calls. The add returns
+// 201 with NO transaction_status (it is not a posting), so it skips classify().
+function addReleaseRestraint() {
+  const add = http.post(`${BASE}/v1/finance/restraints`, JSON.stringify({
+    acct_no: acct(randomIntBetween(1, NW)), restraint_type: 'DEBIT', restraint_purpose: 'PLEDGE',
+    pledged_amt: String(randomIntBetween(1000, 100000)), narrative: ref('K6RST'),
+  }), H);
+  recordOutcomeAs(add, 'RESTRAINT_ADDED');
+  check(add, { 'handled': (r) => [201, 409, 422, 423].includes(r.status) });
+  if (add.status !== 201) return;
+  let id = null; try { id = add.json().restraint_id; } catch (_) { id = null; }
+  if (!id) return;
+  const rel = http.post(`${BASE}/v1/finance/restraints/${id}/release`, JSON.stringify({
+    reason: 'k6 load-test release',
+  }), H);
+  recordOutcomeAs(rel, 'RESTRAINT_RELEASED');
+  check(rel, { 'released': (r) => r.status === 200 });
+}
+
+// 8-way mix, weights identical to the pgbench tier (deploy/loadtest/run.sh).
 export default function () {
   const r = Math.random() * 100;
 
-  if (r < 18) {
-    // topup
+  if (r < 20) {
+    // topup (20%)
     classify(http.post(`${BASE}/v1/finance/topup`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(10000, 1000000)), reference: ref('K6TU'),
     }), H));
 
-  } else if (r < 36) {
-    // transfer
+  } else if (r < 38) {
+    // transfer — TRFOUT, consumer → consumer (18%)
     const a = randomIntBetween(1, NW); const b = (a % NW) + 1;
     classify(http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
       from_acct_no: acct(a), to_acct_no: acct(b), amount: String(randomIntBetween(1000, 500000)),
       reference: ref('K6TR'), tran_type: 'TRFOUT',
     }), H));
 
-  } else if (r < 48) {
-    // withdraw
+  } else if (r < 50) {
+    // withdraw — fee + VAT (12%)
     classify(http.post(`${BASE}/v1/finance/withdraw`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(50000, 500000)),
       reference: ref('K6WD'), ext_payout_ref: ref('K6EXT'), beneficiary_bank: 'BIDV', beneficiary_acct: '9990000000',
     }), H));
 
-  } else if (r < 58) {
-    // balance read
-    classify(http.get(`${BASE}/v1/accounts/${acct(randomIntBetween(1, NW))}/balance`, H));
-
-  } else if (r < 70) {
-    // merchant (hot-shard) withdraw from a random merchant group's settlement
-    classify(http.post(`${BASE}/v1/finance/merchant-withdraw`, JSON.stringify({
-      group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(50000, 2000000)), reference: ref('K6MW'),
-    }), H));
-
-  } else if (r < 82) {
-    // transfer + reversal
+  } else if (r < 60) {
+    // reversal — transfer + reverse (10%)  [reversal.sql]
     const a = randomIntBetween(1, NW); const b = (a % NW) + 1;
     const reference = ref('K6RVT');
     const orig = http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
@@ -187,18 +210,8 @@ export default function () {
       reference, reason: 'k6 load-test reversal', initiator: 'OPS_MANUAL',
     }), H));
 
-  } else if (r < 92) {
-    // topup + reversal
-    const reference = ref('K6RVU');
-    const orig = http.post(`${BASE}/v1/finance/topup`, JSON.stringify({
-      acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(10000, 500000)), reference,
-    }), H);
-    reverseIfPosted(orig, () => http.post(`${BASE}/v1/finance/topup/reverse`, JSON.stringify({
-      reference, reason: 'k6 load-test topup reversal', initiator: 'OPS_MANUAL',
-    }), H));
-
-  } else {
-    // withdraw + reversal (treasury-failed roll-back)
+  } else if (r < 70) {
+    // withdraw_reversal — withdraw + treasury-failed roll-back (10%)  [withdraw_reversal.sql]
     const reference = ref('K6RVW'); const ext = ref('K6RVWEXT');
     const orig = http.post(`${BASE}/v1/finance/withdraw`, JSON.stringify({
       acct_no: acct(randomIntBetween(1, NW)), amount: String(randomIntBetween(50000, 300000)),
@@ -207,6 +220,23 @@ export default function () {
     reverseIfPosted(orig, () => http.post(`${BASE}/v1/treasury/withdrawals/${ext}/reverse`, JSON.stringify({
       fail_code: 'NAPAS_TIMEOUT', fail_reason: 'k6 load-test withdraw reversal', initiator: 'TREASURY_FAILED',
     }), H));
+
+  } else if (r < 82) {
+    // merchant_topup — a consumer pays a merchant: consumer → group SETTLEMENT (12%)  [merchant_topup.sql]
+    classify(http.post(`${BASE}/v1/finance/transfer`, JSON.stringify({
+      from_acct_no: acct(randomIntBetween(1, NW)), to_acct_no: stl(randomIntBetween(1, NG)),
+      amount: String(randomIntBetween(10000, 500000)), reference: ref('K6MTU'), tran_type: 'TRFOUT',
+    }), H));
+
+  } else if (r < 92) {
+    // merchant_withdraw — hot-shard sweep + settlement (10%)
+    classify(http.post(`${BASE}/v1/finance/merchant-withdraw`, JSON.stringify({
+      group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(50000, 2000000)), reference: ref('K6MW'),
+    }), H));
+
+  } else {
+    // restraint — add a DEBIT/PLEDGE hold then release it (8%)  [restraint.sql]
+    addReleaseRestraint();
   }
 }
 

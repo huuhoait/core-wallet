@@ -52,15 +52,15 @@ BEGIN
       VALUES(v_c, convert_to('09'||lpad(i::text,8,'0'),'UTF8'),
              digest('LTM09'||lpad(i::text,8,'0'),'sha256'),'3','A');
     INSERT INTO WLT_ACCT_GROUP(group_id,client_no,group_type,shard_count,settlement_acct_no,shard_threshold,shard_buffer,sweep_interval_sec,group_status)
-      VALUES(v_g,v_c,'MERCHANT',8,'LTGS'||lpad(i::text,2,'0'),50000000,0,60,'A');
+      VALUES(v_g,v_c,'MERCHANT',8,'LTGS'||lpad(i::text,4,'0'),50000000,0,60,'A');
     INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,acct_role,group_id)
-      VALUES('LTGS'||lpad(i::text,2,'0'), v_c,'MERCHANT','VND','A','SETTLEMENT',v_g);
+      VALUES('LTGS'||lpad(i::text,4,'0'), v_c,'MERCHANT','VND','A','SETTLEMENT',v_g);
     -- Fund SETTLEMENT via customer→merchant transfers: TRFOUT caps at 100M/tx and
     -- post_transfer has no monthly cap, so 5×100M = 500M per group (covers the k6
     -- merchant-withdraw draw of ≤2M at peak rate with headroom). Funder = consumer
     -- i (tier 2, funded 1e12 above). SHARDS are created at 0 and fill via sweep.
     FOR k IN 1..5 LOOP
-      PERFORM post_transfer('LT'||lpad(i::text,10,'0'), 'LTGS'||lpad(i::text,2,'0'),
+      PERFORM post_transfer('LT'||lpad(i::text,10,'0'), 'LTGS'||lpad(i::text,4,'0'),
                             100000000, 'LT-FUND-LTGS'||lpad(i::text,2,'0')||'-'||k,
                             'TRFOUT', '{}'::jsonb, 'LOADTEST', 'loadtest');
     END LOOP;

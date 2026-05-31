@@ -212,9 +212,12 @@ The pgbench tier drives an **8-way mix** (weights /100): `topup` 20 · `transfer
 10 · `withdraw_reversal` (reversal **with fee** refund — RVWD+RVFEE) 10 ·
 `merchant_topup` (consumer→settlement payment) 12 · `merchant_withdraw` 10 ·
 `restraint` (add+remove a DEBIT/PLEDGE hold) 8 — one `deploy/loadtest/<op>.sql` per
-scenario. `SETUP=1` seeds 10k consumer wallets + 20 merchant groups (`LT*`); merchant
-SETTLEMENT wallets are funded on-ledger via customer→merchant transfers and SHARDs
-fill via sweep (`post_topup` is STANDALONE-only), so every seeded balance reconciles.
+scenario. The **k6 HTTP tier** (`k6_wallet.js`) mirrors this same 8-way mix at the
+same weights, so the two tiers are directly comparable. `SETUP=1` seeds 10k consumer
+wallets + 20 merchant groups (`LT*`); merchant SETTLEMENT wallets (`LTGS0001`… — 8
+chars so they pass the HTTP `acct_no` validator) are funded on-ledger via
+customer→merchant transfers and SHARDs fill via sweep (`post_topup` is STANDALONE-only),
+so every seeded balance reconciles.
 
 > ⚠️ `teardown.sql` ships with its DELETE block commented out (dry-run by design —
 > it only prints before/after `LT*`/`PB*` row counts). To actually purge load-test
