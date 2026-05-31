@@ -16,7 +16,7 @@
 --     tran hist : wlt_tran_hist*        (* = partitioned)
 --     outbox    : wlt_outbox*
 --     ops/other : wlt_api_message, wlt_withdraw_track,
---                 wlt_client_audit_log*, wlt_sweep_log, wlt_nostro_bal
+--                 fm_client_audit_log*, wlt_sweep_log, wlt_nostro_bal
 --
 -- ⚠ DESTRUCTIVE & IRREVERSIBLE — for DEV / pre-prod reset only.
 --
@@ -81,7 +81,7 @@ TRUNCATE TABLE
     -- Withdrawal tracking
     wlt_withdraw_track,
     -- Client audit log (partitioned)
-    wlt_client_audit_log,
+    fm_client_audit_log,
     -- Sweep log
     wlt_sweep_log,
     -- Nostro reconciliation balances (operational state)

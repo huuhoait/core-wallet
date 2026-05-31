@@ -112,7 +112,7 @@ The DB is the source of truth for the ledger. It is defined by three pg_dump-gen
 - `db/seeds/` — demo / load-test fixtures (`wallet_testdata_10.sql`, the `wallet_seed.sql` bulk generator, `coa/` source); **not** part of the init export.
 - `db/tests/` — SQL assertion suites (accounting balance, merchant flow, reconciliation, reversal).
 
-Key tables: `WLT_ACCT`, `WLT_ACCT_BAL`, `WLT_TRAN_HIST`, `WLT_OUTBOX` (transactional outbox), `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`. Load-test data is prefixed `LT*`/`PB*` (clients `LTC*`/`LTGC*`, groups `LTG*`, refs `LT-*`/`PB-*`) so `deploy/loadtest/teardown.sql` can scope cleanup without touching baseline `C*` data.
+Key tables: `WLT_ACCT`, `WLT_ACCT_BAL`, `WLT_TRAN_HIST`, `WLT_OUTBOX` (transactional outbox), `WLT_WITHDRAW_TRACK`, `FM_CLIENT_AUDIT_LOG`. Load-test data is prefixed `LT*`/`PB*` (clients `LTC*`/`LTGC*`, groups `LTG*`, refs `LT-*`/`PB-*`) so `deploy/loadtest/teardown.sql` can scope cleanup without touching baseline `C*` data.
 
 ## Docs
 

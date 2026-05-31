@@ -8,7 +8,7 @@
 -- Layout (matches the design captured by the former hardcoded partitions):
 --   wlt_acct_bal           RANGE (tran_date)    → monthly
 --   wlt_outbox             RANGE (created_at)   → monthly
---   wlt_client_audit_log   RANGE (changed_at)   → monthly
+--   fm_client_audit_log   RANGE (changed_at)   → monthly
 --   wlt_tran_hist          RANGE (post_date)    → monthly, EACH month sub-
 --                          partitioned HASH (internal_key) modulus 32
 --   + a DEFAULT catch-all on each parent (out-of-range cliff guard)
@@ -41,7 +41,7 @@ BEGIN
       'CREATE TABLE IF NOT EXISTS public.wlt_outbox_%s PARTITION OF public.wlt_outbox FOR VALUES FROM (%L) TO (%L)',
       sfx, m, nm);
     EXECUTE format(
-      'CREATE TABLE IF NOT EXISTS public.wlt_client_audit_log_%s PARTITION OF public.wlt_client_audit_log FOR VALUES FROM (%L) TO (%L)',
+      'CREATE TABLE IF NOT EXISTS public.fm_client_audit_log_%s PARTITION OF public.fm_client_audit_log FOR VALUES FROM (%L) TO (%L)',
       sfx, m, nm);
 
     -- wlt_tran_hist month: itself HASH-subpartitioned by internal_key
@@ -64,7 +64,7 @@ END $$;
 -- partition over that range until the rows are moved.
 CREATE TABLE IF NOT EXISTS public.wlt_acct_bal_default         PARTITION OF public.wlt_acct_bal         DEFAULT;
 CREATE TABLE IF NOT EXISTS public.wlt_outbox_default           PARTITION OF public.wlt_outbox           DEFAULT;
-CREATE TABLE IF NOT EXISTS public.wlt_client_audit_log_default PARTITION OF public.wlt_client_audit_log DEFAULT;
+CREATE TABLE IF NOT EXISTS public.fm_client_audit_log_default PARTITION OF public.fm_client_audit_log DEFAULT;
 CREATE TABLE IF NOT EXISTS public.wlt_tran_hist_default        PARTITION OF public.wlt_tran_hist        DEFAULT;
 
 -- Initial window: 2026-05 .. 2026-10 inclusive (matches the prior baked schema).

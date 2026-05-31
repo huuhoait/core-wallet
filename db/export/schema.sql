@@ -977,11 +977,11 @@ BEGIN
   v_actor := COALESCE(current_setting('audit.actor', TRUE), session_user);
   v_src   := COALESCE(current_setting('audit.source', TRUE), 'SP_BACKFILL');
 
+  -- Policy: client-master auditing records CHANGES (UPDATE/DELETE), not creation.
+  -- INSERTs are never written to the audit log. The triggers fire on UPDATE/DELETE
+  -- only; this guard keeps the policy intact even if a trigger is (re)wired with INSERT.
   IF TG_OP = 'INSERT' THEN
-    v_old := NULL;
-    v_new := to_jsonb(NEW);
-    v_diff := ARRAY(SELECT jsonb_object_keys(v_new));
-    v_client_no := NEW.CLIENT_NO;
+    RETURN NEW;
   ELSIF TG_OP = 'UPDATE' THEN
     v_old := to_jsonb(OLD);
     v_new := to_jsonb(NEW);
@@ -1002,7 +1002,7 @@ BEGIN
 
   v_pk := jsonb_build_object('table', TG_TABLE_NAME, 'client_no', v_client_no);
 
-  INSERT INTO WLT_CLIENT_AUDIT_LOG (
+  INSERT INTO FM_CLIENT_AUDIT_LOG (
     CLIENT_NO, TABLE_NAME, ROW_PK, OPERATION,
     CHANGED_BY, CHANGE_SOURCE, CHANGE_REASON,
     OLD_VALUES, NEW_VALUES, CHANGED_FIELDS,
@@ -3824,10 +3824,10 @@ ALTER TABLE public.wlt_api_message ALTER COLUMN seq_no ADD GENERATED ALWAYS AS I
 
 
 --
--- Name: wlt_client_audit_log; Type: TABLE; Schema: public; Owner: -
+-- Name: fm_client_audit_log; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.wlt_client_audit_log (
+CREATE TABLE public.fm_client_audit_log (
     audit_id bigint NOT NULL,
     client_no character varying(48) NOT NULL,
     table_name character varying(40) NOT NULL,
@@ -3855,16 +3855,16 @@ CREATE TABLE public.wlt_client_audit_log (
     CONSTRAINT chk_audit_src CHECK (((change_source)::text = ANY (ARRAY[('OPS_UI'::character varying)::text, ('API'::character varying)::text, ('EKYC'::character varying)::text, ('SYS_BATCH'::character varying)::text, ('COMPLIANCE'::character varying)::text, ('SP_BACKFILL'::character varying)::text])))
 )
 PARTITION BY RANGE (changed_at);
-ALTER TABLE ONLY public.wlt_client_audit_log ALTER COLUMN old_values SET COMPRESSION lz4;
-ALTER TABLE ONLY public.wlt_client_audit_log ALTER COLUMN new_values SET COMPRESSION lz4;
+ALTER TABLE ONLY public.fm_client_audit_log ALTER COLUMN old_values SET COMPRESSION lz4;
+ALTER TABLE ONLY public.fm_client_audit_log ALTER COLUMN new_values SET COMPRESSION lz4;
 
 
 --
--- Name: wlt_client_audit_log_audit_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: fm_client_audit_log_audit_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-ALTER TABLE public.wlt_client_audit_log ALTER COLUMN audit_id ADD GENERATED ALWAYS AS IDENTITY (
-    SEQUENCE NAME public.wlt_client_audit_log_audit_id_seq
+ALTER TABLE public.fm_client_audit_log ALTER COLUMN audit_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.fm_client_audit_log_audit_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -4483,11 +4483,11 @@ ALTER TABLE ONLY public.wlt_api_message
 
 
 --
--- Name: wlt_client_audit_log wlt_client_audit_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: fm_client_audit_log fm_client_audit_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.wlt_client_audit_log
-    ADD CONSTRAINT wlt_client_audit_log_pkey PRIMARY KEY (audit_id, changed_at);
+ALTER TABLE ONLY public.fm_client_audit_log
+    ADD CONSTRAINT fm_client_audit_log_pkey PRIMARY KEY (audit_id, changed_at);
 
 
 --
@@ -4632,28 +4632,28 @@ CREATE INDEX idx_api_subj ON public.wlt_api_message USING btree (object_subject,
 -- Name: idx_caudit_changed_fields; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_caudit_changed_fields ON ONLY public.wlt_client_audit_log USING gin (changed_fields);
+CREATE INDEX idx_caudit_changed_fields ON ONLY public.fm_client_audit_log USING gin (changed_fields);
 
 
 --
 -- Name: idx_caudit_client_time; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_caudit_client_time ON ONLY public.wlt_client_audit_log USING btree (client_no, changed_at DESC);
+CREATE INDEX idx_caudit_client_time ON ONLY public.fm_client_audit_log USING btree (client_no, changed_at DESC);
 
 
 --
 -- Name: idx_caudit_request; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_caudit_request ON ONLY public.wlt_client_audit_log USING btree (request_id) WHERE (request_id IS NOT NULL);
+CREATE INDEX idx_caudit_request ON ONLY public.fm_client_audit_log USING btree (request_id) WHERE (request_id IS NOT NULL);
 
 
 --
 -- Name: idx_caudit_table_time; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_caudit_table_time ON ONLY public.wlt_client_audit_log USING btree (table_name, changed_at DESC);
+CREATE INDEX idx_caudit_table_time ON ONLY public.fm_client_audit_log USING btree (table_name, changed_at DESC);
 
 
 --
@@ -4972,10 +4972,10 @@ CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.wlt_api_message 
 
 
 --
--- Name: wlt_client_audit_log trg_audit_cols; Type: TRIGGER; Schema: public; Owner: -
+-- Name: fm_client_audit_log trg_audit_cols; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.wlt_client_audit_log FOR EACH ROW EXECUTE FUNCTION public.fn_set_audit_columns();
+CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.fm_client_audit_log FOR EACH ROW EXECUTE FUNCTION public.fn_set_audit_columns();
 
 
 --
@@ -5059,14 +5059,14 @@ CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.wlt_withdraw_tra
 -- Name: fm_client_banks trg_audit_fm_client_bk; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_audit_fm_client_bk AFTER INSERT OR DELETE OR UPDATE ON public.fm_client_banks FOR EACH ROW EXECUTE FUNCTION public.fn_audit_client_change();
+CREATE TRIGGER trg_audit_fm_client_bk AFTER UPDATE OR DELETE ON public.fm_client_banks FOR EACH ROW EXECUTE FUNCTION public.fn_audit_client_change();
 
 
 --
 -- Name: fm_client_kyc trg_audit_fm_kyc; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_audit_fm_kyc AFTER INSERT OR DELETE OR UPDATE ON public.fm_client_kyc FOR EACH ROW EXECUTE FUNCTION public.fn_audit_client_change();
+CREATE TRIGGER trg_audit_fm_kyc AFTER UPDATE OR DELETE ON public.fm_client_kyc FOR EACH ROW EXECUTE FUNCTION public.fn_audit_client_change();
 
 
 --
@@ -5721,10 +5721,10 @@ GRANT SELECT ON TABLE public.wlt_api_message TO wallet_pii_ro;
 
 
 --
--- Name: TABLE wlt_client_audit_log; Type: ACL; Schema: public; Owner: -
+-- Name: TABLE fm_client_audit_log; Type: ACL; Schema: public; Owner: -
 --
 
-GRANT SELECT ON TABLE public.wlt_client_audit_log TO wallet_pii_ro;
+GRANT SELECT ON TABLE public.fm_client_audit_log TO wallet_pii_ro;
 
 
 --
