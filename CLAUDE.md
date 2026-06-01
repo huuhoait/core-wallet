@@ -118,7 +118,7 @@ PG `lock_timeout` 1.5s → PG `statement_timeout` 2.5s → pgx → HTTP request 
 The DB is the source of truth for the ledger. It is defined by three pg_dump-generated files in `db/export/`, loaded in order by docker-init (regenerate commands in `db/export/README.md`):
 
 - `db/export/schema.sql` — all DDL: tables (incl. the 4 partitioned **parents**, no child partitions), sequences, indexes, constraints, the PL/pgSQL posting functions + procedures, and triggers (incl. the balanced-posting constraint trigger). Posting uses a **deferred-locking** pattern: Phase 1 validates with no lock, Phase 2 does the atomic balance UPDATE.
-- `db/export/partitions.sql` — `fn_ensure_wallet_partitions(from, to)` creates the monthly partitions (`wlt_tran_hist` also HASH-subpartitioned, modulus 32) + a DEFAULT per parent. Idempotent; re-run to roll partitions forward.
+- `db/export/partitions.sql` — `fn_ensure_wallet_partitions(from, to)` creates the monthly partitions (`wlt_tran_hist` also HASH-subpartitioned, modulus 8) + a DEFAULT per parent. Idempotent; re-run to roll partitions forward.
 - `db/export/seed.sql` — reference/master data only (GL master `fm_gl_mast`, COA map `wlt_gl_map`, tran types `wlt_tran_def`, currency, account types).
 - `db/seeds/` — demo / load-test fixtures (`wallet_testdata_10.sql`, the `wallet_seed.sql` bulk generator, `coa/` source); **not** part of the init export.
 - `db/tests/` — SQL assertion suites (accounting balance, merchant flow, reconciliation, reversal).

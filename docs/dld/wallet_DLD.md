@@ -719,7 +719,7 @@ CREATE TABLE WLT_TRAN_HIST (
   CONSTRAINT pk_hist PRIMARY KEY (INTERNAL_KEY, SEQ_NO, POST_DATE)  -- POST_DATE must be part of the PK because it is the partition key
 ) PARTITION BY RANGE (POST_DATE);
 
--- Level 1: range by month — each month is further sub-partitioned by HASH(INTERNAL_KEY) × 32
+-- Level 1: range by month — each month is further sub-partitioned by HASH(INTERNAL_KEY) × 8
 CREATE TABLE wlt_tran_hist_2026_01 PARTITION OF WLT_TRAN_HIST
   FOR VALUES FROM ('2026-01-01') TO ('2026-02-01')
   PARTITION BY HASH (INTERNAL_KEY);
