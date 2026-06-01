@@ -4631,7 +4631,16 @@ CREATE INDEX idx_api_date ON public.wlt_api_message USING btree (object_date);
 -- Name: idx_api_subj; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_api_subj ON public.wlt_api_message USING btree (object_subject, process_status);
+-- (object_subject) only — process_status deliberately EXCLUDED. Every posting SP
+-- INSERTs this row PENDING then UPDATEs it to SUCCESS in the SAME transaction; if
+-- process_status were indexed, that UPDATE is non-HOT (must maintain the index) →
+-- index bloat + extra WAL on the hottest table. Dropping it lets the UPDATE be a
+-- HOT update (cleaned in-page by HOT-prune). No hot query filters by process_status
+-- (the idempotency lookup uses the object_ref_id unique index); only a CHECK uses it.
+CREATE INDEX idx_api_subj ON public.wlt_api_message USING btree (object_subject);
+-- fillfactor 90 leaves in-page room so the immediate PENDING→SUCCESS UPDATE finds
+-- free space on the same page and stays HOT instead of migrating to a new page.
+ALTER TABLE public.wlt_api_message SET (fillfactor = 90);
 
 
 --
