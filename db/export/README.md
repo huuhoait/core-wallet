@@ -5,7 +5,7 @@ The wallet database is defined by **two generated files**, restored in order:
 | # | File | Contents |
 |---|------|----------|
 | 1 | `schema.sql` | All DDL — tables (incl. the 4 partitioned **parents**, no child partitions), sequences, indexes, constraints, functions, procedures, triggers (incl. the balanced-posting `CONSTRAINT TRIGGER`), views, `pgcrypto`/`uuid-ossp` extensions, and GRANTs. **No data, no partitions.** |
-| 2 | `partitions.sql` | Monthly partitions for the 4 parents (`wlt_tran_hist` also HASH-subpartitioned, modulus 32) + a DEFAULT partition per parent. `fn_ensure_wallet_partitions(from, to)` is idempotent and re-runnable to roll partitions forward. |
+| 2 | `partitions.sql` | Monthly partitions for the 4 parents (`wlt_tran_hist` also HASH-subpartitioned, modulus 8) + a DEFAULT partition per parent. `fn_ensure_wallet_partitions(from, to)` is idempotent and re-runnable to roll partitions forward. |
 | 3 | `seed.sql` | Reference / master data only (data-only): `fm_gl_mast` (GL master), `wlt_gl_map` (COA map), `wlt_tran_def` (tran types), `fm_currency`, `wlt_acct_type`. |
 
 `schema.sql` GRANTs to roles `wallet_app`, `wallet_pii_ro`, `wallet_eod`, so those

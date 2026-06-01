@@ -10,7 +10,7 @@
 --   wlt_outbox             RANGE (created_at)   → monthly
 --   fm_client_audit_log   RANGE (changed_at)   → monthly
 --   wlt_tran_hist          RANGE (post_date)    → monthly, EACH month sub-
---                          partitioned HASH (internal_key) modulus 32
+--                          partitioned HASH (internal_key) modulus 8
 --   + a DEFAULT catch-all on each parent (out-of-range cliff guard)
 --
 -- fn_ensure_wallet_partitions(from, to) is idempotent (CREATE … IF NOT EXISTS) and
@@ -23,7 +23,11 @@ CREATE OR REPLACE FUNCTION fn_ensure_wallet_partitions(p_from date, p_to date)
 RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE
-  c_hash_modulus constant int := 32;   -- hash sub-partitions per wlt_tran_hist month
+  c_hash_modulus constant int := 8;    -- hash sub-partitions per wlt_tran_hist month
+                                        -- (was 32: cut to 8 to reduce the partition
+                                        -- count → less plan/catalog overhead per posting
+                                        -- and smaller Append fan-out on any query that
+                                        -- can't prune by internal_key)
   m  date := date_trunc('month', p_from)::date;
   nm date;
   sfx text;
