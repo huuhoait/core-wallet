@@ -158,8 +158,8 @@ services:
       DB_MIN_CONNS: ${DB_MIN_CONNS:-5}
       OTEL_ENABLED: "false"
     ports:
-      # Host :8099 → container :8080. 8099 is the k6 BASE_URL default (k6_wallet.js).
-      - "${WALLET_SERVICE_PORT:-8099}:8080"
+      # Host :8019 → container :8080. 8019 is the k6 BASE_URL default (k6_wallet.js).
+      - "${WALLET_SERVICE_PORT:-8019}:8080"
     # The image's HEALTHCHECK runs `wallet-service -healthz`, a flag main() does NOT
     # implement — it would boot a 2nd server, fail to bind :8080 and report unhealthy.
     # Disable it (distroless has no shell/curl for an HTTP CMD-SHELL probe) until a

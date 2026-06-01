@@ -289,9 +289,14 @@ export default function () {
     }));
 
   } else if (r < 82) {
-    // merchant_withdraw — hot-shard sweep + settlement (10%)
+    // merchant_withdraw — hot-shard sweep + settlement (10%). Amount range MUST
+    // match merchant_topup (10k..500k) above: both run at 10% weight against the
+    // same settlement, so equal ranges keep the settlement flow-balanced (it only
+    // bleeds the withdraw fee). A wider withdraw range (the old 50k..2M, avg ~1M
+    // vs topup's ~255k) drained the 500M seed in ~7 min, then returned
+    // INSUFFICIENT_FUNDS for the rest of a 30-min peak run.
     classify(post('merchant_withdraw', `${BASE}/v1/finance/merchant-withdraw`, {
-      group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(50000, 2000000)), reference: ref('K6MW'),
+      group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(10000, 500000)), reference: ref('K6MW'),
     }));
 
   } else if (r < 88) {

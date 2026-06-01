@@ -4,9 +4,10 @@
 -- PURE SQL (không dùng lệnh psql \set/\gset) → chạy được trên psql, DBeaver,
 -- pgAdmin, bất kỳ JDBC client nào. Chỉ SELECT, không sửa dữ liệu.
 --
--- Phạm vi sổ cái = THÁNG HIỆN TẠI (prune partition wlt_tran_hist để tránh lock).
--- Muốn audit nhiều/khác tháng: thay  date_trunc('month', CURRENT_DATE)::date
--- bằng literal, vd  DATE '2026-01-01'  (3 chỗ: check D, E, F, G).
+-- D + G đối chiếu actual_bal (số dư LUỸ KẾ) nên quét TOÀN BỘ lịch sử wlt_tran_hist —
+-- không thể giới hạn 1 tháng, nếu không mỗi đầu tháng (partition mới rỗng) sẽ báo
+-- lệch giả. E/F (row-math) + L/M (flow) vẫn giới hạn THÁNG HIỆN TẠI cho nhẹ; muốn
+-- tháng khác: sửa literal  date_trunc('month', CURRENT_DATE)::date  (3 chỗ: E/F, L/M).
 --
 -- Invariant: A trial balance · B double-entry/giao dịch · C bản chất Nợ-Có GL
 --   D actual_bal=Σsổ cái · E running-balance math · F chain continuity
@@ -18,13 +19,15 @@
 SET statement_timeout = 0;
 
 WITH
--- sổ cái tổng hợp 1 lần/ví (dùng cho D + G): Σ(CR-DR) và bút toán mới nhất
+-- sổ cái tổng hợp 1 lần/ví cho D + G: Σ(CR-DR) và bút toán mới nhất.
+-- CUMULATIVE — quét TOÀN BỘ lịch sử (KHÔNG lọc tháng): actual_bal là số dư luỹ kế,
+-- phải đối chiếu với Σ toàn bộ bút toán; nếu chỉ lấy tháng hiện tại thì mỗi đầu
+-- tháng (partition tháng mới còn rỗng) D sẽ báo lệch GIẢ cho mọi ví có số dư cũ.
 ledger AS (
   SELECT internal_key,
          sum(CASE cr_dr_maint_ind WHEN 'CR' THEN tran_amt ELSE -tran_amt END) AS sum_signed,
          (array_agg(actual_bal_amt ORDER BY post_date DESC, seq_no DESC))[1]  AS last_act
   FROM wlt_tran_hist
-  WHERE post_date >= date_trunc('month', CURRENT_DATE)::date
   GROUP BY internal_key
 ),
 -- quét sổ cái 1 lần cho E + F (per-row math + chain)

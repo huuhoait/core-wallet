@@ -60,9 +60,12 @@ BEGIN
     INSERT INTO WLT_ACCT(acct_no,client_no,acct_type,ccy,acct_status,acct_role,group_id)
       VALUES('LTGS'||lpad(i::text,4,'0'), v_c,'MERCHANT','VND','A','SETTLEMENT',v_g);
     -- Fund SETTLEMENT via customer→merchant transfers: TRFOUT caps at 100M/tx and
-    -- post_transfer has no monthly cap, so 5×100M = 500M per group (covers the k6
-    -- merchant-withdraw draw of ≤2M at peak rate with headroom). Funder = consumer
-    -- i (tier 2, funded 1e12 above). SHARDS are created at 0 and fill via sweep.
+    -- post_transfer has no monthly cap, so 5×100M = 500M per group. The k6/pgbench
+    -- mix is flow-balanced: merchant_topup (CR) and merchant_withdraw (DR) run at
+    -- equal 10% weights over the SAME amount range (10k..500k, avg ~255k), so per
+    -- group the settlement only bleeds the merchant-withdraw fee — 500M lasts a
+    -- full 30-min peak run with wide headroom. Funder = consumer i (tier 2, funded
+    -- 1e12 above). SHARDS are created at 0 and fill via sweep.
     FOR k IN 1..5 LOOP
       PERFORM post_transfer('LT'||lpad(i::text,10,'0'), 'LTGS'||lpad(i::text,4,'0'),
                             100000000, 'LT-FUND-LTGS'||lpad(i::text,2,'0')||'-'||k,
