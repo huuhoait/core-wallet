@@ -1,13 +1,14 @@
 -- =============================================================================
 -- seed.sql — reference / master data (data-only, --disable-triggers)
 -- GL master (fm_gl_mast), COA map (wlt_gl_map), tran types (wlt_tran_def),
--- currency (fm_currency), account types (wlt_acct_type). Restore AFTER schema.sql.
+-- currency (fm_currency), account types (wlt_acct_type), GL cutoff config
+-- (wlt_gl_config — singleton accounting-cutoff time). Restore AFTER schema.sql.
 -- =============================================================================
 --
 -- PostgreSQL database dump
 --
 
-\restrict PJoagrWLTmBkBwHK5cj4fwWn2WI9xTrvsXqKvxpoRUOsMmlv3F1X1znZZbbYtXj
+\restrict 0DSpqJTLC924ezZKjN0BbiNgOltWNjiT7nzMtMaoGbZsSmnr097GGzZSAcJZ68t
 
 -- Dumped from database version 17.10
 -- Dumped by pg_dump version 17.10
@@ -128,6 +129,19 @@ MERCHANT	Merchant wallet	201.02.001	WLT-MERCH	500000000.00	5000000000.00	N	A	SYS
 ALTER TABLE public.wlt_acct_type ENABLE TRIGGER ALL;
 
 --
+-- Data for Name: wlt_gl_config; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.wlt_gl_config DISABLE TRIGGER ALL;
+
+COPY public.wlt_gl_config (singleton, cutoff_time, updated_at) FROM stdin;
+t	18:00:00	2026-06-02 21:00:50.422645+07
+\.
+
+
+ALTER TABLE public.wlt_gl_config ENABLE TRIGGER ALL;
+
+--
 -- Data for Name: wlt_gl_map; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -214,5 +228,5 @@ ALTER TABLE public.wlt_tran_def ENABLE TRIGGER ALL;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict PJoagrWLTmBkBwHK5cj4fwWn2WI9xTrvsXqKvxpoRUOsMmlv3F1X1znZZbbYtXj
+\unrestrict 0DSpqJTLC924ezZKjN0BbiNgOltWNjiT7nzMtMaoGbZsSmnr097GGzZSAcJZ68t
 

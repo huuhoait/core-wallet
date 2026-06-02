@@ -1,20 +1,19 @@
-// Package eod runs the end-of-day close (run_eod) on a daily schedule from
-// inside the service.
+// Package eod runs the daily end-of-day procedures from inside the service. The
+// modern-core model splits them into TWO fixed-daily-time jobs (the caller wires
+// one Scheduler each, sharing a dedicated pool):
 //
-// run_eod COMMITs between chunks and sets a session GUC, so it MUST run on a
-// DIRECT primary connection (NOT PgBouncer transaction-mode, which can hand the
-// connection to another client between commits) and as the wallet_eod role —
-// the only role permitted to write the tamper-evident trial balance (migration
-// 2026-05-30_ledger_integrity_hardening). The caller wires both via a dedicated
-// pool built from EOD_DSN with statement_timeout disabled.
+//   - CUSTOMER EOD — run_eod(prior calendar day), fired in the overnight trough
+//     (default 00:30): the snapshot / prev-day-roll / restraint-expiry tasks for
+//     the calendar day that just ended.
+//   - GL CLOSE — run_gl_close(today), fired at the GL accounting cutoff (default
+//     18:00): seals TODAY's accounting day with no ledger downtime, because
+//     post-cutoff GL entries carry the NEXT accounting date (fn_accounting_date).
 //
-// This is a fixed-daily-time scheduler (one fire per local wall-clock day), not
-// a general cron — adequate for a once-a-day close. It fires shortly AFTER the
-// local midnight roll (default 00:30) and closes the PRIOR business day — the one
-// that just ended. Closing yesterday (strictly < the server's CURRENT_DATE) is
-// required by the period write-freeze: a date can only be sealed once no posting
-// can still legitimately target it (live postings use POST_DATE = CURRENT_DATE).
-// This matches the pg_cron schedule in the ledger-integrity migration.
+// The procedures COMMIT between chunks and set a session GUC, so they MUST run on
+// a DIRECT primary connection (NOT PgBouncer transaction-mode) as the wallet_eod
+// role — the only role permitted to write the tamper-evident trial balance
+// (migration 2026-05-30_ledger_integrity_hardening). The caller builds that pool
+// from EOD_DSN with statement_timeout disabled.
 package eod
 
 import (
@@ -28,18 +27,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Scheduler fires run_eod once per day at a fixed local time.
+// Scheduler fires one stored procedure once per day at a fixed local time. The
+// service runs two: the CUSTOMER EOD (run_eod, prior calendar day, overnight)
+// and the GL CLOSE (run_gl_close, current day, at the GL accounting cutoff e.g.
+// 18:00). proc is the procedure name; dateFn maps the fire instant → the DATE
+// literal to pass it.
 type Scheduler struct {
 	pool       *pgxpool.Pool
 	log        *slog.Logger
 	loc        *time.Location
 	h, m, s    int
 	runTimeout time.Duration
+	label      string                     // log tag, e.g. "customer-eod" / "gl-close"
+	proc       string                     // procedure name, e.g. "run_eod" / "run_gl_close"
+	dateFn     func(now time.Time) string // target business/accounting DATE at fire time
 }
 
-// New builds a Scheduler. runAt is "HH:MM:SS" (24h) in tz (an IANA name, e.g.
-// "Asia/Ho_Chi_Minh"). runTimeout caps a single close.
-func New(pool *pgxpool.Pool, runAt, tz string, runTimeout time.Duration, log *slog.Logger) (*Scheduler, error) {
+// New builds a Scheduler that CALLs proc(DATE) once per day. runAt is "HH:MM:SS"
+// (24h) in tz (an IANA name, e.g. "Asia/Ho_Chi_Minh"); dateFn derives the date
+// argument from the fire instant; runTimeout caps a single run.
+func New(pool *pgxpool.Pool, label, proc string, dateFn func(time.Time) string, runAt, tz string, runTimeout time.Duration, log *slog.Logger) (*Scheduler, error) {
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
 		return nil, fmt.Errorf("eod: load timezone %q: %w", tz, err)
@@ -51,13 +58,28 @@ func New(pool *pgxpool.Pool, runAt, tz string, runTimeout time.Duration, log *sl
 	if runTimeout <= 0 {
 		return nil, fmt.Errorf("eod: run timeout must be > 0")
 	}
-	return &Scheduler{pool: pool, log: log, loc: loc, h: h, m: m, s: sec, runTimeout: runTimeout}, nil
+	if proc == "" || dateFn == nil {
+		return nil, fmt.Errorf("eod: proc and dateFn are required")
+	}
+	if label == "" {
+		label = proc
+	}
+	return &Scheduler{pool: pool, log: log, loc: loc, h: h, m: m, s: sec,
+		runTimeout: runTimeout, label: label, proc: proc, dateFn: dateFn}, nil
 }
+
+// PriorDay → the prior local calendar day (customer EOD closes the day that just
+// ended). CurrentDay → today's local date (GL close seals the accounting day that
+// just became past at the cutoff — post-cutoff postings carry the next day).
+func PriorDay(now time.Time) string   { return now.AddDate(0, 0, -1).Format("2006-01-02") }
+func CurrentDay(now time.Time) string { return now.Format("2006-01-02") }
 
 // Start blocks until ctx is cancelled, firing the close once per day at the
 // configured local time. Returns nil on graceful shutdown.
 func (s *Scheduler) Start(ctx context.Context) error {
 	s.log.Info("eod scheduler started",
+		slog.String("job", s.label),
+		slog.String("proc", s.proc),
 		slog.String("run_at", fmt.Sprintf("%02d:%02d:%02d", s.h, s.m, s.s)),
 		slog.String("tz", s.loc.String()))
 	for {
@@ -86,38 +108,30 @@ func (s *Scheduler) nextFire(now time.Time) time.Time {
 	return today
 }
 
-// closeDate returns the business date run_eod should close at fire time: the
-// prior local calendar day (the day that just ended). The scheduler fires after
-// the local midnight roll, so "now" is already the new day and the returned date
-// is strictly in the past — required by the period write-freeze (a date can only
-// be sealed once no posting can still target it). Date-only, so DST/offset shifts
-// within a day don't change the result.
-func closeDate(now time.Time) string {
-	return now.AddDate(0, 0, -1).Format("2006-01-02")
-}
-
-// runOnce closes the prior business day (the one that just ended). run_eod is
-// resumable, so a mid-run shutdown (ctx cancel) leaves committed chunks intact
-// and the next run continues from the resume cursor.
+// runOnce CALLs the configured procedure for the date dateFn derives from the
+// fire instant. The EOD procedures are resumable, so a mid-run shutdown (ctx
+// cancel) leaves committed chunks intact and the next run resumes from cursor.
 func (s *Scheduler) runOnce(parent context.Context) {
-	bizDate := closeDate(time.Now().In(s.loc))
+	bizDate := s.dateFn(time.Now().In(s.loc))
 	ctx, cancel := context.WithTimeout(parent, s.runTimeout)
 	defer cancel()
 
 	start := time.Now()
-	s.log.Info("eod run starting", slog.String("biz_date", bizDate))
+	s.log.Info("eod run starting", slog.String("job", s.label), slog.String("biz_date", bizDate))
 
 	// bizDate is a server-derived date literal (no external input) → safe to
 	// inline. Simple-protocol CALL at top level so the procedure's internal
 	// COMMITs are permitted.
-	if _, err := s.pool.Exec(ctx, fmt.Sprintf("CALL run_eod(DATE '%s')", bizDate)); err != nil {
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf("CALL %s(DATE '%s')", s.proc, bizDate)); err != nil {
 		s.log.Error("eod run failed",
+			slog.String("job", s.label),
 			slog.String("biz_date", bizDate),
 			slog.Duration("took", time.Since(start)),
 			slog.Any("error", err))
 		return
 	}
 	s.log.Info("eod run completed",
+		slog.String("job", s.label),
 		slog.String("biz_date", bizDate),
 		slog.Duration("took", time.Since(start)))
 }
