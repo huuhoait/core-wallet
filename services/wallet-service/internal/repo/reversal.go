@@ -14,14 +14,14 @@ func (r *PgWalletRepo) ReverseTransfer(ctx context.Context, in domain.TransferRe
 	var out domain.TransferReversalResult
 	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
 		const q = `
-			SELECT reversal_tfr_key, was_already_reversed, new_balance_from, new_balance_to, event_uuid
+			SELECT reversal_tran_key, was_already_reversed, new_balance_from, new_balance_to, event_uuid
 			  FROM post_transfer_reversal($1, $2, $3, $4, $5)
 		`
 		var nbf, nbt string
 		var uu uuid.UUID
 		row := tx.QueryRow(ctx, q,
 			in.OrigReference, in.Reason, in.Initiator, string(in.Audit.Channel), in.Audit.Actor)
-		if err := row.Scan(&out.ReversalTFRKey, &out.WasAlreadyReversed, &nbf, &nbt, &uu); err != nil {
+		if err := row.Scan(&out.ReversalTranKey, &out.WasAlreadyReversed, &nbf, &nbt, &uu); err != nil {
 			return err
 		}
 		out.NewBalanceFrom, out.NewBalanceTo, out.EventUUID = nbf, nbt, uu
@@ -38,14 +38,14 @@ func (r *PgWalletRepo) ReverseTopup(ctx context.Context, in domain.TopupReversal
 	var out domain.TopupReversalResult
 	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
 		const q = `
-			SELECT reversal_tfr_key, was_already_reversed, new_balance, event_uuid
+			SELECT reversal_tran_key, was_already_reversed, new_balance, event_uuid
 			  FROM post_topup_reversal($1, $2, $3, $4, $5)
 		`
 		var nb string
 		var uu uuid.UUID
 		row := tx.QueryRow(ctx, q,
 			in.OrigReference, in.Reason, in.Initiator, string(in.Audit.Channel), in.Audit.Actor)
-		if err := row.Scan(&out.ReversalTFRKey, &out.WasAlreadyReversed, &nb, &uu); err != nil {
+		if err := row.Scan(&out.ReversalTranKey, &out.WasAlreadyReversed, &nb, &uu); err != nil {
 			return err
 		}
 		out.NewBalance, out.EventUUID = nb, uu

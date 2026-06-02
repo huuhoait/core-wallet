@@ -44,7 +44,7 @@ func AccountRespFrom(a *domain.AccountView) AccountResponse {
 
 type TxEntryResponse struct {
 	SeqNo         int64  `json:"seq_no"`
-	TransactionID *int64 `json:"transaction_id,omitempty"` // = tfr_internal_key
+	TransactionID *int64 `json:"transaction_id,omitempty"` // = tran_internal_key
 	TranType      string `json:"tran_type"`
 	DRCR          string `json:"dr_cr"`
 	Amount        string `json:"amount"`
@@ -109,15 +109,15 @@ type TxLegResponse struct {
 }
 
 type TxDetailResponse struct {
-	TransactionID int64           `json:"transaction_id"` // tfr_internal_key
+	TransactionID int64           `json:"transaction_id"` // tran_internal_key
 	Reference     string          `json:"reference"`
 	PostDate      string          `json:"post_date"`
 	LegCount      int             `json:"leg_count"`
 	Legs          []TxLegResponse `json:"legs"`
 }
 
-func TxDetailRespFrom(tfrKey int64, legs []domain.TxLeg) TxDetailResponse {
-	out := TxDetailResponse{TransactionID: tfrKey, LegCount: len(legs)}
+func TxDetailRespFrom(tranKey int64, legs []domain.TxLeg) TxDetailResponse {
+	out := TxDetailResponse{TransactionID: tranKey, LegCount: len(legs)}
 	out.Legs = make([]TxLegResponse, 0, len(legs))
 	for i, l := range legs {
 		if i == 0 {

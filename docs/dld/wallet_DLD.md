@@ -397,7 +397,7 @@ CREATE TABLE FM_GL_MAST (
   CONTROL_GL_CODE  VARCHAR(32),                -- parent (account tree)
   BSPL_TYPE        VARCHAR(4),                 -- 'B'=Balance sheet, 'P'=P&L
   GL_TYPE          VARCHAR(4),
-  TFR_IND          VARCHAR(4),
+  TRAN_IND          VARCHAR(4),
   STATUS           VARCHAR(4)    DEFAULT 'A',
   CONSTRAINT fk_gl_parent FOREIGN KEY (CONTROL_GL_CODE) REFERENCES FM_GL_MAST(GL_CODE)
 );
@@ -679,7 +679,7 @@ The **Transaction History** table is the heart of the wallet ledger system, stor
 ```sql
 -- Sequence for TRAN_INTERNAL_ID — links the legs of a single transfer
 -- (Not using IDENTITY because multiple different rows share a single TRAN_INTERNAL_ID value)
-CREATE SEQUENCE seq_tfr AS BIGINT CACHE 1000;
+CREATE SEQUENCE seq_tran AS BIGINT CACHE 1000;
 
 CREATE TABLE WLT_TRAN_HIST (
   INTERNAL_KEY        BIGINT        NOT NULL,
@@ -731,7 +731,7 @@ CREATE TABLE wlt_tran_hist_2026_01_h01 PARTITION OF wlt_tran_hist_2026_01 FOR VA
 
 -- Indexes — created on the parent, PG auto-propagates to each partition
 CREATE INDEX idx_hist_acct_date  ON WLT_TRAN_HIST(INTERNAL_KEY, POST_DATE DESC);
-CREATE INDEX idx_hist_tfr        ON WLT_TRAN_HIST(TRAN_INTERNAL_ID, TFR_SEQ_NO);
+CREATE INDEX idx_hist_tran        ON WLT_TRAN_HIST(TRAN_INTERNAL_ID, TFR_SEQ_NO);
 CREATE INDEX idx_hist_ref        ON WLT_TRAN_HIST(REFERENCE);
 CREATE INDEX idx_hist_group_date ON WLT_TRAN_HIST(GROUP_ID, POST_DATE DESC) WHERE GROUP_ID IS NOT NULL;
 
@@ -1181,11 +1181,11 @@ CREATE OR REPLACE FUNCTION post_withdraw(
 ) RETURNS TABLE(tran_internal_id BIGINT, event_uuid UUID)
 LANGUAGE plpgsql AS $$
 DECLARE
-  v_tfr_key BIGINT; v_event_uuid UUID;
+  v_tran_key BIGINT; v_event_uuid UUID;
 BEGIN
   -- Phase 1: validate (no lock) — existing logic
   -- Phase 2: atomic posting — existing logic
-  v_tfr_key := nextval('seq_tfr');
+  v_tran_key := nextval('seq_tran');
   INSERT INTO WLT_TRAN_HIST (...) VALUES (...);
   INSERT INTO WLT_GL_BATCH (...) VALUES (...);
   UPDATE WLT_ACCT SET ACTUAL_BAL = ACTUAL_BAL - p_amount, VERSION = VERSION + 1
@@ -1195,16 +1195,16 @@ BEGIN
   -- NEW: outbox row in the same TX
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE, PARTITION_KEY,
                           TOPIC, PAYLOAD, HEADERS)
-  VALUES ('TRANSACTION', v_tfr_key::text, 'wallet.withdraw.posted.v1',
+  VALUES ('TRANSACTION', v_tran_key::text, 'wallet.withdraw.posted.v1',
           p_acct_no, 'wallet.withdrawals',
-          jsonb_build_object('tran_internal_id', v_tfr_key,
+          jsonb_build_object('tran_internal_id', v_tran_key,
                              'acct_no', p_acct_no, 'amount', p_amount,
                              'ext_payout_ref', p_ext_payout_ref,
                              'beneficiary', p_beneficiary),
           jsonb_build_object('traceparent', p_trace_id))
   RETURNING EVENT_UUID INTO v_event_uuid;
 
-  RETURN QUERY SELECT v_tfr_key, v_event_uuid;
+  RETURN QUERY SELECT v_tran_key, v_event_uuid;
 END $$;
 ```
 
@@ -1258,7 +1258,7 @@ CREATE TABLE WLT_WITHDRAW_TRACK (
   TREASURY_ACK_AT     TIMESTAMPTZ,
   TREASURY_FINAL_AT   TIMESTAMPTZ,
   REVERSED_AT         TIMESTAMPTZ,
-  REVERSAL_TFR_KEY    BIGINT,                           -- = TRAN_INTERNAL_ID of the RVWD posting
+  REVERSAL_TRAN_KEY    BIGINT,                           -- = TRAN_INTERNAL_ID of the RVWD posting
   -- Failure
   FAIL_CODE           VARCHAR(40),                     -- 'NAPAS_INSUFFICIENT_FUNDS','BENEF_CLOSED','SLA_TIMEOUT',...
   FAIL_REASON         VARCHAR(500),
@@ -1287,11 +1287,11 @@ CREATE OR REPLACE FUNCTION post_withdraw_reversal(
   p_fail_code      VARCHAR,
   p_fail_reason    VARCHAR,
   p_initiator      VARCHAR            -- 'TREASURY_FAILED' | 'SLA_TIMEOUT' | 'OPS_MANUAL'
-) RETURNS TABLE(reversal_tfr_key BIGINT, was_already_reversed BOOLEAN)
+) RETURNS TABLE(reversal_tran_key BIGINT, was_already_reversed BOOLEAN)
 LANGUAGE plpgsql AS $$
 DECLARE
   v_track       WLT_WITHDRAW_TRACK%ROWTYPE;
-  v_rev_tfr_key BIGINT;
+  v_rev_tran_key BIGINT;
 BEGIN
   -- Idempotency: lock the track row, inspect current state
   SELECT * INTO v_track FROM WLT_WITHDRAW_TRACK
@@ -1301,7 +1301,7 @@ BEGIN
   END IF;
   IF v_track.STATUS = 'REVERSED' THEN
     -- Already reversed — return the existing reversal key, no double-credit
-    RETURN QUERY SELECT v_track.REVERSAL_TFR_KEY, TRUE;
+    RETURN QUERY SELECT v_track.REVERSAL_TRAN_KEY, TRUE;
     RETURN;
   END IF;
   IF v_track.STATUS = 'COMPLETED' THEN
@@ -1309,12 +1309,12 @@ BEGIN
   END IF;
 
   -- Post the credit-back: RVWD reverses WDRAW + RVFEE reverses FEEWD (refund fee + VAT)
-  v_rev_tfr_key := nextval('seq_tfr');
+  v_rev_tran_key := nextval('seq_tran');
   INSERT INTO WLT_TRAN_HIST (..., TRAN_TYPE, CR_DR_MAINT_IND, TRAN_INTERNAL_ID, REFERENCE, ORIG_SEQ_NO, ...)
   SELECT ...,
          CASE TRAN_TYPE WHEN 'WDRAW' THEN 'RVWD' WHEN 'FEEWD' THEN 'RVFEE' END,
          CASE CR_DR_MAINT_IND WHEN 'DR' THEN 'CR' ELSE 'DR' END,
-         v_rev_tfr_key, 'RVWD-' || p_ext_payout_ref, SEQ_NO, ...
+         v_rev_tran_key, 'RVWD-' || p_ext_payout_ref, SEQ_NO, ...
     FROM WLT_TRAN_HIST
    WHERE TRAN_INTERNAL_ID = v_track.TRAN_INTERNAL_ID
      AND TRAN_TYPE IN ('WDRAW','FEEWD');
@@ -1328,7 +1328,7 @@ BEGIN
   -- Transition state
   UPDATE WLT_WITHDRAW_TRACK
      SET STATUS = 'REVERSED', REVERSED_AT = NOW(),
-         REVERSAL_TFR_KEY  = v_rev_tfr_key,
+         REVERSAL_TRAN_KEY  = v_rev_tran_key,
          FAIL_CODE         = COALESCE(FAIL_CODE,   p_fail_code),
          FAIL_REASON       = COALESCE(FAIL_REASON, p_fail_reason),
          TREASURY_FINAL_AT = COALESCE(TREASURY_FINAL_AT, NOW()),
@@ -1337,17 +1337,17 @@ BEGIN
 
   -- Outbox event so notifications + DW + fraud see the reversal
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE, PARTITION_KEY, TOPIC, PAYLOAD)
-  VALUES ('TRANSACTION', v_rev_tfr_key::text,
+  VALUES ('TRANSACTION', v_rev_tran_key::text,
           'wallet.withdraw.reversed.v1', v_track.ACCT_NO,
           'wallet.withdrawals',
           jsonb_build_object('ext_payout_ref', p_ext_payout_ref,
-                             'reversal_tfr_key', v_rev_tfr_key,
+                             'reversal_tran_key', v_rev_tran_key,
                              'amount', v_track.AMOUNT + v_track.FEE_GROSS,
                              'fail_code', p_fail_code,
                              'reason', p_fail_reason,
                              'initiator', p_initiator));
 
-  RETURN QUERY SELECT v_rev_tfr_key, FALSE;
+  RETURN QUERY SELECT v_rev_tran_key, FALSE;
 END $$;
 ```
 
@@ -1398,7 +1398,7 @@ END $$;
 | Withdraw confirmation screen | "Withdrawal initiated — funds will arrive at your bank within minutes" |
 | Transaction history | Shows the withdraw row with `settlement_status` derived from `WLT_WITHDRAW_TRACK.STATUS` |
 | Notification | Two pushes per withdraw: "initiated" at submission, then "completed" or "failed & refunded" at terminal state |
-| Query API | `GET /v1/transactions/{tfr_internal_key}` returns `{ tran_status: 'POSTED', settlement_status: 'DISBURSING', ext_payout_ref: '...' }` |
+| Query API | `GET /v1/transactions/{tran_internal_key}` returns `{ tran_status: 'POSTED', settlement_status: 'DISBURSING', ext_payout_ref: '...' }` |
 
 #### Edge cases
 
@@ -1645,7 +1645,7 @@ Indexes `idx_caudit_client_time` already optimize this exact query shape.
 #### Investigator queries (examples)
 
 ```sql
--- What did client C0001234 look like at the time of transaction tfr=1234567890?
+-- What did client C0001234 look like at the time of transaction tran=1234567890?
 SELECT CLIENT_INFO FROM WLT_TRAN_HIST WHERE TRAN_INTERNAL_ID = 1234567890 LIMIT 1;
 
 -- Show me every change to C0001234 in 2026 with the actor and reason

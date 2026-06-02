@@ -100,7 +100,7 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 
 // GetTransaction returns every leg of a transaction (by TRAN_INTERNAL_ID),
 // ordered primary-leg-first. Unknown id → 404.
-func (r *PgWalletRepo) GetTransaction(ctx context.Context, tfrKey int64) ([]domain.TxLeg, error) {
+func (r *PgWalletRepo) GetTransaction(ctx context.Context, tranKey int64) ([]domain.TxLeg, error) {
 	const sql = `
 		SELECT h.tfr_seq_no, h.seq_no, h.internal_key, COALESCE(a.acct_no, ''),
 		       h.tran_type, h.cr_dr_maint_ind, h.tran_amt::text, h.ccy,
@@ -111,7 +111,7 @@ func (r *PgWalletRepo) GetTransaction(ctx context.Context, tfrKey int64) ([]doma
 		 WHERE h.tran_internal_id = $1
 		 ORDER BY h.tfr_seq_no NULLS FIRST, h.seq_no
 	`
-	rows, err := r.pool.Query(ctx, sql, tfrKey)
+	rows, err := r.pool.Query(ctx, sql, tranKey)
 	if err != nil {
 		return nil, mapErrIfPg(err)
 	}

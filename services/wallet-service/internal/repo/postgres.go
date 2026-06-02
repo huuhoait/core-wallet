@@ -307,14 +307,14 @@ func (r *PgWalletRepo) MerchantWithdraw(ctx context.Context, in domain.MerchantW
 			in.GroupID, in.Amount, in.Reference, extRef, in.AutoSweep,
 			string(in.Audit.Channel), in.Audit.Actor)
 		// tran_internal_id + event_uuid are NULL on the SETTLEMENT_SWEEP_REQUIRED branch.
-		var tfr *int64
+		var tran *int64
 		var uu *uuid.UUID
 		var amt, fee, vat, total, settle string
-		if err := row.Scan(&tfr, &out.Status, &amt, &fee, &vat, &total, &settle, &uu); err != nil {
+		if err := row.Scan(&tran, &out.Status, &amt, &fee, &vat, &total, &settle, &uu); err != nil {
 			return err
 		}
-		if tfr != nil {
-			out.TranInternalID = *tfr
+		if tran != nil {
+			out.TranInternalID = *tran
 		}
 		if uu != nil {
 			out.EventUUID = *uu
@@ -335,14 +335,14 @@ func (r *PgWalletRepo) Reverse(ctx context.Context, in domain.ReversalInput) (*d
 	var out domain.ReversalResult
 	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
 		const q = `
-			SELECT reversal_tfr_key, was_already_reversed, event_uuid
+			SELECT reversal_tran_key, was_already_reversed, event_uuid
 			  FROM post_withdraw_reversal($1, $2, $3, $4, $5, $6)
 		`
 		row := tx.QueryRow(ctx, q,
 			in.ExtPayoutRef, in.FailCode, in.FailReason, in.Initiator,
 			string(in.Audit.Channel), in.Audit.Actor)
 		var uu *uuid.UUID
-		if err := row.Scan(&out.ReversalTFRKey, &out.WasAlreadyReversed, &uu); err != nil {
+		if err := row.Scan(&out.ReversalTranKey, &out.WasAlreadyReversed, &uu); err != nil {
 			return err
 		}
 		if uu != nil {

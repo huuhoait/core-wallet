@@ -83,7 +83,7 @@ sequenceDiagram
     Note over GO,DB: 1 round-trip — entire Phase 1+2 inside the SP
     GO->>DB: SELECT * FROM post_internal_credit($1..$5)
     Note over DB: Phase 1 in plpgsql:<br/>- SELECT acct + def + KYC + monthly_total<br/>- IF CR_BLOCKED='Y' → SELECT restraints live<br/>- Validate status, tier, range, limit, restraint
-    Note over DB: Phase 2 in plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT (VERSION check inline)<br/>- INSERT WLT_TRAN_HIST + WLT_GL_BATCH × 2<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, error_code, tfr_key, payload)
+    Note over DB: Phase 2 in plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT (VERSION check inline)<br/>- INSERT WLT_TRAN_HIST + WLT_GL_BATCH × 2<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, error_code, tran_key, payload)
     DB-->>GO: row (POSTED | REJECTED | CONFLICT | REPLAY)
   end
   
@@ -116,7 +116,7 @@ Request:
 Response 200:
 {
   "wallet_tran_id":   20015,
-  "tfr_internal_key": 9999100,
+  "tran_internal_key": 9999100,
   "status":           "SUCCESS",
   "amount":           1000000,
   "balance":          1200000,
@@ -287,7 +287,7 @@ sequenceDiagram
     Note over GO,DB: 1 round-trip per attempt
     GO->>DB: SELECT * FROM post_internal_debit($1..$6) — params: ref, acct, amount, 'WDRAW', ext_ref, narrative
     Note over DB: Phase 1 plpgsql:<br/>- Snapshot (acct + def + KYC + limits + daily/monthly aggregate)<br/>- IF RESTRAINT_PRESENT='Y' → live SELECT restraints<br/>- Validate: status, tier ≥ 2, amount range, limit, restraint DR<br/>- Fee + VAT compute (FIXED/PERCENT/clamp)<br/>- Fund check: ACTUAL_BAL - TOTAL_RESTRAINED_AMT ≥ total_with_fee
-    Note over DB: Phase 2 plpgsql (atomic, lock ~0.5-1ms):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT SET ACTUAL_BAL -= total, VERSION++<br/>  WHERE VERSION=:snap AND ACTUAL_BAL - TOTAL_RESTRAINED_AMT ≥ total<br/>- INSERT WLT_TRAN_HIST × 2 (WDRAW + FEEWD)<br/>- INSERT WLT_GL_BATCH × 5 (DR wallet / CR nostro + 3 fee/VAT legs)<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, error_code, tfr_key, payload)
+    Note over DB: Phase 2 plpgsql (atomic, lock ~0.5-1ms):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT SET ACTUAL_BAL -= total, VERSION++<br/>  WHERE VERSION=:snap AND ACTUAL_BAL - TOTAL_RESTRAINED_AMT ≥ total<br/>- INSERT WLT_TRAN_HIST × 2 (WDRAW + FEEWD)<br/>- INSERT WLT_GL_BATCH × 5 (DR wallet / CR nostro + 3 fee/VAT legs)<br/>- UPSERT WLT_ACCT_BAL<br/>- RETURN (result_code, error_code, tran_key, payload)
     DB-->>GO: row
   end
   
@@ -322,7 +322,7 @@ Request:
 Response 200 (sync, posted):
 {
   "wallet_tran_id":   20030,
-  "tfr_internal_key": 9999300,
+  "tran_internal_key": 9999300,
   "status":           "SUCCESS",
   "amount":           2000000,
   "fee":              5500,
@@ -508,7 +508,7 @@ sequenceDiagram
     Note over GO,DB: 1 round-trip per attempt
     GO->>DB: SELECT * FROM post_transfer($1..$5) — ref, from, to, amount, narrative
     Note over DB: Phase 1 plpgsql:<br/>- SELECT both accts + def + KYC<br/>- Validate: self-transfer, status, ccy match, tier, amount range<br/>- Restraint live check: from DR side, to CR side<br/>- Fee + VAT compute<br/>- Fund check on from
-    Note over DB: Phase 2 plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT × 2 ordered INTERNAL_KEY ASC (deadlock prevention)<br/>  each UPDATE WHERE VERSION=:snap + fund check inline<br/>- INSERT WLT_TRAN_HIST × 3 (TRFOUT, TRFIN, FEETRF)<br/>- INSERT WLT_GL_BATCH × 5<br/>- UPSERT WLT_ACCT_BAL × 2<br/>- RETURN (result_code, error_code, tfr_key, payload)
+    Note over DB: Phase 2 plpgsql (atomic):<br/>- INSERT WLT_API_MESSAGE ON CONFLICT DO NOTHING<br/>- UPDATE WLT_ACCT × 2 ordered INTERNAL_KEY ASC (deadlock prevention)<br/>  each UPDATE WHERE VERSION=:snap + fund check inline<br/>- INSERT WLT_TRAN_HIST × 3 (TRFOUT, TRFIN, FEETRF)<br/>- INSERT WLT_GL_BATCH × 5<br/>- UPSERT WLT_ACCT_BAL × 2<br/>- RETURN (result_code, error_code, tran_key, payload)
     DB-->>GO: row
   end
   
@@ -536,7 +536,7 @@ Request:
 Response 200:
 {
   "wallet_tran_id":      20040,
-  "tfr_internal_key":    9999200,
+  "tran_internal_key":    9999200,
   "status":              "SUCCESS",
   "amount":              1000000,
   "fee":                 5500,
@@ -676,7 +676,7 @@ Response 200:
 {
   "reversal_tran_id":   20045,
   "original_tran_id":   20040,
-  "tfr_internal_key":   9999201,
+  "tran_internal_key":   9999201,
   "amount_reversed":    1000000,
   "fee_reversed":       5500,
   "vat_reversed":       500,
@@ -740,7 +740,7 @@ Response 200:
   "items": [
     {
       "tran_id":          20045,
-      "tfr_internal_key": 9999200,
+      "tran_internal_key": 9999200,
       "tran_type":        "TRFOUT",
       "direction":        "DR",
       "amount":           1000000,
@@ -807,7 +807,7 @@ GET /v1/statements/{statement_id}
 | Pattern | Index used |
 |---------|-----------|
 | 1 wallet, date range, sort desc | `idx_hist_acct_date(INTERNAL_KEY, POST_DATE DESC)` — partition pruning by POST_DATE |
-| Lookup a single transfer (all legs) | `idx_hist_tfr(TRAN_INTERNAL_ID, TFR_SEQ_NO)` |
+| Lookup a single transfer (all legs) | `idx_hist_tran(TRAN_INTERNAL_ID, TFR_SEQ_NO)` |
 | Search by reference | `idx_hist_ref(REFERENCE)` |
 | Reversal trace | `WHERE ORIG_SEQ_NO = ?` — full partition scan; consider an index if hot |
 

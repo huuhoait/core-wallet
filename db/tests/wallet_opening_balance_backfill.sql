@@ -49,7 +49,7 @@ BEGIN
     IF v_postdate IS NULL THEN v_postdate := CURRENT_DATE; END IF;
 
     v_wallet_gl := CASE r.acct_type WHEN 'MERCHANT' THEN '201.02.001' ELSE '201.01.001' END;
-    v_key := nextval('seq_tfr');
+    v_key := nextval('seq_tran');
 
     -- (1) Bút toán số dư đầu kỳ trong sổ cái khách hàng — xếp đầu chuỗi (seq_no=0)
     INSERT INTO wlt_tran_hist

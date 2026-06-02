@@ -10,7 +10,7 @@ type TransferReversalRequest struct {
 }
 
 type TransferReversalResponse struct {
-	ReversalTFRKey     int64  `json:"reversal_tfr_key"`
+	ReversalTranKey     int64  `json:"reversal_tran_key"`
 	WasAlreadyReversed bool   `json:"was_already_reversed"`
 	NewBalanceFrom     string `json:"new_balance_from"`
 	NewBalanceTo       string `json:"new_balance_to"`
@@ -19,7 +19,7 @@ type TransferReversalResponse struct {
 
 func TransferReversalRespFrom(r *domain.TransferReversalResult) TransferReversalResponse {
 	out := TransferReversalResponse{
-		ReversalTFRKey:     r.ReversalTFRKey,
+		ReversalTranKey:     r.ReversalTranKey,
 		WasAlreadyReversed: r.WasAlreadyReversed,
 		NewBalanceFrom:     r.NewBalanceFrom,
 		NewBalanceTo:       r.NewBalanceTo,
@@ -38,7 +38,7 @@ type TopupReversalRequest struct {
 }
 
 type TopupReversalResponse struct {
-	ReversalTFRKey     int64  `json:"reversal_tfr_key"`
+	ReversalTranKey     int64  `json:"reversal_tran_key"`
 	WasAlreadyReversed bool   `json:"was_already_reversed"`
 	NewBalance         string `json:"new_balance"`
 	EventUUID          string `json:"event_uuid,omitempty"`
@@ -46,7 +46,7 @@ type TopupReversalResponse struct {
 
 func TopupReversalRespFrom(r *domain.TopupReversalResult) TopupReversalResponse {
 	out := TopupReversalResponse{
-		ReversalTFRKey:     r.ReversalTFRKey,
+		ReversalTranKey:     r.ReversalTranKey,
 		WasAlreadyReversed: r.WasAlreadyReversed,
 		NewBalance:         r.NewBalance,
 	}

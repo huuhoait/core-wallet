@@ -12,7 +12,7 @@ type TransferReversalInput struct {
 
 // TransferReversalResult is what post_transfer_reversal returns.
 type TransferReversalResult struct {
-	ReversalTFRKey     int64
+	ReversalTranKey     int64
 	WasAlreadyReversed bool
 	NewBalanceFrom     string // sender after refund
 	NewBalanceTo       string // receiver after claw-back
@@ -30,7 +30,7 @@ type TopupReversalInput struct {
 
 // TopupReversalResult is what post_topup_reversal returns.
 type TopupReversalResult struct {
-	ReversalTFRKey     int64
+	ReversalTranKey     int64
 	WasAlreadyReversed bool
 	NewBalance         string // wallet after claw-back
 	EventUUID          uuid.UUID
