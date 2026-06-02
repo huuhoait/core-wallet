@@ -30,12 +30,13 @@ REPORT_DIR="deploy/loadtest/reports"
 JSON="$(mktemp -t k6sum.XXXXXX)"
 REPORT="${REPORT:-$REPORT_DIR/k6_${TS}.md}"
 mkdir -p "$REPORT_DIR"
-# statement_timeout=0: the report's attribution queries COUNT/GROUP over the whole
-# (now multi-million-row) WLT_TRAN_HIST. Under the OLTP 2.5s statement_timeout they
-# abort on a large DB ("canceling statement due to statement timeout"), and set -e
-# then kills the script before the report is written. These are admin reads, not the
-# hot path, so run them uncapped.
-q() { docker exec -e PGPASSWORD="$PW" "$CTN" psql -U postgres -d wallet -tAc "SET statement_timeout=0; $1"; }
+# PGOPTIONS statement_timeout=0: the report's attribution queries COUNT/GROUP over
+# the whole (now multi-million-row) WLT_TRAN_HIST. Under the OLTP 2.5s statement_timeout
+# they abort on a large DB ("canceling statement due to statement timeout") and set -e
+# kills the script before the report is written. Set it as a connection GUC via
+# PGOPTIONS (NOT an in-band `SET ...;` — that emits a "SET" status line into -tAc
+# output, corrupting single-value captures like s0). Admin reads, not the hot path.
+q() { docker exec -e PGPASSWORD="$PW" -e PGOPTIONS="-c statement_timeout=0" "$CTN" psql -U postgres -d wallet -tAc "$1"; }
 f2() { printf "%.2f" "${1:-0}"; }
 # fmt_cpu / fmt_mem render a container's HostConfig limits (NanoCpus / Memory bytes,
 # i.e. compose `deploy.resources.limits`) for the report. 0 = no limit configured.

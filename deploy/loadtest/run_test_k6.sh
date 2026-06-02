@@ -1,4 +1,13 @@
-export BASE_URL=http://localhost:8100
-export REPORT=deploy/loadtest/reports/k6_datetime_300peak_600s_$(date +%Y%m%d_%H%M%S).md
-sh deploy/loadtest/k6.sh -e PEAK=300 -e DURATION=600
+#!/usr/bin/env bash
+# Convenience wrapper around k6.sh. MUST run under bash (k6.sh uses process
+# substitution / here-strings / pipefail) — `sh k6.sh` fails to parse on macOS
+# where /bin/sh is bash in POSIX mode. Absolute paths so it works from any cwd.
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
 
+PEAK="${PEAK:-200}"
+DURATION="${DURATION:-1200}"
+export BASE_URL="${BASE_URL:-http://localhost:8100}"
+export REPORT="$DIR/reports/k6_${PEAK}peak_${DURATION}s_$(date +%Y%m%d_%H%M%S).md"
+
+bash "$DIR/k6.sh" -e PEAK="$PEAK" -e DURATION="$DURATION"
