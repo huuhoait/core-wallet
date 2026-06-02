@@ -24,6 +24,6 @@ func (s *WalletService) ListTransactions(ctx context.Context, q domain.TxListQue
 }
 
 // GetTransaction returns all legs of a transaction by its TRAN_INTERNAL_ID.
-func (s *WalletService) GetTransaction(ctx context.Context, tfrKey int64) ([]domain.TxLeg, error) {
-	return s.repo.GetTransaction(ctx, tfrKey)
+func (s *WalletService) GetTransaction(ctx context.Context, tranKey int64) ([]domain.TxLeg, error) {
+	return s.repo.GetTransaction(ctx, tranKey)
 }

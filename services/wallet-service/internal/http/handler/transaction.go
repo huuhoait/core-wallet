@@ -82,17 +82,17 @@ func (h *Wallet) ListTransactions(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.TxListRespFrom(q, entries))
 }
 
-// GET /v1/finance/transactions/:tfr_key — all legs of one transaction.
+// GET /v1/finance/transactions/:tran_key — all legs of one transaction.
 func (h *Wallet) GetTransaction(c *gin.Context) {
-	tfrKey, err := strconv.ParseInt(c.Param("tfr_key"), 10, 64)
+	tranKey, err := strconv.ParseInt(c.Param("tran_key"), 10, 64)
 	if err != nil {
-		renderError(c, domain.InvalidRequest("invalid transaction id (numeric tfr_internal_key)", nil))
+		renderError(c, domain.InvalidRequest("invalid transaction id (numeric tran_internal_key)", nil))
 		return
 	}
-	legs, err := h.svc.GetTransaction(c.Request.Context(), tfrKey)
+	legs, err := h.svc.GetTransaction(c.Request.Context(), tranKey)
 	if err != nil {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.TxDetailRespFrom(tfrKey, legs))
+	c.JSON(http.StatusOK, dto.TxDetailRespFrom(tranKey, legs))
 }

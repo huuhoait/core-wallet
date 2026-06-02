@@ -45,7 +45,7 @@ ALTER TABLE public.fm_currency ENABLE TRIGGER ALL;
 
 ALTER TABLE public.fm_gl_mast DISABLE TRIGGER ALL;
 
-COPY public.fm_gl_mast (gl_code, gl_code_desc, gl_code_type, control_gl_code, bspl_type, gl_type, tfr_ind, status, channel, created_at, created_by, updated_at, updated_by) FROM stdin;
+COPY public.fm_gl_mast (gl_code, gl_code_desc, gl_code_type, control_gl_code, bspl_type, gl_type, tran_ind, status, channel, created_at, created_by, updated_at, updated_by) FROM stdin;
 101	Cash & equivalents (parent)	A	\N	B	CASH	\N	A	SYSTEM	2026-05-31 11:23:30.77554+07	postgres	2026-05-31 11:23:30.77554+07	postgres
 201	Customer liabilities (parent)	L	\N	B	LIAB	\N	A	SYSTEM	2026-05-31 11:23:30.77554+07	postgres	2026-05-31 11:23:30.77554+07	postgres
 203	Tax payable (parent)	L	\N	B	TAX	\N	A	SYSTEM	2026-05-31 11:23:30.77554+07	postgres	2026-05-31 11:23:30.77554+07	postgres

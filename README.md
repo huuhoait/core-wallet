@@ -157,7 +157,7 @@ and the Postman collection.
 | `POST` | `/v1/finance/restraints` | Add a restraint / hold-lien on an account |
 | `POST` | `/v1/finance/restraints/:id/release` | Release a restraint |
 | `GET`  | `/v1/finance/transactions?acct_no=&limit=&before_seq=` | Account statement (transaction list, keyset-paged) |
-| `GET`  | `/v1/finance/transactions/:tfr_key` | Transaction detail (all legs of a `tfr_internal_key`) |
+| `GET`  | `/v1/finance/transactions/:tran_key` | Transaction detail (all legs of a `tran_internal_key`) |
 | `POST` | `/v1/clients` | Create a client master record (identity only; no KYC/onboarding) |
 | `PATCH`| `/v1/clients/:client_no` | Update client info |
 | `POST` | `/v1/accounts` | Open a wallet (count-limited; CONSUMER 3/CCY, MERCHANT 10) |

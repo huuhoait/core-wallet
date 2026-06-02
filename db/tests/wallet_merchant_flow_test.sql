@@ -32,10 +32,10 @@ DO $$
 DECLARE
   GA text; GB text; GC text; GD text;
   v_s1 text; v_s2 text; v_swept numeric; v_setbal numeric; v_tot numeric;
-  v_tfr bigint; v_st text; v_fee numeric; v_vat numeric; v_dr numeric; v_cr numeric;
+  v_tran bigint; v_st text; v_fee numeric; v_vat numeric; v_dr numeric; v_cr numeric;
   v_nostro numeric; v_net numeric; v_setafter numeric; v_logcnt int;
-  v_st2 text; v_idem_tfr bigint; v_setbal_dup numeric;
-  v_setpre numeric; v_revtfr bigint; v_already boolean; v_already2 boolean;
+  v_st2 text; v_idem_tran bigint; v_setbal_dup numeric;
+  v_setpre numeric; v_revtran bigint; v_already boolean; v_already2 boolean;
   v_revdr numeric; v_revcr numeric; v_setpost numeric;
 BEGIN
   GA := pg_temp._mk('01', 2000000, 500000, 4, 0);     -- settlement 2M + 4×500k = 4M
@@ -63,7 +63,7 @@ BEGIN
 
   -- ───── TC3: merchant_withdraw settlement-sufficient → POSTED ─────
   SELECT tran_internal_id, status, fee_gross, vat_amount, settlement_balance_after
-    INTO v_tfr, v_st, v_fee, v_vat, v_setafter
+    INTO v_tran, v_st, v_fee, v_vat, v_setafter
     FROM post_merchant_withdraw(GA, 1000000, 'MWD-GA-1', 'PAYOUT-GA-1', true, 'MOBILE', 'test');
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC3 merchant_withdraw POSTED (settlement sufficient)',
@@ -72,9 +72,9 @@ BEGIN
 
   -- ───── TC4: MERCHWD GL balanced + fee split (401.02/203.01) ─────
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'), sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tfr;
-  SELECT amount INTO v_nostro FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='101.02.001' AND tran_nature='CR';
-  SELECT amount INTO v_net FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='401.02' AND tran_nature='CR';
+    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tran;
+  SELECT amount INTO v_nostro FROM wlt_gl_batch WHERE tran_key=v_tran AND gl_code='101.02.001' AND tran_nature='CR';
+  SELECT amount INTO v_net FROM wlt_gl_batch WHERE tran_key=v_tran AND gl_code='401.02' AND tran_nature='CR';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC4 MERCHWD GL balanced + nostro=principal + fee→401.02/203.01',
      v_dr=v_cr AND v_nostro=1000000 AND v_net=20000 AND v_vat=2000,
@@ -108,7 +108,7 @@ BEGIN
   END;
 
   -- ───── TC8: idempotency (same reference → DUPLICATE, single debit) ─────
-  SELECT tran_internal_id, settlement_balance_after INTO v_idem_tfr, v_setbal
+  SELECT tran_internal_id, settlement_balance_after INTO v_idem_tran, v_setbal
     FROM post_merchant_withdraw(GA, 100000, 'MWD-IDEM-1', NULL, true, 'MOBILE', 'test');
   SELECT status, settlement_balance_after INTO v_st2, v_setbal_dup
     FROM post_merchant_withdraw(GA, 100000, 'MWD-IDEM-1', NULL, true, 'MOBILE', 'test');
@@ -119,11 +119,11 @@ BEGIN
 
   -- ───── TC9: revert merchant withdraw MWD-GA-1 (restore principal + fee) ─────
   SELECT actual_bal INTO v_setpre FROM wlt_acct WHERE acct_no='MCH01S';
-  SELECT reversal_tfr_key, was_already_reversed INTO v_revtfr, v_already
+  SELECT reversal_tran_key, was_already_reversed INTO v_revtran, v_already
     FROM post_merchant_withdraw_reversal('MWD-GA-1', 'NAPAS_TIMEOUT', 'payout failed', 'TREASURY_FAILED', 'SYS', 'test');
   SELECT actual_bal INTO v_setpost FROM wlt_acct WHERE acct_no='MCH01S';
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'), sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_revdr, v_revcr FROM wlt_gl_batch WHERE tran_key=v_revtfr;
+    INTO v_revdr, v_revcr FROM wlt_gl_batch WHERE tran_key=v_revtran;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC9 revert merchant withdraw: restore principal+fee, GL balanced',
      v_already=false AND v_setpost=(v_setpre+1022000) AND v_revdr=v_revcr AND v_revdr=1022000,

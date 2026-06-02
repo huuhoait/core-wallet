@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "wallet-service-collection",
     "name": "Wallet Service",
-    "description": "Core wallet HTTP API.\n\n**Setup**:\n1. Import this collection + `wallet-service.postman_environment.json`.\n2. Start the docker stack (`docker compose up -d`) and seed wallets `9701000000000001` + `9701000000000002` (see `wallet_seed.sql`).\n3. Run `make run` in `wallet-service/` (binds to `http://localhost:8090` by default).\n4. Select the **Wallet Service — local** environment in Postman.\n5. Run requests in the order below to exercise the full flow.\n\n**Conventions**:\n- Every transactional request auto-generates a unique `reference` in pre-request script (idempotency key).\n- `X-Caller-Subject` ↔ `audit.actor` GUC → fills `created_by` / `updated_by` columns.\n- `X-Channel` ↔ `audit.channel` GUC → fills `channel` column.\n- `X-Request-Id` correlates one client request across services.\n- Test scripts capture `tfr_internal_key`, `event_uuid`, `ext_payout_ref` to env vars for downstream requests.\n\n**Error envelope**:\n```json\n{ \"code\": \"<DOMAIN_CODE>\", \"message\": \"...\", \"request_id\": \"...\" }\n```\nCodes: `INVALID_REQUEST`, `ACCT_NOT_FOUND`, `INSUFFICIENT_FUNDS`, `DR_RESTRAINT_ACTIVE`, `TIER_INSUFFICIENT`, `TIMEOUT`, `WD_NOT_FOUND`, `WD_ALREADY_COMPLETED`, `WD_ALREADY_REVERSED`, ...",
+    "description": "Core wallet HTTP API.\n\n**Setup**:\n1. Import this collection + `wallet-service.postman_environment.json`.\n2. Start the docker stack (`docker compose up -d`) and seed wallets `9701000000000001` + `9701000000000002` (see `wallet_seed.sql`).\n3. Run `make run` in `wallet-service/` (binds to `http://localhost:8090` by default).\n4. Select the **Wallet Service — local** environment in Postman.\n5. Run requests in the order below to exercise the full flow.\n\n**Conventions**:\n- Every transactional request auto-generates a unique `reference` in pre-request script (idempotency key).\n- `X-Caller-Subject` ↔ `audit.actor` GUC → fills `created_by` / `updated_by` columns.\n- `X-Channel` ↔ `audit.channel` GUC → fills `channel` column.\n- `X-Request-Id` correlates one client request across services.\n- Test scripts capture `tran_internal_key`, `event_uuid`, `ext_payout_ref` to env vars for downstream requests.\n\n**Error envelope**:\n```json\n{ \"code\": \"<DOMAIN_CODE>\", \"message\": \"...\", \"request_id\": \"...\" }\n```\nCodes: `INVALID_REQUEST`, `ACCT_NOT_FOUND`, `INSUFFICIENT_FUNDS`, `DR_RESTRAINT_ACTIVE`, `TIER_INSUFFICIENT`, `TIMEOUT`, `WD_NOT_FOUND`, `WD_ALREADY_COMPLETED`, `WD_ALREADY_REVERSED`, ...",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -561,7 +561,7 @@
                   "const body = pm.response.json();",
                   "pm.test('status POSTED|DUPLICATE', () => pm.expect(body.status).to.be.oneOf(['SUCCESS','DUPLICATE']));",
                   "pm.test('event_uuid is uuid', () => pm.expect(body.event_uuid).to.match(/^[0-9a-f-]{36}$/));",
-                  "pm.environment.set('last_topup_tfr_key', body.tfr_internal_key);",
+                  "pm.environment.set('last_topup_tran_key', body.tran_internal_key);",
                   "pm.environment.set('last_topup_event_uuid', body.event_uuid);",
                   "pm.test('transaction_status=ACSC', () => pm.expect(body.transaction_status).to.equal('ACSC'));",
                   "pm.environment.set('last_topup_reference', pm.variables.get('reference'));"
@@ -621,7 +621,7 @@
                   "  pm.expect(body.fee_gross).to.equal('5500.00');",
                   "  pm.expect(body.vat_amount).to.equal('500.00');",
                   "});",
-                  "pm.environment.set('last_transfer_tfr_key', body.tfr_internal_key);",
+                  "pm.environment.set('last_transfer_tran_key', body.tran_internal_key);",
                   "pm.test('transaction_status=ACSC', () => pm.expect(body.transaction_status).to.equal('ACSC'));",
                   "pm.environment.set('last_transfer_reference', pm.variables.get('reference'));"
                 ]
@@ -681,7 +681,7 @@
                   "  pm.expect(body.vat_amount).to.equal('0.00');",
                   "});",
                   "pm.test('transaction_status=ACSC', () => pm.expect(body.transaction_status).to.equal('ACSC'));",
-                  "pm.environment.set('last_transfer_tfr_key', body.tfr_internal_key);"
+                  "pm.environment.set('last_transfer_tran_key', body.tran_internal_key);"
                 ]
               }
             }
@@ -748,7 +748,7 @@
                   "pm.test('balance decreased by amount+fee', () => {",
                   "  pm.expect(body.fee_gross).to.equal('11000.00');",
                   "});",
-                  "pm.environment.set('last_withdraw_tfr_key', body.tfr_internal_key);",
+                  "pm.environment.set('last_withdraw_tran_key', body.tran_internal_key);",
                   "console.log('Captured ext_payout_ref =', pm.environment.get('last_ext_payout_ref'));",
                   "pm.test('transaction_status=ACTC (disbursement pending)', () => pm.expect(body.transaction_status).to.equal('ACTC'));"
                 ]
@@ -864,7 +864,7 @@
                 }
               ]
             },
-            "description": "Account statement: ledger entries on {{acct_no_a}}, newest-first. Filter by account + optional post_date range (from/to, YYYY-MM-DD). Paged at 200 items/page — keyset via next_cursor → ?before_seq=. Captures a tfr_key for the detail request."
+            "description": "Account statement: ledger entries on {{acct_no_a}}, newest-first. Filter by account + optional post_date range (from/to, YYYY-MM-DD). Paged at 200 items/page — keyset via next_cursor → ?before_seq=. Captures a tran_key for the detail request."
           },
           "event": [
             {
@@ -892,7 +892,7 @@
                   "  pm.test('page_size is a number', ()=>pm.expect(b.page_size).to.be.a('number'));",
                   "  pm.test('count matches items', ()=>pm.expect(b.count).to.equal(b.items.length));",
                   "  pm.test('next_cursor only on a full page', ()=>{ if (b.count===b.page_size) { pm.expect(b.next_cursor).to.be.a('number'); } else { pm.expect(b.next_cursor==null).to.be.true; } });",
-                  "  if (b.items.length){ pm.environment.set('tfr_key', b.items[0].transaction_id); }",
+                  "  if (b.items.length){ pm.environment.set('tran_key', b.items[0].transaction_id); }",
                   "}"
                 ]
               }
@@ -918,7 +918,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/v1/finance/transactions/{{tfr_key}}",
+              "raw": "{{base_url}}/v1/finance/transactions/{{tran_key}}",
               "host": [
                 "{{base_url}}"
               ],
@@ -926,10 +926,10 @@
                 "v1",
                 "finance",
                 "transactions",
-                "{{tfr_key}}"
+                "{{tran_key}}"
               ]
             },
-            "description": "All legs of one transaction by tfr_internal_key (run the list request first to populate {{tfr_key}})."
+            "description": "All legs of one transaction by tran_internal_key (run the list request first to populate {{tran_key}})."
           },
           "event": [
             {
@@ -1003,8 +1003,8 @@
                   "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
                   "if ([200,201].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  pm.test('reversal_tfr_key returned', () => pm.expect(body.reversal_tfr_key).to.be.a('number'));",
-                  "  pm.environment.set('last_reversal_tfr_key', body.reversal_tfr_key);",
+                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.reversal_tran_key).to.be.a('number'));",
+                  "  pm.environment.set('last_reversal_tran_key', body.reversal_tran_key);",
                   "}"
                 ]
               }
@@ -1060,7 +1060,7 @@
                   "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
                   "if ([200,201].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  pm.test('reversal_tfr_key returned', () => pm.expect(body.reversal_tfr_key).to.be.a('number'));",
+                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.reversal_tran_key).to.be.a('number'));",
                   "}"
                 ]
               }
@@ -1978,8 +1978,8 @@
                   "pm.test('200 or 409', () => pm.expect(pm.response.code).to.be.oneOf([200, 409]));",
                   "if (pm.response.code === 200) {",
                   "  const body = pm.response.json();",
-                  "  pm.test('reversal_tfr_key returned', () => pm.expect(body.reversal_tfr_key).to.be.a('number'));",
-                  "  pm.environment.set('last_reversal_tfr_key', body.reversal_tfr_key);",
+                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.reversal_tran_key).to.be.a('number'));",
+                  "  pm.environment.set('last_reversal_tran_key', body.reversal_tran_key);",
                   "} else {",
                   "  const body = pm.response.json();",
                   "  pm.test('code=WD_ALREADY_COMPLETED (expected if completed ran first)',",
@@ -2207,7 +2207,7 @@
                   "pm.test('POSTED on first run, DUPLICATE on retry',",
                   "  () => pm.expect(body.status).to.be.oneOf(['SUCCESS','DUPLICATE']));",
                   "if (body.status === 'DUPLICATE') {",
-                  "  console.log('Idempotency verified — same tfr_key + event_uuid returned');",
+                  "  console.log('Idempotency verified — same tran_key + event_uuid returned');",
                   "}"
                 ]
               }

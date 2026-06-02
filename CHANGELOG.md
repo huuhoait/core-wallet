@@ -8,6 +8,22 @@ condensed from the HLD changelog.
 
 ## [Unreleased]
 
+### Changed — Complete the `tfr` → `tran` rename, incl. the public API (2026-06-02)
+- Finishes what US-9.14 left backward-compatible: every remaining `tfr` token is
+  renamed to `tran`, **except the `TFR_SEQ_NO` family** (`TFR_SEQ_NO` /
+  `tfr_seq_no` / Go `TFRSeqNo` — the per-leg pointer to the origin leg — kept).
+- **BREAKING — HTTP response contract.** The JSON fields the previous step kept
+  for compatibility are now renamed:
+  - `tfr_internal_key` → `tran_internal_key`
+  - `reversal_tfr_key` → `reversal_tran_key`
+  - route param `:tfr_key` → `:tran_key` (`GET /v1/finance/transactions/:tran_key`)
+  Postman collection/environment and the finance/web-portal specs updated to match.
+- **DB:** sequence `seq_tfr` → `seq_tran`; column `WLT_WITHDRAW_TRACK.reversal_tfr_key`
+  → `reversal_tran_key`; `fm_gl_mast.tfr_ind` → `tran_ind` (+ seed COPY header);
+  index `idx_hist_tfr` → `idx_hist_tran`; all SP locals/params.
+- **Go:** `ReversalTFRKey` → `ReversalTranKey`, `TFRInternalKey` → `TranInternalKey`,
+  local `tfrKey`/`tfr` → `tranKey`/`tran`. `go build` + `go vet` green.
+
 ### Changed — Rename `tfr_internal_key` → `tran_internal_id` (US-9.14, 2026-05-31)
 - The per-transaction grouping key was misnamed `tfr_internal_key` (`tfr`="transfer")
   although it links the legs of **every** posting type (topup/transfer/withdraw/

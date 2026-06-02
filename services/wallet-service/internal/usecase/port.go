@@ -38,7 +38,7 @@ type WalletRepository interface {
 	// Account profile + transaction reads (read-only, direct SELECT on WLT_*).
 	GetAccount(ctx context.Context, acctNo string) (*domain.AccountView, error)
 	ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error)
-	GetTransaction(ctx context.Context, tfrKey int64) ([]domain.TxLeg, error)
+	GetTransaction(ctx context.Context, tranKey int64) ([]domain.TxLeg, error)
 
 	// In-book transfer reversal (post_transfer_reversal).
 	ReverseTransfer(ctx context.Context, in domain.TransferReversalInput) (*domain.TransferReversalResult, error)

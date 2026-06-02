@@ -239,7 +239,7 @@ BEGIN
   -- Reset sequences back to their start value
   ALTER SEQUENCE seq_client    RESTART WITH 1000000000;
   ALTER SEQUENCE seq_acct_no   RESTART WITH 1;
-  ALTER SEQUENCE seq_tfr       RESTART WITH 1;
+  ALTER SEQUENCE seq_tran       RESTART WITH 1;
 
   RAISE NOTICE 'Test data reset complete';
 END $$;

@@ -16,7 +16,7 @@ func (s *WalletService) ReverseTransfer(ctx context.Context, in domain.TransferR
 	}
 	s.log.InfoContext(ctx, "transfer reversed",
 		slog.String("orig_reference", in.OrigReference),
-		slog.Int64("reversal_tfr_key", res.ReversalTFRKey),
+		slog.Int64("reversal_tran_key", res.ReversalTranKey),
 		slog.Bool("was_already_reversed", res.WasAlreadyReversed),
 		slog.String("event_uuid", res.EventUUID.String()))
 	return res, nil
@@ -31,7 +31,7 @@ func (s *WalletService) ReverseTopup(ctx context.Context, in domain.TopupReversa
 	}
 	s.log.InfoContext(ctx, "topup reversed",
 		slog.String("orig_reference", in.OrigReference),
-		slog.Int64("reversal_tfr_key", res.ReversalTFRKey),
+		slog.Int64("reversal_tran_key", res.ReversalTranKey),
 		slog.Bool("was_already_reversed", res.WasAlreadyReversed),
 		slog.String("event_uuid", res.EventUUID.String()))
 	return res, nil

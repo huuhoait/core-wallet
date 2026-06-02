@@ -23,7 +23,7 @@ DECLARE
   v_ca text; v_cb text;
   v_a  text; v_b  text;          -- acct_no
   v_ka bigint; v_kb bigint;      -- internal_key
-  v_tfr bigint; v_fee numeric; v_vat numeric;
+  v_tran bigint; v_fee numeric; v_vat numeric;
   v_dr numeric; v_cr numeric;
   v_a0 numeric; v_a1 numeric; v_b0 numeric; v_b1 numeric;
   v_seq_base bigint; v_ref_seq bigint;
@@ -46,19 +46,19 @@ BEGIN
   SELECT actual_bal INTO v_a0 FROM wlt_acct WHERE internal_key=v_ka;
   SELECT actual_bal INTO v_b0 FROM wlt_acct WHERE internal_key=v_kb;
 
-  SELECT tran_internal_id, fee_gross, vat_amount INTO v_tfr, v_fee, v_vat
+  SELECT tran_internal_id, fee_gross, vat_amount INTO v_tran, v_fee, v_vat
     FROM post_transfer(v_a, v_b, 100000, 'ACCTT-TRF-1', 'TRFOUT', '{}'::jsonb, 'MOBILE', 'test');
 
   -- TC1: double-entry balanced
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'),
          sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tfr;
+    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tran;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC1 transfer: ΣDR = ΣCR', v_dr = v_cr, format('DR=%s CR=%s', v_dr, v_cr));
 
   -- TC2: fee split + VAT formula (gross 5500 = net 5000 + VAT 500; VAT=round(5500*0.1/1.1))
-  SELECT amount INTO v_net401 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='401.01';
-  SELECT amount INTO v_vat203 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='203.01';
+  SELECT amount INTO v_net401 FROM wlt_gl_batch WHERE tran_key=v_tran AND gl_code='401.01';
+  SELECT amount INTO v_vat203 FROM wlt_gl_batch WHERE tran_key=v_tran AND gl_code='203.01';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC2 fee split + VAT GL codes',
      v_fee=5500 AND v_vat=500 AND v_net401=5000 AND v_vat203=500
@@ -67,7 +67,7 @@ BEGIN
 
   -- TC3: principal nets to 0 on wallet GL 201.01.001 → net DR = fee only (5500)
   SELECT sum(CASE tran_nature WHEN 'DR' THEN amount ELSE -amount END)
-    INTO v_net_wallet FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='201.01.001';
+    INTO v_net_wallet FROM wlt_gl_batch WHERE tran_key=v_tran AND gl_code='201.01.001';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC3 principal nets to 0 on 201.01.001 (only fee remains)',
      v_net_wallet = 5500, format('net DR on wallet GL = %s (expect 5500)', v_net_wallet));
@@ -81,20 +81,20 @@ BEGIN
      format('A:-%s (expect 105500)  B:+%s (expect 100000)', v_a0-v_a1, v_b1-v_b0));
 
   -- TC5: fee leg references origin (TRFOUT) SEQ_NO via TFR_SEQ_NO
-  SELECT seq_no INTO v_seq_base FROM wlt_tran_hist WHERE tran_internal_id=v_tfr AND tran_type='TRFOUT';
-  SELECT tfr_seq_no INTO v_ref_seq FROM wlt_tran_hist WHERE tran_internal_id=v_tfr AND tran_type='FEETRF';
+  SELECT seq_no INTO v_seq_base FROM wlt_tran_hist WHERE tran_internal_id=v_tran AND tran_type='TRFOUT';
+  SELECT tfr_seq_no INTO v_ref_seq FROM wlt_tran_hist WHERE tran_internal_id=v_tran AND tran_type='FEETRF';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC5 FEE leg TFR_SEQ_NO = origin TRFOUT SEQ_NO',
      v_ref_seq = v_seq_base, format('fee.tfr_seq_no=%s origin.seq_no=%s', v_ref_seq, v_seq_base));
 
   -- ════════════════════ FEE-FREE TRANSFER (TRFOUTF) ════════════════════
-  SELECT tran_internal_id, fee_gross INTO v_tfr, v_fee
+  SELECT tran_internal_id, fee_gross INTO v_tran, v_fee
     FROM post_transfer(v_a, v_b, 10000, 'ACCTT-FREE-1', 'TRFOUTF', '{}'::jsonb, 'MOBILE', 'test');
-  SELECT count(*) INTO v_legs FROM wlt_gl_batch WHERE tran_key=v_tfr;
+  SELECT count(*) INTO v_legs FROM wlt_gl_batch WHERE tran_key=v_tran;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC6 TRFOUTF: no fee, only 2 GL legs, no 401/203',
      v_fee=0 AND v_legs=2
-       AND NOT EXISTS(SELECT 1 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code IN ('401.01','203.01')),
+       AND NOT EXISTS(SELECT 1 FROM wlt_gl_batch WHERE tran_key=v_tran AND gl_code IN ('401.01','203.01')),
      format('fee=%s legs=%s', v_fee, v_legs));
 
   -- ════════════════════ TRANSFER FUND GUARD ════════════════════
@@ -109,34 +109,34 @@ BEGIN
   END;
 
   -- ════════════════════ WITHDRAW WITH FEE ════════════════════
-  SELECT tran_internal_id, fee_gross, vat_amount INTO v_tfr, v_fee, v_vat
+  SELECT tran_internal_id, fee_gross, vat_amount INTO v_tran, v_fee, v_vat
     FROM post_withdraw(v_a, 200000, 'ACCTT-WD-1', 'EXTWD-T1', 'BIDV', '12345678901234', '{}'::jsonb, 'MOBILE', 'test');
 
   -- TC8: withdraw double-entry
   SELECT sum(amount) FILTER (WHERE tran_nature='DR'),
          sum(amount) FILTER (WHERE tran_nature='CR')
-    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tfr;
+    INTO v_dr, v_cr FROM wlt_gl_batch WHERE tran_key=v_tran;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC8 withdraw: ΣDR = ΣCR', v_dr=v_cr, format('DR=%s CR=%s', v_dr, v_cr));
 
   -- TC9: nostro CR leg = principal (escrow reduced by exactly the principal)
   SELECT amount INTO v_nostro FROM wlt_gl_batch
-    WHERE tran_key=v_tfr AND gl_code='101.02.001' AND tran_nature='CR';
+    WHERE tran_key=v_tran AND gl_code='101.02.001' AND tran_nature='CR';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC9 withdraw nostro CR = principal (200000)',
      v_nostro=200000, format('nostro CR=%s (expect 200000)', v_nostro));
 
   -- TC10: withdraw fee split (PERCENT 0.1% clamp min 11000 → 11000; net 10000 + VAT 1000)
-  SELECT amount INTO v_net401 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='401.01';
-  SELECT amount INTO v_vat203 FROM wlt_gl_batch WHERE tran_key=v_tfr AND gl_code='203.01';
+  SELECT amount INTO v_net401 FROM wlt_gl_batch WHERE tran_key=v_tran AND gl_code='401.01';
+  SELECT amount INTO v_vat203 FROM wlt_gl_batch WHERE tran_key=v_tran AND gl_code='203.01';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC10 withdraw fee clamp + split',
      v_fee=11000 AND v_net401=10000 AND v_vat203=1000,
      format('fee=%s net=%s vat=%s', v_fee, v_net401, v_vat203));
 
   -- TC11: FEEWD leg references origin WDRAW SEQ_NO
-  SELECT seq_no INTO v_seq_base FROM wlt_tran_hist WHERE tran_internal_id=v_tfr AND tran_type='WDRAW';
-  SELECT tfr_seq_no INTO v_ref_seq FROM wlt_tran_hist WHERE tran_internal_id=v_tfr AND tran_type='FEEWD';
+  SELECT seq_no INTO v_seq_base FROM wlt_tran_hist WHERE tran_internal_id=v_tran AND tran_type='WDRAW';
+  SELECT tfr_seq_no INTO v_ref_seq FROM wlt_tran_hist WHERE tran_internal_id=v_tran AND tran_type='FEEWD';
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC11 FEEWD leg TFR_SEQ_NO = origin WDRAW SEQ_NO',
      v_ref_seq = v_seq_base, format('fee.tfr_seq_no=%s origin.seq_no=%s', v_ref_seq, v_seq_base));
@@ -154,11 +154,11 @@ BEGIN
 
   -- ════════════════════ WITHDRAW REVERSAL (RVWD + RVFEE refund) ════════════════════
   SELECT actual_bal INTO v_pre FROM wlt_acct WHERE internal_key=v_ka;          -- balance before this withdraw
-  SELECT tran_internal_id, fee_gross INTO v_tfr, v_fee
+  SELECT tran_internal_id, fee_gross INTO v_tran, v_fee
     FROM post_withdraw(v_a, 200000, 'ACCTT-WDR-1', 'EXTWD-REV1', 'BIDV', '12345678901234', '{}'::jsonb, 'MOBILE', 'test');
   SELECT actual_bal INTO v_postwd FROM wlt_acct WHERE internal_key=v_ka;        -- pre - (200000 + 11000)
 
-  SELECT reversal_tfr_key, was_already_reversed INTO v_rev, v_already
+  SELECT reversal_tran_key, was_already_reversed INTO v_rev, v_already
     FROM post_withdraw_reversal('EXTWD-REV1', 'NAPAS_TIMEOUT', 'beneficiary bank timeout', 'TREASURY_FAILED', 'SYS', 'test');
   SELECT actual_bal INTO v_postrev FROM wlt_acct WHERE internal_key=v_ka;
 

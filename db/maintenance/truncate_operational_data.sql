@@ -95,10 +95,10 @@ RESTART IDENTITY CASCADE;
 -- these same ranges (otherwise future generated keys may collide with re-seeded
 -- rows). Off by default.
 \if :reset_sequences
-  \echo '>> Resetting app sequences: seq_client, seq_acct_no, seq_tfr ...'
+  \echo '>> Resetting app sequences: seq_client, seq_acct_no, seq_tran ...'
   ALTER SEQUENCE seq_client  RESTART;
   ALTER SEQUENCE seq_acct_no RESTART;
-  ALTER SEQUENCE seq_tfr     RESTART;
+  ALTER SEQUENCE seq_tran     RESTART;
 \endif
 
 COMMIT;

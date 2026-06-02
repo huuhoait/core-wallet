@@ -21,7 +21,7 @@ BEGIN
   SELECT actual_bal INTO a0 FROM wlt_acct WHERE internal_key=ka;
   SELECT actual_bal INTO b0 FROM wlt_acct WHERE internal_key=kb;
   PERFORM post_transfer(a, b, 100000, 'RVT-1', 'TRFOUT', '{}'::jsonb, 'MOBILE', 't');  -- A:-105500 B:+100000
-  SELECT reversal_tfr_key, was_already_reversed, new_balance_from, new_balance_to
+  SELECT reversal_tran_key, was_already_reversed, new_balance_from, new_balance_to
     INTO v_rev, v_already, v_nbf, v_nbt
     FROM post_transfer_reversal('RVT-1', 'duplicate charge', 'OPS_MANUAL', 'SYS', 't');
   SELECT actual_bal INTO a1 FROM wlt_acct WHERE internal_key=ka;

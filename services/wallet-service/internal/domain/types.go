@@ -71,7 +71,7 @@ type WithdrawResult struct {
 
 // ReversalResult is what post_withdraw_reversal SP returns.
 type ReversalResult struct {
-	ReversalTFRKey     int64
+	ReversalTranKey     int64
 	WasAlreadyReversed bool
 	EventUUID          uuid.UUID
 }

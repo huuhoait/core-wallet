@@ -20,7 +20,7 @@ type TopupRequest struct {
 }
 
 type TopupResponse struct {
-	TranInternalID    int64  `json:"tfr_internal_key"`
+	TranInternalID    int64  `json:"tran_internal_key"`
 	Status            string `json:"status"`
 	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	NewBalance        string `json:"new_balance"`
@@ -50,7 +50,7 @@ type TransferRequest struct {
 }
 
 type TransferResponse struct {
-	TranInternalID    int64  `json:"tfr_internal_key"`
+	TranInternalID    int64  `json:"tran_internal_key"`
 	Status            string `json:"status"`
 	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	NewBalanceFrom    string `json:"new_balance_from"`
@@ -87,7 +87,7 @@ type WithdrawRequest struct {
 }
 
 type WithdrawResponse struct {
-	TranInternalID    int64  `json:"tfr_internal_key"`
+	TranInternalID    int64  `json:"tran_internal_key"`
 	Status            string `json:"status"`
 	TransactionStatus string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	NewBalance        string `json:"new_balance"`
@@ -122,7 +122,7 @@ type MerchantWithdrawRequest struct {
 }
 
 type MerchantWithdrawResponse struct {
-	TranInternalID         int64  `json:"tfr_internal_key,omitempty"`
+	TranInternalID         int64  `json:"tran_internal_key,omitempty"`
 	Status                 string `json:"status"`
 	TransactionStatus      string `json:"transaction_status,omitempty"` // ISO 20022 (§13.3)
 	Amount                 string `json:"amount"`
@@ -189,14 +189,14 @@ func MarkRespFrom(r *domain.MarkResult) MarkResponse {
 }
 
 type ReversalResponse struct {
-	ReversalTFRKey     int64  `json:"reversal_tfr_key"`
+	ReversalTranKey     int64  `json:"reversal_tran_key"`
 	WasAlreadyReversed bool   `json:"was_already_reversed"`
 	EventUUID          string `json:"event_uuid,omitempty"`
 }
 
 func ReversalRespFrom(r *domain.ReversalResult) ReversalResponse {
 	out := ReversalResponse{
-		ReversalTFRKey:     r.ReversalTFRKey,
+		ReversalTranKey:     r.ReversalTranKey,
 		WasAlreadyReversed: r.WasAlreadyReversed,
 	}
 	if r.EventUUID.String() != "00000000-0000-0000-0000-000000000000" {
