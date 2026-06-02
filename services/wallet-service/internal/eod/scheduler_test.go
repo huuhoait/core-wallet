@@ -69,7 +69,7 @@ func TestNextFire(t *testing.T) {
 	}
 }
 
-func TestCloseDate(t *testing.T) {
+func TestPriorDay(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Ho_Chi_Minh")
 	if err != nil {
 		t.Fatalf("load tz: %v", err)
@@ -89,8 +89,21 @@ func TestCloseDate(t *testing.T) {
 		{"leap day", time.Date(2028, 3, 1, 0, 30, 0, 0, loc), "2028-02-29"},
 	}
 	for _, tc := range cases {
-		if got := closeDate(tc.now); got != tc.want {
-			t.Errorf("%s: closeDate(%v) = %q, want %q", tc.name, tc.now, got, tc.want)
+		if got := PriorDay(tc.now); got != tc.want {
+			t.Errorf("%s: PriorDay(%v) = %q, want %q", tc.name, tc.now, got, tc.want)
 		}
+	}
+}
+
+func TestCurrentDay(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Ho_Chi_Minh")
+	if err != nil {
+		t.Fatalf("load tz: %v", err)
+	}
+	// GL close seals TODAY's accounting day at the cutoff (post-cutoff postings
+	// carry the next accounting date), so the date passed is the fire-day itself.
+	now := time.Date(2026, 5, 30, 18, 0, 0, 0, loc)
+	if got := CurrentDay(now); got != "2026-05-30" {
+		t.Errorf("CurrentDay(%v) = %q, want %q", now, got, "2026-05-30")
 	}
 }
