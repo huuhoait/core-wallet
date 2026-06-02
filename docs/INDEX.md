@@ -26,6 +26,7 @@ Catalogue of all design documents. Status of the features they describe lives in
 | [specs/finance_transaction.md](specs/finance_transaction.md) | Transaction flows + API specs: top-up, deposit, withdraw, merchant withdraw, transfer, reversal, history. |
 | [specs/wallet_onboarding.md](specs/wallet_onboarding.md) | Onboarding & wallet-opening flow, KYC tiers, state machines, acceptance criteria. |
 | [specs/error_management.md](specs/error_management.md) | Error taxonomy, codes, and handling strategy. |
+| [specs/eod.md](specs/eod.md) | End-of-Day & GL accounting cutoff: the two closes (`run_eod` / `run_gl_close`), tasks T1–T7, write-freeze, the Go scheduler, and **dangerous DB-config / scheduler-config updates** (`WLT_GL_CONFIG.cutoff_time` ↔ `EOD_GL_CUTOFF` drift). |
 | [specs/wallet_gl_coa_spec.md](specs/wallet_gl_coa_spec.md) | GL chart-of-accounts specification (source for `db/seeds/coa/`). |
 | [specs/t24_transaction_posting.md](specs/t24_transaction_posting.md) | T24 core-banking transaction-posting reference. |
 | [specs/k6_sweep.md](specs/k6_sweep.md) | k6 load-test sweep results / notes. |
