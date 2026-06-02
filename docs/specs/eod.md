@@ -271,7 +271,50 @@ Treat the cutoff as **one** setting. To move it (e.g. 18:00 → 19:00):
   ⇒ a TB line/proof field was edited after sealing; `link_ok=false` ⇒ the chain was
   broken/reordered. Read-only (runnable on a replica).
 
-## 9. Where it lives
+## 9. Performance impact of the accounting-day machinery
+
+**Verdict: small and bounded — tens of µs per posting, well under 1 % of posting
+latency. Not a bottleneck.** The cutoff model adds work in three places on the GL
+write path (`WLT_GL_BATCH` insert), none on the balance-update critical section.
+
+What it adds per **GL leg** insert (a posting writes ~2–5 legs):
+
+| Addition | What it costs | Measured (PG17, local, warm/cached) |
+|----------|---------------|-------------------------------------|
+| `accounting_date` DEFAULT = `fn_accounting_date()` | One `WLT_GL_CONFIG` singleton lookup + tz arithmetic, evaluated **once per INSERT statement** (the DEFAULT uses `now()`, which is `STABLE`, so the planner does not re-run it per row) | ~**7 µs** worst case (forced re-eval); the singleton index probe itself is ~0.01 ms cold, sub-µs hot |
+| `fn_freeze_closed_period` BEFORE-ROW trigger | plpgsql invocation + `fn_period_closed_through()` = `max(biz_date) WHERE status='CLOSED'` | Index-Only Scan on `idx_period_closed` (~0.08 ms cold, ~µs hot); early-returns when nothing is sealed yet |
+| `idx_gl_batch_acctdate (accounting_date, ccy)` | One extra B-tree insert per leg (net +1 index; `idx_gl_batch_pending` was *repointed*, not added) | a few µs |
+| `accounting_date` column | +4 bytes/row | negligible |
+
+Rough per-posting overhead ≈ `(≈7 µs default + a few µs trigger + a few µs index) ×
+legs` ≈ **30–85 µs**. Against the warm posting `p(95)` measured in the HTTP load
+test (~7.7 ms) that is **< 1 %** — dominated, as expected, by the balance UPDATE
+(version CAS), the idempotency gate, and the existing multi-table writes, not by
+the cutoff machinery.
+
+**What to watch at very high TPS** (none are problems today, but they are the only
+places this could ever show up):
+- The freeze trigger is **per-row** (fires once per GL leg). At N× legs/posting it
+  is N× plpgsql invocations. If it ever matters, it could be made statement-level
+  or cache the high-water in a GUC.
+- `WLT_GL_CONFIG` and `WLT_PERIOD` are read on **every** leg insert. They are
+  1-row / few-row, fully cached, **MVCC reads with no lock contention** (cutoff and
+  the closed-period high-water change ~never), so they do not serialise posting.
+- `idx_gl_batch_pending` is partial (`WHERE status='P'`): a leg enters it on insert
+  and leaves it when `eod_gl_feed_post` flips `P→S` — normal churn, same profile as
+  before the cutoff (the index was repointed `post_date → accounting_date`, not added).
+
+**EOD side**: `eod_gl_feed_post` and `eod_trial_balance` scan by `accounting_date`,
+both index-supported (`idx_gl_batch_pending` / `idx_gl_batch_acctdate`); the trial
+balance aggregates over the small fixed COA set in one short TX. No regression vs
+the prior `post_date`-keyed scans.
+
+> Caveat: the figures above are component micro-benchmarks on an idle local DB
+> (PG17), not an end-to-end A/B of posting throughput. For a definitive number,
+> compare posting `p(95)` / TPS via the k6 tier with the trigger + default present
+> vs a baseline — the expected delta is in the noise.
+
+## 10. Where it lives
 
 | Concern | Location |
 |---------|----------|
