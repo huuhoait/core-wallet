@@ -35,9 +35,10 @@ Catalogue of all design documents. Status of the features they describe lives in
 
 | Concern | Location |
 |---------|----------|
-| Database schema (DDL) | [`../db/ddl/`](../db/ddl/) |
-| Posting stored procedures | [`../db/procedures/`](../db/procedures/) |
-| Seeds & reference data | [`../db/seeds/`](../db/seeds/) |
+| Schema + procedures (consolidated DDL) | [`../db/export/schema.sql`](../db/export/schema.sql) |
+| Monthly partitions | [`../db/export/partitions.sql`](../db/export/partitions.sql) |
+| Reference / master seed | [`../db/export/seed.sql`](../db/export/seed.sql) |
+| Load-test & demo fixtures | [`../db/seeds/`](../db/seeds/) |
 | SQL test suites | [`../db/tests/`](../db/tests/) |
 | Go service | [`../services/wallet-service/`](../services/wallet-service/) |
 | Deploy (docker, loadtest) | [`../deploy/`](../deploy/) |
