@@ -6,8 +6,13 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PEAK="${PEAK:-200}"
-DURATION="${DURATION:-12000}"
-export BASE_URL="${BASE_URL:-http://localhost:8100}"
+DURATION="${DURATION:-7200}"
+
+# Initialize the load test data
+#bash "$DIR/init_k6_data.sh"
+
+export BASE_URL="${BASE_URL:-http://localhost:8019}"
 export REPORT="$DIR/reports/k6__$(date +%Y%m%d_%H%M%S)_${PEAK}peak_${DURATION}s.md"
 
 bash "$DIR/k6.sh" -e PEAK="$PEAK" -e DURATION="$DURATION"
+#docker exec wallet-postgres psql -U postgres -d wallet -c "ALTER DATABASE wallet SET app.pii_dek = 'dev-loadtest-pii-dek-do-not-use-in-prod';"

@@ -68,6 +68,7 @@ echo "▶ WLT_TRAN_HIST high-water SEQ_NO before run: $s0"
 # threshold-breach non-zero exit skip the report — capture it and re-raise after.
 PTS="$(mktemp -t k6pts.XXXXXX)"
 START_AT="$(date '+%Y-%m-%d %H:%M:%S %z')"
+START_EPOCH="$(date +%s)"   # bounds `docker logs --since` to THIS run for the error analysis
 
 # Background docker-stats sampler: snapshot CPU%/MEM of the running stack containers
 # every ~2s for the duration of the k6 run. Each `docker stats --no-stream` line is
@@ -143,6 +144,41 @@ codes_tbl="$(jq -r '
     | select(.key | test("^outcome\\{code:"))
     | { code: (.key | capture("code:(?<c>.+)\\}").c), n: (.value.values.count // 0) }
     | select(.n > 0) ] | sort_by(-.n)[] | "\(.code)|\(.n)"' "$JSON")"
+
+# ── error breakdown for the "Error analysis" section ──
+# failed_count = http_req_failed rate × total reqs. unlisted = `outcome` responses
+# carrying NO known business code — these are HTTP_0 dial errors, or a 5xx whose
+# envelope `code` isn't a KNOWN_OUTCOMES label (k6 only materialises a code submetric
+# for labels listed in thresholds, so anything else only shows up in this gap).
+failed_count="$(awk -v r="$fail_rate" -v n="$reqs_count" 'BEGIN{ printf "%d", (r/100*n)+0.5 }')"
+codes_listed="$(jq -r '[ .metrics | to_entries[] | select(.key|test("^outcome\\{code:")) | (.value.values.count // 0) ] | add // 0' "$JSON")"
+unlisted=$(( codes_total > codes_listed ? codes_total - codes_listed : 0 ))
+
+# Probe the Go service log over THIS run's window to tell server-side failures (real
+# 5xx / `operation failed`) apart from client-side dial errors (HTTP_0 at ramp start,
+# which never reach the server). Source: `docker logs wallet-service --since <start>`
+# when the container is up, else $SVC_LOG (a local `go run` log file — whole file, so
+# not time-bounded). Degrades to "not inspected" when neither is available.
+# Explicit $SVC_LOG wins (you're testing a local `go run` whose log you point at);
+# otherwise fall back to the dockerised service's logs, time-bounded to this run.
+srv_src=""; srv_log=""
+if [ -n "${SVC_LOG:-}" ] && [ -r "${SVC_LOG:-}" ]; then
+  srv_log="$(cat "$SVC_LOG" 2>/dev/null || true)"
+  srv_src="${SVC_LOG} (whole file — not time-bounded)"
+else
+  case " $STAT_CTNS " in *" wallet-service "*)
+    srv_log="$(docker logs wallet-service --since "$START_EPOCH" 2>&1 || true)"
+    srv_src="docker logs wallet-service (since run start)" ;;
+  esac
+fi
+gin_5xx="$(printf '%s' "$srv_log" | grep -cE '\| 5[0-9]{2} \|' || true)"
+# Aggregate `operation failed` WARN lines (pure JSON) by op+code, most frequent first.
+# ONLY 5xx: the Go layer logs every non-2xx outcome as WARN "operation failed",
+# including handled business rejections (409 VERSION_CONFLICT, 422 AMOUNT_OUT_OF_RANGE,
+# …) that are NOT counted in http_req_failed. Filtering on http_status>=500 keeps just
+# the genuine server-side failures, so a clean run yields an empty table (→ benign).
+op_errs="$(printf '%s' "$srv_log" | grep '"msg":"operation failed"' \
+  | jq -rc 'select((.http_status // 0) >= 500) | "\(.op)|\(.code)"' 2>/dev/null | sort | uniq -c | sort -rn || true)"
 
 # ── assemble the markdown report ──
 {
@@ -230,6 +266,34 @@ codes_tbl="$(jq -r '
     done
   else
     echo "_(no docker stats samples — stack containers not running, or docker unavailable)_"
+  fi
+  echo
+  echo "## Error analysis — http_req_failed $(f2 "$fail_rate")%"
+  echo
+  if [ "${failed_count:-0}" -eq 0 ] && [ "${unlisted:-0}" -eq 0 ] && [ "${gin_5xx:-0}" -eq 0 ]; then
+    echo "✓ No failed requests — every response was a handled business outcome (see the code table above)."
+  else
+    echo "**Aggregate:** ${failed_count} of ${reqs_count} requests failed (http_req_failed $(f2 "$fail_rate")%). ${unlisted} response(s) carried no known business \`code\` (unclassified — \`HTTP_0\` dial errors, or a 5xx whose envelope code isn't a known label)."
+    echo
+    if [ -n "$op_errs" ] || [ "${gin_5xx:-0}" -gt 0 ]; then
+      echo "**Server-side errors found in the log** (${srv_src}; ${gin_5xx} GIN 5xx line(s)):"
+      echo
+      echo "| Count | Operation | Error code |"
+      echo "|---:|---|---|"
+      while read -r _cnt _rest; do
+        [ -z "$_cnt" ] && continue
+        _op="${_rest%%|*}"; _code="${_rest#*|}"; _code="${_code//|/\\|}"
+        echo "| ${_cnt} | ${_op} | ${_code} |"
+      done <<< "$op_errs"
+      echo
+      echo "→ These are real service-side failures — investigate (commonly a missing config GUC, an SP \`RAISE EXCEPTION\`, or a dependency timeout), not load-generator noise."
+    elif [ -n "$srv_src" ]; then
+      echo "**No HTTP 5xx (server-side failure) in the service log** for this run window (${srv_src}); any \`operation failed\` lines there are handled 4xx business rejections, not infra errors."
+      echo
+      echo "→ The ${failed_count} failure(s) never reached the server: client-side connection errors (\`HTTP_0\`) during the arrival-rate ramp warm-up. **Benign** — to remove them, prepend a short \`{ target: 10 }\` warm-up stage before stepping to PEAK, or raise \`startRate\`."
+    else
+      echo "_Service log not inspected (the \`wallet-service\` container isn't running and \`SVC_LOG\` is unset)._ If the code table above shows only handled outcomes, the ${failed_count} failure(s) are most likely ramp warm-up connection errors. Set \`SVC_LOG=/path/to/service.log\` (or run the dockerised service) to have this section classify them automatically."
+    fi
   fi
 } > "$REPORT"
 
