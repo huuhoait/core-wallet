@@ -6,8 +6,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PEAK="${PEAK:-200}"
-DURATION="${DURATION:-1200}"
+DURATION="${DURATION:-12000}"
 export BASE_URL="${BASE_URL:-http://localhost:8100}"
-export REPORT="$DIR/reports/k6_${PEAK}peak_${DURATION}s_$(date +%Y%m%d_%H%M%S).md"
+export REPORT="$DIR/reports/k6__$(date +%Y%m%d_%H%M%S)_${PEAK}peak_${DURATION}s.md"
 
 bash "$DIR/k6.sh" -e PEAK="$PEAK" -e DURATION="$DURATION"
