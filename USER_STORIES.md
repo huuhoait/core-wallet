@@ -28,11 +28,11 @@ docs alone).
 | 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
 | 6. Accounting & GL Operations | 6 | 1 | 2 |
-| 7. Eventing & Integration | 1 | 0 | 2 |
+| 7. Eventing & Integration | 1 | 0 | 3 |
 | 8. Audit, PII & Compliance | 2 | 1 | 2 |
 | 9. Platform / Infra / Observability | 11 | 0 | 6 |
 | 10. Quality — Testing & Load | 8 | 1 | 0 |
-| **Total** | **52** | **3** | **24** |
+| **Total** | **52** | **3** | **25** |
 
 ---
 
@@ -148,6 +148,7 @@ docs alone).
 | US-7.1 | Every posting writes a Kafka event row atomically (transactional outbox) | ✅ | `WLT_OUTBOX`; `INSERT INTO WLT_OUTBOX` inside every posting SP. |
 | US-7.2 | Relay outbox → Kafka (Debezium CDC primary, Go polling worker fallback) | ⬜ | HLD v1.9. Table only; no relay worker (`cmd/` has server only). |
 | US-7.3 | Downstream consumers react to `withdraw.posted` etc. | ⬜ | Out of scope here (Treasury Service). |
+| US-7.4 | As a downstream consumer, every outbox event carries a **consistent transaction-metadata envelope** (reference, tran_type, channel, actor, occurred_at, client/counterparty, schema version) so events are self-describing and routable **without joining back to the ledger** | ⬜ | **Enrichment of US-7.1**, not greenfield: the `INSERT INTO WLT_OUTBOX` in every posting/reversal SP (`db/export/schema.sql`) already emits *some* business fields (`tran_internal_id`, `amount`, `fee_gross`/`vat_amount`, `ext_payout_ref`, `ccy`, `group_id`), but the shape **varies per SP** and key meta is missing: most payloads omit the client **`reference`** (idempotency/external ref) and **`tran_type`**; `HEADERS` carries only `traceparent`; the `WLT_OUTBOX.CHANNEL` column is left **NULL** (posting INSERTs don't pass it) and `CREATED_BY` falls back to `SYSTEM` instead of `audit.actor`; `EVENT_VERSION` is a flat `'v1'` with no documented schema. Scope: define one canonical event envelope (meta keys + headers), populate it uniformly across all emitters (incl. the `CHANNEL`/`CREATED_BY`/`occurred_at` columns from the per-TX audit GUCs that `withTx` already sets), and pin a versioned JSON schema. Prerequisite for clean relay (US-7.2) and consumer routing/replay (US-7.3). Design-only. |
 
 ## Epic 8 — Audit, PII & Compliance / Audit, PII & tuân thủ
 
