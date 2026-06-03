@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -15,8 +15,7 @@ import (
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/config"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/producer"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/worker"
-	"github.com/huuhohoait/core-wallet/outbox-relay/pkg/models"
-	"github.com/huuhohoait/core-wallet/outbox-relay/pkg/utils"
+	"github.com/huuhoait/core-wallet/outbox-relay/pkg/utils"
 )
 
 func main() {
@@ -87,7 +86,7 @@ func initLogger() *zerolog.Logger {
 		Str("service", "outbox-relay").
 		Logger()
 
-	return logger
+	return &logger
 }
 
 // startMetricsServer starts the HTTP metrics server

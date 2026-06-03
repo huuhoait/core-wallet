@@ -1,13 +1,6 @@
 package worker
 
-import (
-	"context"
-	"testing"
-	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-)
+import "testing"
 
 func TestRepository_FetchPendingEvents(t *testing.T) {
 	// This test requires a real database connection
