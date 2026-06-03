@@ -12,8 +12,8 @@ import (
 )
 
 // Producer publishes outbox events via a synchronous Kafka producer. The worker
-// needs the per-message broker ack BEFORE it marks the source row processed, so
-// the outbox guarantee is at-least-once.
+// needs the per-message broker ack (and its partition/offset) BEFORE it marks the
+// source row SENT, so the outbox guarantee is at-least-once.
 type Producer struct {
 	sync   sarama.SyncProducer
 	logger *zerolog.Logger
@@ -38,22 +38,23 @@ func NewProducer(cfg *config.Config, logger *zerolog.Logger) (*Producer, error) 
 	return &Producer{sync: sp, logger: logger}, nil
 }
 
-// Publish sends one message synchronously, returning the error so the caller can
-// decide whether to mark the source row processed or schedule a retry.
-func (p *Producer) Publish(msg models.KafkaMessage) error {
+// Publish sends one message synchronously and returns the partition+offset it
+// landed on (so the caller can record them) plus any error.
+func (p *Producer) Publish(msg models.KafkaMessage) (int32, int64, error) {
 	headers := make([]sarama.RecordHeader, 0, len(msg.Headers))
 	for k, v := range msg.Headers {
 		headers = append(headers, sarama.RecordHeader{Key: []byte(k), Value: []byte(v)})
 	}
-	if _, _, err := p.sync.SendMessage(&sarama.ProducerMessage{
+	partition, offset, err := p.sync.SendMessage(&sarama.ProducerMessage{
 		Topic:   msg.Topic,
 		Key:     sarama.StringEncoder(msg.Key),
 		Value:   sarama.ByteEncoder(msg.Value),
 		Headers: headers,
-	}); err != nil {
-		return fmt.Errorf("producer: send to %s: %w", msg.Topic, err)
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("producer: send to %s: %w", msg.Topic, err)
 	}
-	return nil
+	return partition, offset, nil
 }
 
 // Close flushes and closes the underlying producer.

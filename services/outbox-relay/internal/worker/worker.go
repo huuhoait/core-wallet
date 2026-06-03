@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -15,9 +16,10 @@ import (
 
 // Producer is the subset of the Kafka producer the worker needs. Keeping it an
 // interface (rather than importing the producer package) avoids an import cycle
-// and lets the worker be unit-tested with a fake.
+// and lets the worker be unit-tested with a fake. Publish returns the
+// partition+offset the message landed on so they can be stamped back on the row.
 type Producer interface {
-	Publish(msg models.KafkaMessage) error
+	Publish(msg models.KafkaMessage) (int32, int64, error)
 }
 
 // Worker runs a pool of goroutines that poll WLT_OUTBOX and relay pending events
@@ -50,8 +52,7 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 // Stop signals the loops to finish and waits for in-flight batches to complete
-// (graceful: a claimed batch's transaction either commits or rolls back before
-// the goroutine exits).
+// (graceful: a claimed batch's transaction commits or rolls back before exit).
 func (w *Worker) Stop() {
 	if w.cancel != nil {
 		w.cancel()
@@ -91,8 +92,8 @@ func (w *Worker) run(ctx context.Context, id int) {
 
 // processBatch claims and relays one batch inside a single transaction so the
 // SKIP LOCKED row locks are held across the publishes. Successful publishes are
-// marked processed; failures get retry_count bumped (left pending). Returns the
-// number of rows claimed.
+// marked SENT (with their kafka partition/offset); failures get attempts bumped
+// (FAILED, or DEAD once exhausted). Returns the number of rows claimed.
 func (w *Worker) processBatch(ctx context.Context) (int, error) {
 	start := time.Now()
 
@@ -113,26 +114,30 @@ func (w *Worker) processBatch(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	var okIDs, failIDs []int64
+	var sent []models.SentRef
+	var failIDs []int64
+	var lastErr string
 	for _, e := range events {
-		if err := w.producer.Publish(w.toMessage(e)); err != nil {
-			failIDs = append(failIDs, e.ID)
+		partition, offset, perr := w.producer.Publish(w.toMessage(e))
+		if perr != nil {
+			failIDs = append(failIDs, e.EventID)
+			lastErr = perr.Error()
 			w.metrics.IncrementErrors("publish")
-			w.logger.Warn().Err(err).
+			w.logger.Warn().Err(perr).
 				Str("event_uuid", e.EventUUID).
 				Str("event_type", e.EventType).
-				Int("retry_count", e.RetryCount).
+				Int("attempts", e.Attempts).
 				Msg("publish failed — will retry")
 			continue
 		}
-		okIDs = append(okIDs, e.ID)
+		sent = append(sent, models.SentRef{EventID: e.EventID, Partition: partition, Offset: offset})
 		w.metrics.IncrementSuccess()
 	}
 
-	if err := w.repo.MarkAsProcessed(ctx, tx, okIDs); err != nil {
+	if err := w.repo.MarkSent(ctx, tx, sent); err != nil {
 		return 0, err
 	}
-	if err := w.repo.IncrementRetryCount(ctx, tx, failIDs); err != nil {
+	if err := w.repo.MarkFailed(ctx, tx, failIDs, lastErr, w.cfg.MaxRetries); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -143,17 +148,22 @@ func (w *Worker) processBatch(ctx context.Context) (int, error) {
 	return len(events), nil
 }
 
-// toMessage maps an outbox row to its Kafka message: topic = prefix.event_type,
-// key = event_uuid (all events of one entity hash to the same partition → order
-// preserved per entity), value = the raw JSON payload.
+// toMessage maps an outbox row to its Kafka message. Topic, key (partition_key)
+// and payload were chosen at write time; headers (jsonb object) are decoded into
+// string→string (best-effort: a non-object/garbled headers value is dropped, not
+// fatal — the payload still ships).
 func (w *Worker) toMessage(e models.OutboxEvent) models.KafkaMessage {
+	var headers map[string]string
+	if len(e.Headers) > 0 {
+		if err := json.Unmarshal(e.Headers, &headers); err != nil {
+			w.logger.Warn().Err(err).Str("event_uuid", e.EventUUID).Msg("unparseable headers — dropping")
+			headers = nil
+		}
+	}
 	return models.KafkaMessage{
-		Topic: fmt.Sprintf("%s.%s", w.cfg.KafkaTopicPrefix, e.EventType),
-		Key:   e.EventUUID,
-		Value: e.Payload,
-		Headers: map[string]string{
-			"event_type": e.EventType,
-			"event_uuid": e.EventUUID,
-		},
+		Topic:   e.Topic,
+		Key:     e.PartitionKey,
+		Value:   e.Payload,
+		Headers: headers,
 	}
 }

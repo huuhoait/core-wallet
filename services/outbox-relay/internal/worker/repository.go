@@ -12,11 +12,11 @@ import (
 	"github.com/huuhoait/core-wallet/outbox-relay/pkg/models"
 )
 
-// Repository reads and updates WLT_OUTBOX over a pgx connection pool. One
+// Repository reads and updates the wallet WLT_OUTBOX over a pgx pool. One
 // claim-and-mark cycle runs inside a single transaction (see worker.processBatch)
 // so the row locks taken by FetchPendingEvents (FOR UPDATE SKIP LOCKED) are held
 // across the Kafka publish — that is what lets multiple workers poll the same
-// table without ever processing a row twice.
+// table without ever publishing a row twice.
 type Repository struct {
 	pool   *pgxpool.Pool
 	logger *zerolog.Logger
@@ -41,14 +41,14 @@ func (r *Repository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 	return r.pool.Begin(ctx)
 }
 
-// FetchPendingEvents claims up to limit unprocessed rows, oldest first, locking
-// them with FOR UPDATE SKIP LOCKED so concurrent workers skip already-claimed
-// rows instead of blocking.
+// FetchPendingEvents claims up to limit un-sent rows (PENDING or a FAILED row due
+// for retry), oldest first, locking them with FOR UPDATE SKIP LOCKED so concurrent
+// workers skip already-claimed rows instead of blocking.
 func (r *Repository) FetchPendingEvents(ctx context.Context, tx pgx.Tx, limit int) ([]models.OutboxEvent, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id, event_uuid::text, event_type, payload, created_at, processed_at, retry_count
+		SELECT event_id, event_uuid::text, event_type, topic, partition_key, payload, headers, attempts, created_at
 		  FROM public.wlt_outbox
-		 WHERE processed_at IS NULL
+		 WHERE status IN ('PENDING', 'FAILED')
 		 ORDER BY created_at
 		 FOR UPDATE SKIP LOCKED
 		 LIMIT $1`, limit)
@@ -60,8 +60,8 @@ func (r *Repository) FetchPendingEvents(ctx context.Context, tx pgx.Tx, limit in
 	var events []models.OutboxEvent
 	for rows.Next() {
 		var e models.OutboxEvent
-		if err := rows.Scan(&e.ID, &e.EventUUID, &e.EventType, &e.Payload,
-			&e.CreatedAt, &e.ProcessedAt, &e.RetryCount); err != nil {
+		if err := rows.Scan(&e.EventID, &e.EventUUID, &e.EventType, &e.Topic,
+			&e.PartitionKey, &e.Payload, &e.Headers, &e.Attempts, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("repository: scan outbox row: %w", err)
 		}
 		events = append(events, e)
@@ -72,28 +72,56 @@ func (r *Repository) FetchPendingEvents(ctx context.Context, tx pgx.Tx, limit in
 	return events, nil
 }
 
-// MarkAsProcessed stamps processed_at = now() for the given ids (successful
-// publishes), within the supplied transaction.
-func (r *Repository) MarkAsProcessed(ctx context.Context, tx pgx.Tx, ids []int64) error {
-	if len(ids) == 0 {
+// MarkSent flips successfully-published rows to SENT and records where each one
+// landed (kafka_partition / kafka_offset), in one bulk UPDATE.
+func (r *Repository) MarkSent(ctx context.Context, tx pgx.Tx, sent []models.SentRef) error {
+	if len(sent) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE public.wlt_outbox SET processed_at = now() WHERE id = ANY($1)`, ids); err != nil {
-		return fmt.Errorf("repository: mark processed: %w", err)
+	ids := make([]int64, len(sent))
+	parts := make([]int32, len(sent))
+	offs := make([]int64, len(sent))
+	for i, s := range sent {
+		ids[i], parts[i], offs[i] = s.EventID, s.Partition, s.Offset
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE public.wlt_outbox o
+		   SET status          = 'SENT',
+		       sent_at         = now(),
+		       attempts        = o.attempts + 1,
+		       kafka_partition = v.part,
+		       kafka_offset    = v.off,
+		       updated_at      = now(),
+		       updated_by      = 'outbox-relay'
+		  FROM (SELECT unnest($1::bigint[]) AS id,
+		               unnest($2::int[])    AS part,
+		               unnest($3::bigint[]) AS off) v
+		 WHERE o.event_id = v.id`, ids, parts, offs); err != nil {
+		return fmt.Errorf("repository: mark sent: %w", err)
 	}
 	return nil
 }
 
-// IncrementRetryCount bumps retry_count for rows whose publish failed, leaving
-// processed_at NULL so they are retried on a later poll.
-func (r *Repository) IncrementRetryCount(ctx context.Context, tx pgx.Tx, ids []int64) error {
+// MarkFailed bumps attempts for rows whose publish failed and records the error.
+// A row stays retryable (status FAILED → re-polled) until it reaches maxAttempts,
+// after which it is parked as DEAD.
+func (r *Repository) MarkFailed(ctx context.Context, tx pgx.Tx, ids []int64, errMsg string, maxAttempts int) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE public.wlt_outbox SET retry_count = retry_count + 1 WHERE id = ANY($1)`, ids); err != nil {
-		return fmt.Errorf("repository: increment retry: %w", err)
+	if len(errMsg) > 500 {
+		errMsg = errMsg[:500]
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE public.wlt_outbox
+		   SET attempts        = attempts + 1,
+		       last_attempt_at = now(),
+		       last_error      = $2,
+		       status          = CASE WHEN attempts + 1 >= $3 THEN 'DEAD' ELSE 'FAILED' END,
+		       updated_at      = now(),
+		       updated_by      = 'outbox-relay'
+		 WHERE event_id = ANY($1)`, ids, errMsg, maxAttempts); err != nil {
+		return fmt.Errorf("repository: mark failed: %w", err)
 	}
 	return nil
 }

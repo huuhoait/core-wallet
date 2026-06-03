@@ -1,51 +1,35 @@
+// Package models holds the data types shared across the outbox relay.
 package models
 
-import (
-	"time"
-)
+import "time"
 
-// OutboxEvent represents a row from WLT_OUTBOX table
+// OutboxEvent is one row of the wallet WLT_OUTBOX table (the transactional
+// outbox written by the posting stored procedures). The relay reads PENDING /
+// FAILED rows and publishes them to the topic the producer already chose.
 type OutboxEvent struct {
-	ID          int64     `json:"id"`
-	EventUUID   string    `json:"event_uuid"`
-	EventType   string    `json:"event_type"`
-	Payload     []byte    `json:"payload"`
-	CreatedAt   time.Time `json:"created_at"`
-	ProcessedAt *time.Time `json:"processed_at,omitempty"`
-	RetryCount  int       `json:"retry_count"`
+	EventID      int64     // event_id (PK)
+	EventUUID    string    // event_uuid
+	EventType    string    // event_type
+	Topic        string    // topic — the destination Kafka topic, decided at write time
+	PartitionKey string    // partition_key — the Kafka message key
+	Payload      []byte    // payload (jsonb)
+	Headers      []byte    // headers (jsonb object; nil when SQL NULL)
+	Attempts     int       // attempts so far
+	CreatedAt    time.Time // created_at
 }
 
-// KafkaMessage represents a message to be sent to Kafka
+// KafkaMessage is one message to publish.
 type KafkaMessage struct {
-	Topic   string          `json:"topic"`
-	Key     string          `json:"key"`
-	Value   []byte          `json:"value"`
-	Headers map[string]string `json:"headers"`
+	Topic   string
+	Key     string
+	Value   []byte
+	Headers map[string]string
 }
 
-// WorkerConfig holds configuration for the outbox worker
-type WorkerConfig struct {
-	// Database
-	DBHost     string `env:"DB_HOST" envDefault:"localhost"`
-	DBPort     int    `env:"DB_PORT" envDefault:"5432"`
-	DBUser     string `env:"DB_USER" envDefault:"wallet_app"`
-	DBPassword string `env:"DB_PASSWORD" envDefault:""`
-	DBName     string `env:"DB_NAME" envDefault:"wallet"`
-	
-	// Kafka
-	KafkaBrokers []string `env:"KAFKA_BROKERS" envDefault:"localhost:9092"`
-	KafkaTopic   string   `env:"KAFKA_TOPIC_PREFIX" envDefault:"wallet"`
-	
-	// Worker
-	PollInterval   time.Duration `env:"POLL_INTERVAL" envDefault:"1s"`
-	BatchSize      int           `env:"BATCH_SIZE" envDefault:"100"`
-	MaxRetries     int           `env:"MAX_RETRIES" envDefault:"3"`
-	RetryDelay     time.Duration `env:"RETRY_DELAY" envDefault:"5s"`
-	WorkerCount    int           `env:"WORKER_COUNT" envDefault:"4"`
-	
-	// Monitoring
-	MetricsPort int `env:"METRICS_PORT" envDefault:"9090"`
-	
-	// Logging
-	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
+// SentRef records where a successfully published event landed, so the relay can
+// stamp kafka_partition / kafka_offset back onto the outbox row.
+type SentRef struct {
+	EventID   int64
+	Partition int32
+	Offset    int64
 }
