@@ -222,7 +222,7 @@ WLT (transactional) ──FK──▶ FM (master, read-only from WLT)
 **FK rules**:
 - WLT chỉ SELECT từ FM
 - Mọi mutation FM đi qua FM Admin Service với maker-checker
-- `WLT_CLIENT_AUDIT_LOG` trigger có thể attach lên FM_CLIENT* nếu coordinate được với FM team
+- `FM_CLIENT_AUDIT_LOG` trigger có thể attach lên FM_CLIENT* nếu coordinate được với FM team
 
 ---
 
@@ -258,10 +258,10 @@ erDiagram
     FM_CURRENCY           ||--o{ FM_NOS_VOS             : "ccy"
 
     %% ===== FM ↔ WLT crossings =====
-    FM_CLIENT             ||--o{ WLT_CLIENT_KYC         : "kyc info"
+    FM_CLIENT             ||--o{ FM_CLIENT_KYC         : "kyc info"
     FM_CLIENT             ||--o{ WLT_ACCT               : "owns wallet"
     FM_CLIENT             ||--o{ WLT_ACCT_GROUP         : "owns merchant/agent group"
-    FM_CLIENT             ||--o{ WLT_CLIENT_AUDIT_LOG   : "change history"
+    FM_CLIENT             ||--o{ FM_CLIENT_AUDIT_LOG   : "change history"
     FM_CURRENCY           ||--o{ WLT_ACCT               : "ccy"
     FM_CURRENCY           ||--o{ WLT_GL_BATCH              : "ccy"
     FM_GL_MAST            ||--o{ WLT_ACCT_TYPE          : "liability GL"
@@ -276,7 +276,7 @@ erDiagram
     WLT_ACCT_GROUP        ||--o{ WLT_RESTRAINTS         : "group-level scope"
     WLT_ACCT_GROUP        ||--o{ WLT_SWEEP_LOG          : "sweep audit"
     WLT_TRAN_DEF          ||--o{ WLT_TRAN_HIST          : "tran type"
-    WLT_CLIENT_KYC        ||--o{ WLT_CLIENT_AUDIT_LOG   : "change history"
+    FM_CLIENT_KYC        ||--o{ FM_CLIENT_AUDIT_LOG   : "change history"
 
     %% ===== WLT tier — transactional =====
     WLT_ACCT              ||--o{ WLT_ACCT_BAL           : "daily snapshot"
@@ -348,7 +348,7 @@ erDiagram
         VARCHAR ACCT_NO
     }
 
-    WLT_CLIENT_KYC {
+    FM_CLIENT_KYC {
         BIGINT      KYC_ID PK
         VARCHAR     CLIENT_NO FK
         VARCHAR     PHONE_NO_ENC
@@ -492,7 +492,7 @@ erDiagram
         VARCHAR     STATUS
         TIMESTAMPTZ CREATED_AT
     }
-    WLT_CLIENT_AUDIT_LOG {
+    FM_CLIENT_AUDIT_LOG {
         BIGINT      AUDIT_ID PK
         VARCHAR     CLIENT_NO FK
         VARCHAR     TABLE_NAME
@@ -513,7 +513,7 @@ erDiagram
 > - 1 transfer transaction → 3 `WLT_TRAN_HIST` rows (DR + CR + FEETRF) linked by `TRAN_INTERNAL_ID`
 > - 1 withdraw transaction → 2 `WLT_TRAN_HIST` + 1 `WLT_WITHDRAW_TRACK` + 5 `WLT_GL_BATCH` + 1 `WLT_OUTBOX`
 > - 1 atomic posting → exactly 1 `WLT_OUTBOX` row (`AGGREGATE_ID = TRAN_INTERNAL_ID`)
-> - 1 client-table mutation → 1 `WLT_CLIENT_AUDIT_LOG` row (via trigger)
+> - 1 client-table mutation → 1 `FM_CLIENT_AUDIT_LOG` row (via trigger)
 
 ### 7.1.1 Table inventory by category
 
@@ -524,13 +524,13 @@ FM TIER (read-only from WLT, FK target only)
   Reference:   FM_CURRENCY, FM_GL_MAST, FM_NOS_VOS
 
 WLT TIER
-  Master:      WLT_ACCT_TYPE, WLT_CLIENT_KYC, WLT_TRAN_DEF, WLT_GL_MAP,
+  Master:      WLT_ACCT_TYPE, FM_CLIENT_KYC, WLT_TRAN_DEF, WLT_GL_MAP,
                WLT_NOSTRO_LINK, WLT_ACCT_GROUP
   Account:     WLT_ACCT, WLT_ACCT_BAL
   Ledger:      WLT_TRAN_HIST, WLT_GL_BATCH
   Control:     WLT_RESTRAINTS, WLT_API_MESSAGE
   Async:       WLT_OUTBOX, WLT_WITHDRAW_TRACK
-  Audit:       WLT_CLIENT_AUDIT_LOG, WLT_SWEEP_LOG
+  Audit:       FM_CLIENT_AUDIT_LOG, WLT_SWEEP_LOG
   Recon:       WLT_NOSTRO_BAL
 ```
 
@@ -546,7 +546,7 @@ WLT TIER
 - **Không** MERGE PARTITION yearly (chưa cần).
 - **Không** DETACH + archive (chưa cần).
 
-`WLT_OUTBOX`, `WLT_CLIENT_AUDIT_LOG`, `WLT_ACCT_BAL`: cũng monthly partition, tạo tay.
+`WLT_OUTBOX`, `FM_CLIENT_AUDIT_LOG`, `WLT_ACCT_BAL`: cũng monthly partition, tạo tay.
 
 ### 7.3 Data principles (giữ nguyên HLD gốc §5.2)
 
@@ -554,7 +554,7 @@ WLT TIER
 2. Append-only `WLT_TRAN_HIST`
 3. Idempotent (REFERENCE unique)
 4. Atomic (1 business tran = 1 DB tran)
-5. Auditability (`WLT_OLTP_AUDIT` + `WLT_API_TRACE` + `WLT_CLIENT_AUDIT_LOG`)
+5. Auditability (`WLT_OLTP_AUDIT` + `WLT_API_TRACE` + `FM_CLIENT_AUDIT_LOG`)
 6. Time-aware (`TRAN_DATE` ≠ `EFFECT_DATE` ≠ `POST_DATE` ≠ `VALUE_DATE`)
 7. FM read-only from WLT
 8. Point-in-time customer snapshot (`CLIENT_INFO` JSONB)
@@ -658,7 +658,7 @@ VAT remittance hàng tháng: DR `GL 203.01` / CR operational nostro.
 | **Data retention** | 18 months online, 10 years archive | Y1 chưa cần archive — basic monthly partition + daily backup là đủ |
 | **Encryption** | TLS 1.3 transit, AES-256 at rest, column-level PII | KMS-managed DEK (§10.3) |
 | **PII protection** | Decree 13/2023 + Cybersecurity Law 2018 | §10.3 inherits từ HLD gốc §8.3 không đổi |
-| **Audit** | 100% transactions traceable; client-info changes captured by trigger | `WLT_OUTBOX` + `WLT_CLIENT_AUDIT_LOG` |
+| **Audit** | 100% transactions traceable; client-info changes captured by trigger | `WLT_OUTBOX` + `FM_CLIENT_AUDIT_LOG` |
 | **Compliance** | Decree 52/2024, Circular 23/2019, ISO 27001 | Full |
 
 ---
@@ -684,7 +684,7 @@ VAT remittance hàng tháng: DR `GL 203.01` / CR operational nostro.
 | **Kafka event dropped** | `WLT_OUTBOX` transactional outbox + polling relay |
 | **Withdraw debited but never disbursed** | `WLT_WITHDRAW_TRACK` + SLA janitor auto-reverse at 24h |
 | Unauthorized PII access | Column encryption + RBAC + audit log §10.3 |
-| Unauthorized client-info change | `WLT_CLIENT_AUDIT_LOG` trigger + maker-checker fields |
+| Unauthorized client-info change | `FM_CLIENT_AUDIT_LOG` trigger + maker-checker fields |
 
 ### 10.3 PII Protection (inherits HLD gốc §8.3 verbatim)
 
@@ -695,11 +695,11 @@ VAT remittance hàng tháng: DR `GL 203.01` / CR operational nostro.
 - Masking views (`v_client_masked`, `v_kyc_masked`)
 - `WLT_PII_ACCESS_LOG` immutable WORM
 - 72h breach notification SLA to MPS (Decree 13/2023)
-- Audit của client-info changes via `WLT_CLIENT_AUDIT_LOG` trigger (§10.4)
+- Audit của client-info changes via `FM_CLIENT_AUDIT_LOG` trigger (§10.4)
 
 ### 10.4 Client-info change audit (NEW vs gốc)
 
-Mọi INSERT/UPDATE/DELETE trên `WLT_CLIENT_KYC` (và recommended FM_CLIENT* via coordination) đi qua trigger `fn_audit_client_change`:
+Mọi INSERT/UPDATE/DELETE trên `FM_CLIENT_KYC` (và recommended FM_CLIENT* via coordination) đi qua trigger `fn_audit_client_change`:
 
 - OLD/NEW JSONB + diff `CHANGED_FIELDS[]`
 - Application set `SET LOCAL audit.actor/source/reason/maker_id/checker_id` per TX
@@ -898,7 +898,7 @@ max_prepared_statements = 200
 ## 16. References
 
 - `wallet_HLD.md` — comprehensive design for 2K/5K TPS, multi-tier lifecycle, sharding, Debezium
-- `wallet_DLD.md` — table-level DDL (v1.6.6 — includes METADATA/CLIENT_INFO + WLT_CLIENT_AUDIT_LOG)
+- `wallet_DLD.md` — table-level DDL (v1.6.6 — includes METADATA/CLIENT_INFO + FM_CLIENT_AUDIT_LOG)
 - `wallet_onboarding.md` — KYC tier rules + wallet opening flow
 - `finance_transaction.md` — BRD + API spec for topup/withdraw/transfer/reversal/fee+VAT
 - `wallet_seed.sql` — operational seed + bulk test-data generator

@@ -6,7 +6,7 @@
 **Author**: Core Wallet Team
 
 **Changelog**
-- v1.10 (2026-05-28): **Transaction metadata + client-info snapshot + client change-data audit** (DLD §2.5, §2.13). Two new JSONB columns on `WLT_TRAN_HIST`: `METADATA` (caller-supplied transaction context, ≤ 1 KB, P1-forbidden — channel/device/geo/risk/session) and `CLIENT_INFO` (SP-computed customer snapshot at posting time, ≤ 512 B, P2-only — kyc_tier/name_initials/residence/risk_level). New `WLT_CLIENT_AUDIT_LOG` table with a SECURITY DEFINER trigger captures every INSERT/UPDATE/DELETE on client tables (`WLT_CLIENT_KYC` now; FM_CLIENT* via FM-team coordination) with OLD/NEW JSONB + diff'd `CHANGED_FIELDS[]` + maker-checker fields. Apps set `SET LOCAL audit.actor/source/reason/...` GUCs per TX so the trigger attributes the change. **Posting and audit are decoupled**: the posting SP does not read the audit log on the hot path; investigators join `WLT_TRAN_HIST.POST_DATE` ↔ `WLT_CLIENT_AUDIT_LOG.CHANGED_AT` by time range to reconstruct "what changed about this customer between transactions X and Y". PII rules in §8.3 apply to the audit log unchanged.
+- v1.10 (2026-05-28): **Transaction metadata + client-info snapshot + client change-data audit** (DLD §2.5, §2.13). Two new JSONB columns on `WLT_TRAN_HIST`: `METADATA` (caller-supplied transaction context, ≤ 1 KB, P1-forbidden — channel/device/geo/risk/session) and `CLIENT_INFO` (SP-computed customer snapshot at posting time, ≤ 512 B, P2-only — kyc_tier/name_initials/residence/risk_level). New `FM_CLIENT_AUDIT_LOG` table with a SECURITY DEFINER trigger captures every INSERT/UPDATE/DELETE on client tables (`FM_CLIENT_KYC` now; FM_CLIENT* via FM-team coordination) with OLD/NEW JSONB + diff'd `CHANGED_FIELDS[]` + maker-checker fields. Apps set `SET LOCAL audit.actor/source/reason/...` GUCs per TX so the trigger attributes the change. **Posting and audit are decoupled**: the posting SP does not read the audit log on the hot path; investigators join `WLT_TRAN_HIST.POST_DATE` ↔ `FM_CLIENT_AUDIT_LOG.CHANGED_AT` by time range to reconstruct "what changed about this customer between transactions X and Y". PII rules in §8.3 apply to the audit log unchanged.
 - v1.9 (2026-05-28): **Transactional outbox + withdraw disbursement tracking** — close the two P0 gaps from the senior-SA review. Add the `WLT_OUTBOX` table (see DLD §2.11) so every posting SP writes the Kafka event row inside the same TX as `WLT_TRAN_HIST` — Kafka emission is now atomic with the ledger commit, no more silently-dropped events. Relay topology: Debezium CDC primary, Go polling worker with `SKIP LOCKED` as Y1 fallback. Add the `WLT_WITHDRAW_TRACK` table (DLD §2.12) with state machine `SUBMITTED → ACKED → DISBURSING → COMPLETED | FAILED → REVERSED`, keyed by `EXT_PAYOUT_REF`. Add `post_withdraw_reversal` SP (idempotent, refunds amount + fee + VAT) plus an SLA-timeout janitor that auto-reverses withdrawals stuck > 24h without a Treasury terminal state. The wallet owns the tracking + reversal SP; the mechanism by which the Treasury Service notifies the wallet of disbursement outcomes lives in the Treasury Service spec (out of scope).
 - v1.8 (2026-05-28): Add **§9b Accounting Operations Subsystem** — EOD close & period locking, suspense/clearing GL framework, daily trial-balance materialisation with signed proof, e-invoice integration (Decree 123/2020 + Circular 78/2021), maker-checker manual journal entry workflow. Closes the top-5 finance/audit gaps identified in the 10-year SA review.
 - v1.7.1 (2026-05-28): Add **§9a Data Lifecycle, Backup & Archive Strategy** — 5-year volume projection, four-tier model (Hot/Warm/Cold/Archive), per-table prune rules, partition lifecycle automation (`pg_partman` + `MERGE/SPLIT`), backup matrix (PG17 incremental basebackup + WAL streaming + cross-region DR), Parquet export to object storage with Object Lock (WORM), restore SLAs, legal-hold mechanism, cost projection.
@@ -154,7 +154,7 @@ Following the T24 model, the core wallet is split into **two data tiers**:
 │  (state, transactions, balances — changes continuously)         │
 │                                                                  │
 │  WLT_ACCT • WLT_ACCT_BAL • WLT_TRAN_HIST • WLT_GL_BATCH            │
-│  WLT_RESTRAINTS • WLT_API_MESSAGE • WLT_CLIENT_KYC              │
+│  WLT_RESTRAINTS • WLT_API_MESSAGE • FM_CLIENT_KYC              │
 │                          │                                       │
 │                          │ references (FK)                       │
 │                          ▼                                       │
@@ -201,7 +201,7 @@ WLT_ACCT.CCY               ──FK──▶ FM_CURRENCY.CCY
 WLT_ACCT_TYPE.GL_CODE      ──FK──▶ FM_GL_MAST.GL_CODE
 WLT_NOSTRO_LINK.NOS_VOS_NO ──FK──▶ FM_NOS_VOS.NOS_VOS_NO
 WLT_GL_BATCH.GL_CODE          ──FK──▶ FM_GL_MAST.GL_CODE
-WLT_CLIENT_KYC.CLIENT_NO   ──FK──▶ FM_CLIENT.CLIENT_NO
+FM_CLIENT_KYC.CLIENT_NO   ──FK──▶ FM_CLIENT.CLIENT_NO
 ```
 
 > **Important**: WLT **never** modifies FM. All FM changes (edit GL, add nostro, change CCY config) go through a separate data-governance flow with maker-checker.
@@ -233,7 +233,7 @@ WLT_CLIENT_KYC.CLIENT_NO   ──FK──▶ FM_CLIENT.CLIENT_NO
 │ WLT TIER (Transactional — operational)                        │
 ├──────────────────────────────────────────────────────────────┤
 │  Wallet & KYC                                                 │
-│    WLT_ACCT, WLT_ACCT_TYPE, WLT_ACCT_BAL, WLT_CLIENT_KYC     │
+│    WLT_ACCT, WLT_ACCT_TYPE, WLT_ACCT_BAL, FM_CLIENT_KYC     │
 │  Transaction & Fee/VAT config                                  │
 │    WLT_TRAN_DEF (with fee/VAT cols), WLT_TRAN_HIST, WLT_GL_BATCH  │
 │  Control                                                       │
@@ -273,7 +273,7 @@ WLT_CLIENT_KYC.CLIENT_NO   ──FK──▶ FM_CLIENT.CLIENT_NO
 5. **Auditability**: every change has a row in `WLT_OLTP_AUDIT` + `WLT_API_TRACE`; FM uses `FM_AUDIT_LOG`.
 6. **Time-aware**: distinguish `TRAN_DATE` (transaction date), `EFFECT_DATE` (effective date), `POST_DATE` (posting date), `VALUE_DATE` (value date).
 7. **FM is read-only from WLT**: WLT only SELECTs from FM, never UPDATEs/DELETEs.
-8. **Point-in-time customer snapshot** (v1.10): each `WLT_TRAN_HIST` row carries a `CLIENT_INFO` JSONB populated by the posting SP from FM_CLIENT + WLT_CLIENT_KYC. Combined with `WLT_CLIENT_AUDIT_LOG` (every change to client data, captured by trigger), investigators can reconstruct what the customer looked like at any prior posting moment without depending on the current FM state. See DLD §2.5 + §2.13.
+8. **Point-in-time customer snapshot** (v1.10): each `WLT_TRAN_HIST` row carries a `CLIENT_INFO` JSONB populated by the posting SP from FM_CLIENT + FM_CLIENT_KYC. Combined with `FM_CLIENT_AUDIT_LOG` (every change to client data, captured by trigger), investigators can reconstruct what the customer looked like at any prior posting moment without depending on the current FM state. See DLD §2.5 + §2.13.
 9. **Open metadata bag** (v1.10): each `WLT_TRAN_HIST` row carries a `METADATA` JSONB for caller-supplied transaction context (channel, device, geo, risk score, session) — bounded ≤ 1 KB, P1-forbidden. Lets fraud/analytics queries enrich transactions without schema changes for every new attribute.
 
 ---
@@ -426,7 +426,7 @@ Customer sees: wallet A −1,005,500; wallet B +1,000,000.
   - The tariff published to customers is **gross (VAT-inclusive)**
   - VAT collected on behalf → posted to `GL 203.01 VAT output payable` (liability), remitted to the tax authority monthly
   - Periodic VAT report: `SUM(WLT_TRAN_HIST.TRAN_AMT)` for VAT tran types (lookup `WLT_TRAN_DEF` to filter) by month → form 01/GTGT
-- **KYC tier** (stored in `WLT_CLIENT_KYC`, customer master in `FM_CLIENT`):
+- **KYC tier** (stored in `FM_CLIENT_KYC`, customer master in `FM_CLIENT`):
   - Tier 1: phone + basic identification → limit 20M / month
   - Tier 2: + CCCD (citizen ID) / eKYC (verified via `FM_CLIENT_IDENTIFIERS`) → limit 100M / month
   - Tier 3: + biometric verification + linked bank (`FM_CLIENT_BANKS`) → limit per contract
@@ -456,7 +456,7 @@ Every column in WLT and FM tables is tagged with one of four tiers. Classificati
 
 | Tier | Definition | Examples in this system |
 |------|-----------|-------------------------|
-| **P1 — Direct identifiers** | Identify an individual on their own | `FM_CLIENT_IDENTIFIERS.GLOBAL_ID` (CCCD, passport), `WLT_CLIENT_KYC.PHONE_NO`, `WLT_CLIENT_KYC.EMAIL`, `FM_CLIENT.CLIENT_NAME`, `FM_CLIENT_BANKS.ACCT_NO_ENC` |
+| **P1 — Direct identifiers** | Identify an individual on their own | `FM_CLIENT_IDENTIFIERS.GLOBAL_ID` (CCCD, passport), `FM_CLIENT_KYC.PHONE_NO`, `FM_CLIENT_KYC.EMAIL`, `FM_CLIENT.CLIENT_NAME`, `FM_CLIENT_BANKS.ACCT_NO_ENC` |
 | **P2 — Quasi-identifiers** | Identifying when combined with other data | `FM_CLIENT_INDVL.BIRTH_DATE`, `FM_CLIENT_CONTACT.ADDR_*`, device fingerprint, IP, `TERMINAL_ID` |
 | **P3 — Sensitive financial** | Financial activity bound to identity | `WLT_ACCT.ACTUAL_BAL`, `WLT_TRAN_HIST.*`, `WLT_STMT_DETAIL.*`, `WLT_GL_BATCH.*` |
 | **P4 — Authentication secrets** | Credentials and crypto material | API client secrets, signing keys, OTP, session tokens, eKYC face-match templates |
@@ -523,7 +523,7 @@ Masking is enforced by a thin view layer (`v_client_masked`, `v_kyc_masked`) and
 #### 8.3.7 Audit & monitoring
 
 - Every P1 column read is appended to `WLT_PII_ACCESS_LOG` (immutable, WORM): caller identity, query fingerprint, row count, timestamp, source IP.
-- **Every change** to a client-identity column (INSERT/UPDATE/DELETE on `WLT_CLIENT_KYC` and FM_CLIENT*) is captured by the `fn_audit_client_change` trigger into `WLT_CLIENT_AUDIT_LOG` with OLD/NEW JSONB, diff'd `CHANGED_FIELDS[]`, actor, source (`OPS_UI`/`API`/`EKYC`/`SYS_BATCH`/`COMPLIANCE`), reason, and maker-checker fields. See DLD §2.13. The audit table is SECURITY DEFINER write-only — even DBAs cannot UPDATE/DELETE its rows in production.
+- **Every change** to a client-identity column (INSERT/UPDATE/DELETE on `FM_CLIENT_KYC` and FM_CLIENT*) is captured by the `fn_audit_client_change` trigger into `FM_CLIENT_AUDIT_LOG` with OLD/NEW JSONB, diff'd `CHANGED_FIELDS[]`, actor, source (`OPS_UI`/`API`/`EKYC`/`SYS_BATCH`/`COMPLIANCE`), reason, and maker-checker fields. See DLD §2.13. The audit table is SECURITY DEFINER write-only — even DBAs cannot UPDATE/DELETE its rows in production.
 - **Alerts**:
   - > 100 P1 reads/hour per service account → P2 incident
   - Any P1 read by `wallet_admin` role → P3 incident (admin should never read PII operationally)
