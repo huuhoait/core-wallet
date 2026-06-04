@@ -1537,6 +1537,463 @@ $$;
 
 
 --
+-- Name: post_fee_charge(character varying, numeric, character varying, character varying, character varying, jsonb, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.post_fee_charge(p_acct_no character varying, p_amount numeric, p_reference character varying, p_fee_code character varying DEFAULT 'FEECHG'::character varying, p_narrative character varying DEFAULT NULL::character varying, p_metadata jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT 'OPS'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tran_internal_id bigint, status character varying, fee_gross numeric, vat_amount numeric, new_balance numeric, event_uuid uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+#variable_conflict use_column
+-- Charge a STANDALONE fee + VAT against a wallet (annual / penalty / service fee)
+-- with NO principal money movement. Unlike the fee legs of transfer/withdraw
+-- (which hang off a principal via TFR_SEQ_NO), this is a self-contained debit.
+-- Accounting (VAT-inclusive, mirrors the fee engine): DR wallet liability (gross)
+-- / CR fee revenue (net) / CR VAT payable (vat), where vat = gross*rate/(1+rate).
+-- The revenue GL is resolved per acct_type via WLT_GL_MAP('FEE_CR') so a consumer
+-- fee books to 401.01 and a merchant fee to 401.02. Idempotent by reference;
+-- reversible via post_fee_charge_reversal (RVFEE). SECURITY DEFINER because
+-- wallet_app holds only SELECT on the reference tables.
+DECLARE
+  v_actor      VARCHAR(64) := COALESCE(p_actor, session_user);
+  v_acct       WLT_ACCT%ROWTYPE;
+  v_def        WLT_TRAN_DEF%ROWTYPE;
+  v_acct_type  WLT_ACCT_TYPE%ROWTYPE;
+  v_fee        NUMERIC(18,2);
+  v_vat        NUMERIC(18,2);
+  v_net        NUMERIC(18,2);
+  v_liab_gl    VARCHAR(32);
+  v_fee_gl     VARCHAR(32);
+  v_tran_key   BIGINT;
+  v_event_uuid UUID;
+  v_existing   WLT_API_MESSAGE%ROWTYPE;
+BEGIN
+  PERFORM set_config('audit.actor',   v_actor,   TRUE);
+  PERFORM set_config('audit.channel', p_channel, TRUE);
+
+  -- ─── Phase 0: input guards ───────────────────────────────────────────
+  IF p_amount IS NULL OR p_amount <= 0 THEN
+    RAISE EXCEPTION 'INVALID_AMOUNT' USING ERRCODE = 'P0010';
+  END IF;
+  PERFORM fn_validate_metadata(p_metadata);
+
+  -- ─── Phase 1: idempotency gate ──────────────────────────────────────
+  SELECT * INTO v_existing FROM WLT_API_MESSAGE
+   WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
+  IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
+    RETURN QUERY
+    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
+           'DUPLICATE'::varchar,
+           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
+           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric,
+           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
+           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+    RETURN;
+  END IF;
+  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT,
+                               OBJECT_REQUEST_DATA, PROCESS_STATUS)
+  VALUES (p_reference, p_channel, 'FEE_CHARGE',
+          jsonb_build_object('acct_no', p_acct_no, 'amount', p_amount, 'fee_code', p_fee_code)::text,
+          'PENDING')
+  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
+
+  -- ─── Phase 2: validate fee def + account ────────────────────────────
+  SELECT * INTO v_def FROM WLT_TRAN_DEF WHERE TRAN_TYPE = p_fee_code;
+  IF NOT FOUND OR v_def.STATUS <> 'A' THEN
+    RAISE EXCEPTION 'TRAN_TYPE_INACTIVE: %', p_fee_code USING ERRCODE = 'P0020';
+  END IF;
+
+  SELECT * INTO v_acct FROM WLT_ACCT WHERE ACCT_NO = p_acct_no FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ACCT_NOT_FOUND: %', p_acct_no USING ERRCODE = 'P0021';
+  END IF;
+  IF v_acct.ACCT_STATUS <> 'A' THEN
+    RAISE EXCEPTION 'ACCT_NOT_ACTIVE: status=%', v_acct.ACCT_STATUS USING ERRCODE = 'P0022';
+  END IF;
+
+  SELECT * INTO v_acct_type FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct.ACCT_TYPE;
+  v_liab_gl := v_acct_type.GL_CODE_LIAB;
+  SELECT GL_CODE INTO v_fee_gl FROM WLT_GL_MAP
+   WHERE ACCT_TYPE = v_acct.ACCT_TYPE AND EVENT_TYPE = 'FEE_CR';
+  v_fee_gl := COALESCE(v_fee_gl, v_def.FEE_GL_CODE);
+
+  -- VAT-inclusive split: gross = net + vat
+  v_fee := p_amount;
+  v_vat := ROUND(v_fee * v_def.VAT_RATE / (1 + v_def.VAT_RATE), 2);
+  v_net := v_fee - v_vat;
+
+  -- ─── Phase 3: fund guard (debit cannot breach available balance) ────
+  IF (v_acct.ACTUAL_BAL - v_acct.TOTAL_RESTRAINED_AMT) < v_fee THEN
+    RAISE EXCEPTION 'INSUFFICIENT_FUNDS: available=%, fee=%',
+      (v_acct.ACTUAL_BAL - v_acct.TOTAL_RESTRAINED_AMT), v_fee USING ERRCODE = 'P0026';
+  END IF;
+
+  -- ─── Phase 4: atomic debit (version CAS) ────────────────────────────
+  v_tran_key := nextval('seq_tran');
+
+  UPDATE WLT_ACCT
+     SET ACTUAL_BAL     = ACTUAL_BAL - v_fee,
+         VERSION        = VERSION + 1,
+         LAST_TRAN_DATE = clock_timestamp()
+   WHERE INTERNAL_KEY = v_acct.INTERNAL_KEY
+     AND VERSION      = v_acct.VERSION
+  RETURNING ACTUAL_BAL INTO v_acct.ACTUAL_BAL;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'VERSION_CONFLICT' USING ERRCODE = '40001';
+  END IF;
+
+  -- TRAN_HIST (1 leg: FEECHG debit). VAT is a GL-only split (no TRAN_HIST leg).
+  INSERT INTO WLT_TRAN_HIST (
+    INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
+    TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
+    TRAN_INTERNAL_ID, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
+    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
+  ) VALUES (
+    v_acct.INTERNAL_KEY, 'FEECHG', CURRENT_DATE, CURRENT_DATE,
+    v_fee, 'DR', v_acct.ACTUAL_BAL + v_fee, v_acct.ACTUAL_BAL,
+    v_tran_key, p_reference, v_acct.CCY, p_channel, 'WLT',
+    COALESCE(v_def.TRAN_DESC, 'Fee charge'), left(COALESCE(p_narrative, p_metadata->>'narrative'),250),
+    v_acct.GROUP_ID, v_acct.SHARD_INDEX, p_metadata
+  );
+
+  -- GL: DR wallet liability (gross) / CR fee revenue (net) [/ CR VAT payable (vat)]
+  INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY,
+                         AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+  VALUES
+    (v_tran_key, 1, v_liab_gl, v_acct.CLIENT_NO, v_acct.INTERNAL_KEY, v_fee, 'DR', v_acct.CCY, p_reference, CURRENT_DATE, CURRENT_DATE),
+    (v_tran_key, 2, v_fee_gl,  v_acct.CLIENT_NO, v_acct.INTERNAL_KEY, v_net, 'CR', v_acct.CCY, p_reference, CURRENT_DATE, CURRENT_DATE);
+  IF v_vat > 0 THEN
+    INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY,
+                           AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+    VALUES (v_tran_key, 3, v_def.VAT_GL_CODE, v_acct.CLIENT_NO, v_acct.INTERNAL_KEY, v_vat, 'CR', v_acct.CCY, p_reference, CURRENT_DATE, CURRENT_DATE);
+  END IF;
+
+  -- ACCT_BAL daily snapshot
+  INSERT INTO WLT_ACCT_BAL (INTERNAL_KEY, TRAN_DATE, ACTUAL_BAL, CALC_BAL, PREV_ACTUAL_BAL)
+  VALUES (v_acct.INTERNAL_KEY, CURRENT_DATE, v_acct.ACTUAL_BAL,
+          v_acct.ACTUAL_BAL - v_acct.TOTAL_RESTRAINED_AMT, v_acct.ACTUAL_BAL + v_fee)
+  ON CONFLICT (INTERNAL_KEY, TRAN_DATE) DO UPDATE
+    SET ACTUAL_BAL = EXCLUDED.ACTUAL_BAL,
+        CALC_BAL   = EXCLUDED.CALC_BAL;
+
+  -- OUTBOX (atomic event)
+  INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE,
+                          PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
+  VALUES ('TRANSACTION', v_tran_key::text, 'wallet.fee.charged.v1',
+          p_acct_no, 'wallet.transactions',
+          jsonb_build_object('tran_internal_id', v_tran_key, 'acct_no', p_acct_no,
+                             'client_no', v_acct.CLIENT_NO, 'fee_code', p_fee_code,
+                             'fee_gross', v_fee, 'vat_amount', v_vat, 'ccy', v_acct.CCY,
+                             'value_date', CURRENT_DATE),
+          jsonb_build_object('traceparent', current_setting('app.trace_id', TRUE)))
+  RETURNING EVENT_UUID INTO v_event_uuid;
+
+  -- close idempotency
+  UPDATE WLT_API_MESSAGE
+     SET PROCESS_STATUS      = 'SUCCESS',
+         HTTP_STATUS         = 200,
+         OBJECT_RESPONE_DATA = jsonb_build_object(
+           'tran_internal_id', v_tran_key,
+           'fee_gross',        v_fee,
+           'vat_amount',       v_vat,
+           'new_balance',      v_acct.ACTUAL_BAL,
+           'event_uuid',       v_event_uuid)::text,
+         PROCESSED_AT        = clock_timestamp()
+   WHERE OBJECT_REF_ID = p_reference;
+
+  RETURN QUERY SELECT v_tran_key, 'SUCCESS'::varchar, v_fee, v_vat, v_acct.ACTUAL_BAL, v_event_uuid;
+END $$;
+
+
+--
+-- Name: post_fee_charge_reversal(character varying, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.post_fee_charge_reversal(p_orig_reference character varying, p_reason character varying DEFAULT NULL::character varying, p_initiator character varying DEFAULT 'OPS_MANUAL'::character varying, p_channel character varying DEFAULT 'SYS'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(reversal_tran_key bigint, was_already_reversed boolean, new_balance numeric, event_uuid uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+#variable_conflict use_column
+-- Reverse a standalone fee charge: refund the gross to the wallet and flip the
+-- revenue/VAT legs. Idempotent on the reversal key. Recomputes the VAT split from
+-- the original fee_code's rate (the same VAT-inclusive formula), so it never needs
+-- the original to have stored net/vat. Posts an RVFEE leg (CR wallet).
+DECLARE
+  v_actor    VARCHAR(64) := COALESCE(p_actor, session_user);
+  v_orig     WLT_API_MESSAGE%ROWTYPE;
+  v_rev      WLT_API_MESSAGE%ROWTYPE;
+  v_rref     VARCHAR(64) := left('RVFC-'||p_orig_reference, 64);
+  v_acct_no  VARCHAR(20);
+  v_fee_code VARCHAR(16);
+  v_fee      NUMERIC(18,2);
+  v_vat      NUMERIC(18,2);
+  v_net      NUMERIC(18,2);
+  v_orig_tran BIGINT;
+  v_orig_seq BIGINT;
+  v_acct     WLT_ACCT%ROWTYPE;
+  v_def      WLT_TRAN_DEF%ROWTYPE;
+  v_liab_gl  VARCHAR(32);
+  v_fee_gl   VARCHAR(32);
+  v_rev_tran BIGINT;
+  v_event    UUID;
+BEGIN
+  PERFORM set_config('audit.actor', v_actor, TRUE);
+  PERFORM set_config('audit.channel', p_channel, TRUE);
+
+  SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref FOR UPDATE;
+  IF FOUND AND v_rev.PROCESS_STATUS = 'SUCCESS' THEN
+    RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
+                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
+                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_orig FROM WLT_API_MESSAGE
+   WHERE OBJECT_REF_ID = p_orig_reference AND OBJECT_SUBJECT = 'FEE_CHARGE' FOR UPDATE;
+  IF NOT FOUND OR v_orig.PROCESS_STATUS <> 'SUCCESS' THEN
+    RAISE EXCEPTION 'TRAN_NOT_FOUND: fee charge % not posted', p_orig_reference USING ERRCODE = 'P0040';
+  END IF;
+
+  v_acct_no   := v_orig.OBJECT_REQUEST_DATA::jsonb->>'acct_no';
+  v_fee       := (v_orig.OBJECT_REQUEST_DATA::jsonb->>'amount')::numeric;
+  v_fee_code  := COALESCE(v_orig.OBJECT_REQUEST_DATA::jsonb->>'fee_code', 'FEECHG');
+  v_orig_tran := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint;
+
+  SELECT * INTO v_acct FROM WLT_ACCT WHERE ACCT_NO = v_acct_no FOR UPDATE;
+  IF v_acct.ACCT_STATUS = 'C' THEN
+    RAISE EXCEPTION 'ACCT_NOT_ACTIVE: wallet % is closed', v_acct_no USING ERRCODE = 'P0022';
+  END IF;
+  SELECT * INTO v_def FROM WLT_TRAN_DEF WHERE TRAN_TYPE = v_fee_code;
+  v_liab_gl := (SELECT GL_CODE_LIAB FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct.ACCT_TYPE);
+  SELECT GL_CODE INTO v_fee_gl FROM WLT_GL_MAP
+   WHERE ACCT_TYPE = v_acct.ACCT_TYPE AND EVENT_TYPE = 'FEE_CR';
+  v_fee_gl := COALESCE(v_fee_gl, v_def.FEE_GL_CODE);
+  v_vat := ROUND(v_fee * v_def.VAT_RATE / (1 + v_def.VAT_RATE), 2);
+  v_net := v_fee - v_vat;
+
+  SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST
+   WHERE INTERNAL_KEY = v_acct.INTERNAL_KEY AND TRAN_INTERNAL_ID = v_orig_tran AND TRAN_TYPE = 'FEECHG' LIMIT 1;
+
+  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
+  VALUES (v_rref, p_channel, 'FEE_CHARGE_REVERSAL',
+          jsonb_build_object('orig_reference', p_orig_reference, 'reason', p_reason, 'initiator', p_initiator)::text, 'PENDING')
+  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
+
+  v_rev_tran := nextval('seq_tran');
+
+  -- Refund the gross fee (CR wallet)
+  UPDATE WLT_ACCT SET ACTUAL_BAL = ACTUAL_BAL + v_fee, VERSION = VERSION + 1, LAST_TRAN_DATE = clock_timestamp()
+   WHERE INTERNAL_KEY = v_acct.INTERNAL_KEY
+  RETURNING ACTUAL_BAL INTO v_acct.ACTUAL_BAL;
+
+  -- RVFEE leg (CR wallet), linked to the original FEECHG leg via ORIG_SEQ_NO
+  INSERT INTO WLT_TRAN_HIST (INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
+     TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
+     TRAN_INTERNAL_ID, REFERENCE, ORIG_SEQ_NO, CCY, SOURCE_TYPE, SOURCE_MODULE, TRAN_DESC, GROUP_ID)
+  VALUES (v_acct.INTERNAL_KEY, 'RVFEE', CURRENT_DATE, CURRENT_DATE,
+     v_fee, 'CR', v_acct.ACTUAL_BAL - v_fee, v_acct.ACTUAL_BAL,
+     v_rev_tran, v_rref, v_orig_seq, v_acct.CCY, p_channel, 'WLT',
+     'Reverse fee charge: '||COALESCE(p_reason,'?'), v_acct.GROUP_ID);
+
+  -- GL flip: CR wallet liability (gross) / DR fee revenue (net) [/ DR VAT payable (vat)]
+  INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+  VALUES
+    (v_rev_tran, 1, v_liab_gl, v_acct.CLIENT_NO, v_acct.INTERNAL_KEY, v_fee, 'CR', v_acct.CCY, v_rref, CURRENT_DATE, CURRENT_DATE),
+    (v_rev_tran, 2, v_fee_gl,  v_acct.CLIENT_NO, v_acct.INTERNAL_KEY, v_net, 'DR', v_acct.CCY, v_rref, CURRENT_DATE, CURRENT_DATE);
+  IF v_vat > 0 THEN
+    INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY, AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+    VALUES (v_rev_tran, 3, v_def.VAT_GL_CODE, v_acct.CLIENT_NO, v_acct.INTERNAL_KEY, v_vat, 'DR', v_acct.CCY, v_rref, CURRENT_DATE, CURRENT_DATE);
+  END IF;
+
+  INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE, PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
+  VALUES ('TRANSACTION', v_rev_tran::text, 'wallet.fee.reversed.v1', v_acct_no, 'wallet.transactions',
+          jsonb_build_object('reversal_tran_key', v_rev_tran, 'orig_reference', p_orig_reference,
+                             'acct_no', v_acct_no, 'fee_gross', v_fee, 'vat_amount', v_vat,
+                             'reason', p_reason, 'initiator', p_initiator),
+          jsonb_build_object('traceparent', current_setting('app.trace_id', TRUE)))
+  RETURNING EVENT_UUID INTO v_event;
+
+  UPDATE WLT_API_MESSAGE SET PROCESS_STATUS='SUCCESS', HTTP_STATUS=200,
+     OBJECT_RESPONE_DATA = jsonb_build_object('reversal_tran_key', v_rev_tran,
+        'new_balance', v_acct.ACTUAL_BAL, 'event_uuid', v_event)::text,
+     PROCESSED_AT = clock_timestamp()
+   WHERE OBJECT_REF_ID = v_rref;
+
+  RETURN QUERY SELECT v_rev_tran, FALSE, v_acct.ACTUAL_BAL, v_event;
+END $$;
+
+
+--
+-- Name: post_merchant_deposit(character varying, numeric, character varying, jsonb, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.post_merchant_deposit(p_group_id character varying, p_amount numeric, p_reference character varying, p_metadata jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT 'MOBILE'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(tran_internal_id bigint, status character varying, target_acct_no character varying, shard_index smallint, new_balance numeric, event_uuid uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+#variable_conflict use_column
+-- Route an inbound merchant deposit/payment into a group and credit the right
+-- sub-account: while the group is COLD (0 active shards) the funds land on the
+-- SETTLEMENT account; once HOT they fan out to a shard chosen by
+-- fn_resolve_shard_acct_no (reference-hashed, deterministic). This is the
+-- settlement-vs-shard caller branch the resolver intentionally does NOT make
+-- (it stays shard-only and raises for cold groups; the caller routes to
+-- settlement until activated). Accounting mirrors a topup: DR payment clearing
+-- (MERCHDEP.CONTRA_GL_CODE) / CR merchant wallet liability (acct_type.GL_CODE_LIAB).
+-- SECURITY DEFINER because wallet_app holds only SELECT on the group/acct tables.
+DECLARE
+  v_actor      VARCHAR(64) := COALESCE(p_actor, session_user);
+  v_grp        WLT_ACCT_GROUP%ROWTYPE;
+  v_def        WLT_TRAN_DEF%ROWTYPE;
+  v_acct_type  WLT_ACCT_TYPE%ROWTYPE;
+  v_target     VARCHAR(20);
+  v_acct       WLT_ACCT%ROWTYPE;
+  v_n_shards   INT;
+  v_tran_key   BIGINT;
+  v_event_uuid UUID;
+  v_existing   WLT_API_MESSAGE%ROWTYPE;
+BEGIN
+  PERFORM set_config('audit.actor',   v_actor,   TRUE);
+  PERFORM set_config('audit.channel', p_channel, TRUE);
+
+  -- ─── Phase 0: input guards ───────────────────────────────────────────
+  IF p_amount IS NULL OR p_amount <= 0 THEN
+    RAISE EXCEPTION 'INVALID_AMOUNT' USING ERRCODE = 'P0010';
+  END IF;
+  PERFORM fn_validate_metadata(p_metadata);
+
+  -- ─── Phase 1: idempotency gate ──────────────────────────────────────
+  SELECT * INTO v_existing FROM WLT_API_MESSAGE
+   WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
+  IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
+    RETURN QUERY
+    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
+           'DUPLICATE'::varchar,
+           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'target_acct_no')::varchar,
+           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'shard_index')::smallint,
+           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
+           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+    RETURN;
+  END IF;
+  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT,
+                               OBJECT_REQUEST_DATA, PROCESS_STATUS)
+  VALUES (p_reference, p_channel, 'MERCHDEP',
+          jsonb_build_object('group_id', p_group_id, 'amount', p_amount)::text,
+          'PENDING')
+  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
+
+  -- ─── Phase 2: validate group + tran def ─────────────────────────────
+  SELECT * INTO v_def FROM WLT_TRAN_DEF WHERE TRAN_TYPE = 'MERCHDEP';
+  IF v_def.STATUS <> 'A' THEN
+    RAISE EXCEPTION 'TRAN_TYPE_INACTIVE' USING ERRCODE = 'P0020';
+  END IF;
+
+  SELECT * INTO v_grp FROM WLT_ACCT_GROUP WHERE GROUP_ID = p_group_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'GROUP_NOT_FOUND: %', p_group_id USING ERRCODE = 'P0050';
+  END IF;
+  IF v_grp.GROUP_STATUS <> 'A' THEN
+    RAISE EXCEPTION 'GROUP_NOT_ACTIVE: %', v_grp.GROUP_STATUS USING ERRCODE = 'P0022';
+  END IF;
+
+  -- ─── Phase 3: route — settlement while cold, shard once hot ─────────
+  SELECT count(*) INTO v_n_shards FROM WLT_ACCT
+   WHERE GROUP_ID = p_group_id AND ACCT_ROLE = 'SHARD' AND ACCT_STATUS = 'A';
+  IF v_n_shards = 0 THEN
+    SELECT ACCT_NO INTO v_target FROM WLT_ACCT
+     WHERE GROUP_ID = p_group_id AND ACCT_ROLE = 'SETTLEMENT';
+    IF v_target IS NULL THEN
+      RAISE EXCEPTION 'SETTLEMENT_NOT_FOUND: group % has no settlement account', p_group_id
+        USING ERRCODE = 'P0054';
+    END IF;
+  ELSE
+    v_target := fn_resolve_shard_acct_no(p_group_id, p_reference);
+  END IF;
+
+  -- ─── Phase 4: atomic posting ───────────────────────────────────────
+  SELECT * INTO v_acct FROM WLT_ACCT WHERE ACCT_NO = v_target FOR UPDATE;
+  IF v_acct.ACCT_STATUS <> 'A' THEN
+    RAISE EXCEPTION 'ACCT_NOT_ACTIVE: status=%', v_acct.ACCT_STATUS USING ERRCODE = 'P0022';
+  END IF;
+  IF v_acct.CR_BLOCKED = 'Y' THEN
+    RAISE EXCEPTION 'CR_RESTRAINT_ACTIVE' USING ERRCODE = 'P0029';
+  END IF;
+  SELECT * INTO v_acct_type FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct.ACCT_TYPE;
+
+  v_tran_key := nextval('seq_tran');
+
+  UPDATE WLT_ACCT
+     SET ACTUAL_BAL     = ACTUAL_BAL + p_amount,
+         VERSION        = VERSION + 1,
+         LAST_TRAN_DATE = clock_timestamp()
+   WHERE INTERNAL_KEY = v_acct.INTERNAL_KEY
+     AND VERSION      = v_acct.VERSION
+  RETURNING ACTUAL_BAL INTO v_acct.ACTUAL_BAL;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'VERSION_CONFLICT' USING ERRCODE = '40001';
+  END IF;
+
+  -- TRAN_HIST (1 leg: MERCHDEP credit onto the routed sub-account)
+  INSERT INTO WLT_TRAN_HIST (
+    INTERNAL_KEY, TRAN_TYPE, POST_DATE, VALUE_DATE,
+    TRAN_AMT, CR_DR_MAINT_IND, PREVIOUS_BAL_AMT, ACTUAL_BAL_AMT,
+    TRAN_INTERNAL_ID, REFERENCE, CCY, SOURCE_TYPE, SOURCE_MODULE,
+    TRAN_DESC, NARRATIVE, GROUP_ID, SHARD_INDEX, METADATA
+  ) VALUES (
+    v_acct.INTERNAL_KEY, 'MERCHDEP', CURRENT_DATE, CURRENT_DATE,
+    p_amount, 'CR', v_acct.ACTUAL_BAL - p_amount, v_acct.ACTUAL_BAL,
+    v_tran_key, p_reference, v_acct.CCY, p_channel, 'WLT',
+    'Merchant deposit (routed)', left(p_metadata->>'narrative',250), v_acct.GROUP_ID, v_acct.SHARD_INDEX, p_metadata
+  );
+
+  -- BATCH (2 GL legs: DR payment clearing / CR merchant wallet liability)
+  INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, ACCT_INTERNAL_KEY,
+                         AMOUNT, TRAN_NATURE, CCY, REFERENCE, POST_DATE, VALUE_DATE)
+  VALUES
+    (v_tran_key, 1, v_def.CONTRA_GL_CODE,     v_acct.CLIENT_NO, v_acct.INTERNAL_KEY,
+       p_amount, 'DR', v_acct.CCY, p_reference, CURRENT_DATE, CURRENT_DATE),
+    (v_tran_key, 2, v_acct_type.GL_CODE_LIAB, v_acct.CLIENT_NO, v_acct.INTERNAL_KEY,
+       p_amount, 'CR', v_acct.CCY, p_reference, CURRENT_DATE, CURRENT_DATE);
+
+  -- ACCT_BAL daily snapshot
+  INSERT INTO WLT_ACCT_BAL (INTERNAL_KEY, TRAN_DATE, ACTUAL_BAL, CALC_BAL, PREV_ACTUAL_BAL)
+  VALUES (v_acct.INTERNAL_KEY, CURRENT_DATE, v_acct.ACTUAL_BAL,
+          v_acct.ACTUAL_BAL - v_acct.TOTAL_RESTRAINED_AMT, v_acct.ACTUAL_BAL - p_amount)
+  ON CONFLICT (INTERNAL_KEY, TRAN_DATE) DO UPDATE
+    SET ACTUAL_BAL = EXCLUDED.ACTUAL_BAL,
+        CALC_BAL   = EXCLUDED.CALC_BAL;
+
+  -- OUTBOX (atomic event)
+  INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE,
+                          PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
+  VALUES ('TRANSACTION', v_tran_key::text, 'wallet.merchant.deposit.posted.v1',
+          p_group_id, 'wallet.transactions',
+          jsonb_build_object('tran_internal_id', v_tran_key, 'group_id', p_group_id,
+                             'target_acct_no', v_acct.ACCT_NO, 'shard_index', v_acct.SHARD_INDEX,
+                             'client_no', v_acct.CLIENT_NO, 'amount', p_amount,
+                             'ccy', v_acct.CCY, 'value_date', CURRENT_DATE),
+          jsonb_build_object('traceparent', current_setting('app.trace_id', TRUE)))
+  RETURNING EVENT_UUID INTO v_event_uuid;
+
+  -- close idempotency
+  UPDATE WLT_API_MESSAGE
+     SET PROCESS_STATUS      = 'SUCCESS',
+         HTTP_STATUS         = 200,
+         OBJECT_RESPONE_DATA = jsonb_build_object(
+           'tran_internal_id', v_tran_key,
+           'target_acct_no',   v_acct.ACCT_NO,
+           'shard_index',      v_acct.SHARD_INDEX,
+           'new_balance',      v_acct.ACTUAL_BAL,
+           'event_uuid',       v_event_uuid)::text,
+         PROCESSED_AT        = clock_timestamp()
+   WHERE OBJECT_REF_ID = p_reference;
+
+  RETURN QUERY SELECT v_tran_key, 'SUCCESS'::varchar, v_acct.ACCT_NO, v_acct.SHARD_INDEX,
+                      v_acct.ACTUAL_BAL, v_event_uuid;
+END $$;
+
+
+--
 -- Name: post_merchant_withdraw(character varying, numeric, character varying, character varying, boolean, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3028,6 +3485,167 @@ BEGIN
   RETURNING EVENT_UUID INTO v_event_uuid;
 
   RETURN QUERY SELECT v_rev_tran_key, FALSE, v_event_uuid;
+END $$;
+
+
+--
+-- Name: provision_acct_group(character varying, character varying, character varying, character varying, character varying, numeric, numeric, smallint, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.provision_acct_group(p_client_no character varying, p_group_id character varying, p_group_type character varying DEFAULT 'MERCHANT'::character varying, p_acct_type character varying DEFAULT 'MERCHANT'::character varying, p_ccy character varying DEFAULT 'VND'::character varying, p_shard_threshold numeric DEFAULT NULL::numeric, p_shard_buffer numeric DEFAULT NULL::numeric, p_sweep_interval_sec smallint DEFAULT NULL::smallint, p_channel character varying DEFAULT 'OPS'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(group_id character varying, settlement_acct_no character varying, settlement_internal_key bigint, group_type character varying, group_status character varying)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+#variable_conflict use_column
+-- Provision a NEW merchant/agent group: the WLT_ACCT_GROUP row + its SETTLEMENT
+-- account, atomically in one TX. The group is created COLD (shard_count = 0);
+-- promote it later with activate_hot_wallet (US-1.9). This is the same-TX wrapper
+-- DLD §3.7 names — it solves the chicken-and-egg between the two tables:
+-- WLT_ACCT_GROUP.settlement_acct_no is NOT NULL while WLT_ACCT.group_id has a
+-- (non-deferred) FK to the group, so we insert the group FIRST (the deferred
+-- fk_group_settlement lets settlement_acct_no point at a not-yet-existing acct),
+-- then the settlement account, and the deferred FK validates at COMMIT.
+-- SECURITY DEFINER because wallet_app holds only SELECT on WLT_ACCT_GROUP.
+DECLARE
+  v_no  VARCHAR(20);
+  v_key BIGINT;
+BEGIN
+  PERFORM set_config('audit.actor',   COALESCE(p_actor, 'ops'), TRUE);
+  PERFORM set_config('audit.channel', COALESCE(p_channel, 'OPS'), TRUE);
+
+  -- 1. client must exist
+  IF NOT EXISTS (SELECT 1 FROM FM_CLIENT WHERE client_no = p_client_no) THEN
+    RAISE EXCEPTION 'CLIENT_NOT_FOUND' USING ERRCODE = 'P0073';
+  END IF;
+  -- 2. settlement account type must be a known wallet type
+  IF NOT EXISTS (SELECT 1 FROM WLT_ACCT_TYPE WHERE acct_type = p_acct_type) THEN
+    RAISE EXCEPTION 'INVALID_ACCT_TYPE: %', p_acct_type USING ERRCODE = 'P0080';
+  END IF;
+  -- 3. group type must be supported (mirrors chk_group_type)
+  IF p_group_type NOT IN ('MERCHANT','AGENT','NOSTRO_HOT') THEN
+    RAISE EXCEPTION 'INVALID_GROUP_TYPE: % (allowed: MERCHANT, AGENT, NOSTRO_HOT)', p_group_type
+      USING ERRCODE = 'P0055';
+  END IF;
+  -- 4. group_id must be free
+  IF EXISTS (SELECT 1 FROM WLT_ACCT_GROUP WHERE group_id = p_group_id) THEN
+    RAISE EXCEPTION 'GROUP_ALREADY_EXISTS: %', p_group_id USING ERRCODE = 'P0056';
+  END IF;
+
+  v_no := '9701' || LPAD(nextval('seq_acct_no')::text, 10, '0');
+
+  -- 5. group row first (deferred fk_group_settlement tolerates the dangling acct_no)
+  INSERT INTO WLT_ACCT_GROUP (GROUP_ID, CLIENT_NO, GROUP_TYPE, SHARD_COUNT,
+       SETTLEMENT_ACCT_NO, SHARD_THRESHOLD, SHARD_BUFFER, SWEEP_INTERVAL_SEC,
+       GROUP_STATUS, CHANNEL)
+  VALUES (p_group_id, p_client_no, p_group_type, 0,
+       v_no, COALESCE(p_shard_threshold, 200000), COALESCE(p_shard_buffer, 50000),
+       COALESCE(p_sweep_interval_sec, 60::smallint), 'A', p_channel);
+
+  -- 6. settlement account (acct_role SETTLEMENT, no shard_index; balance 0)
+  INSERT INTO WLT_ACCT (ACCT_NO, CLIENT_NO, ACCT_TYPE, CCY, ACCT_STATUS,
+       ACTUAL_BAL, PREV_DAY_ACTUAL_BAL, ACCT_ROLE, GROUP_ID, CHANNEL)
+  VALUES (v_no, p_client_no, p_acct_type, COALESCE(p_ccy, 'VND'), 'A',
+       0, 0, 'SETTLEMENT', p_group_id, p_channel)
+  RETURNING INTERNAL_KEY INTO v_key;
+
+  RETURN QUERY SELECT p_group_id, v_no, v_key, p_group_type, 'A'::varchar;
+END $$;
+
+
+--
+-- Name: rescale_hot_wallet(character varying, smallint, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.rescale_hot_wallet(p_group_id character varying, p_new_shard_count smallint, p_channel character varying DEFAULT 'OPS'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(group_id character varying, old_shard_count smallint, new_shard_count smallint, settlement_acct_no character varying, added_acct_nos character varying[], rebalanced_amount numeric)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+#variable_conflict use_column
+-- Rescale an already-HOT merchant group up a tier (4→8 or 8→16) and rebalance.
+-- Rebalance strategy: every existing shard is first drained to the SETTLEMENT
+-- account (post_sweep_shard URGENT → keep 0), so the wider fan-out starts from a
+-- clean, even state (all shards 0; settlement holds the consolidated balance).
+-- This is consistent with the sweep model — shards are transient write-contention
+-- buffers, settlement is the source of truth — and keeps double-entry intact
+-- (each drain posts SWEEPO/SWEEPI legs + GL). New shards are then materialised at
+-- the high end of the index range. Upscale-only: downscaling/merging shards is a
+-- separate operation. SECURITY DEFINER (wallet_app holds only SELECT on the group).
+DECLARE
+  v_grp     WLT_ACCT_GROUP%ROWTYPE;
+  v_settle  WLT_ACCT%ROWTYPE;
+  v_existing INT;
+  v_no      VARCHAR(20);
+  v_accts   VARCHAR(20)[] := '{}';
+  v_rebal   NUMERIC(18,2) := 0;
+  v_swept   NUMERIC(18,2);
+  r_shard   RECORD;
+  i         INT;
+BEGIN
+  PERFORM set_config('audit.actor',   COALESCE(p_actor, 'ops'), TRUE);
+  PERFORM set_config('audit.channel', COALESCE(p_channel, 'OPS'), TRUE);
+
+  -- 1. target must be a supported hot tier
+  IF p_new_shard_count NOT IN (4, 8, 16) THEN
+    RAISE EXCEPTION 'INVALID_SHARD_COUNT: % (allowed: 4, 8, 16)', p_new_shard_count
+      USING ERRCODE = 'P0052';
+  END IF;
+
+  -- 2. lock the group; must exist
+  SELECT * INTO v_grp FROM WLT_ACCT_GROUP WHERE GROUP_ID = p_group_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'GROUP_NOT_FOUND: %', p_group_id USING ERRCODE = 'P0050';
+  END IF;
+
+  -- 3. rescale applies to an already-hot group (use activate_hot_wallet for cold)
+  IF v_grp.SHARD_COUNT = 0 THEN
+    RAISE EXCEPTION 'GROUP_NOT_ACTIVATED: % is cold — use activate_hot_wallet first', p_group_id
+      USING ERRCODE = 'P0057';
+  END IF;
+
+  -- 4. upscale only — the new tier must be strictly larger
+  IF p_new_shard_count <= v_grp.SHARD_COUNT THEN
+    RAISE EXCEPTION 'INVALID_SHARD_COUNT: % not larger than current % (downscale unsupported)',
+      p_new_shard_count, v_grp.SHARD_COUNT USING ERRCODE = 'P0052';
+  END IF;
+
+  SELECT * INTO v_settle FROM WLT_ACCT
+   WHERE GROUP_ID = p_group_id AND ACCT_ROLE = 'SETTLEMENT' FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'SETTLEMENT_NOT_FOUND: group % has no settlement account', p_group_id
+      USING ERRCODE = 'P0054';
+  END IF;
+
+  -- 5. rebalance: drain every active shard back to settlement (URGENT → keep 0)
+  FOR r_shard IN
+    SELECT ACCT_NO FROM WLT_ACCT
+     WHERE GROUP_ID = p_group_id AND ACCT_ROLE = 'SHARD' AND ACCT_STATUS = 'A'
+     ORDER BY SHARD_INDEX
+  LOOP
+    SELECT swept_amount INTO v_swept
+      FROM post_sweep_shard(r_shard.ACCT_NO, 'URGENT', COALESCE(p_actor, 'ops'));
+    v_rebal := v_rebal + COALESCE(v_swept, 0);
+  END LOOP;
+
+  -- post_sweep_shard reset the audit GUCs to the SWEEP channel — re-assert ours
+  -- so the new shard rows + the group UPDATE are attributed to the rescale.
+  PERFORM set_config('audit.actor',   COALESCE(p_actor, 'ops'), TRUE);
+  PERFORM set_config('audit.channel', COALESCE(p_channel, 'OPS'), TRUE);
+
+  -- 6. materialise the additional shards at indices [old .. new-1] (balance 0)
+  FOR i IN v_grp.SHARD_COUNT .. p_new_shard_count - 1 LOOP
+    v_no := '9701' || LPAD(nextval('seq_acct_no')::text, 10, '0');
+    INSERT INTO WLT_ACCT (ACCT_NO, CLIENT_NO, ACCT_TYPE, CCY, ACCT_STATUS,
+       ACTUAL_BAL, PREV_DAY_ACTUAL_BAL, ACCT_ROLE, GROUP_ID, SHARD_INDEX, CHANNEL)
+    VALUES (v_no, v_settle.CLIENT_NO, v_settle.ACCT_TYPE, v_settle.CCY, 'A',
+       0, 0, 'SHARD', p_group_id, i, p_channel);
+    v_accts := array_append(v_accts, v_no);
+  END LOOP;
+
+  -- 7. flip the group's configured shard_count to the new tier
+  UPDATE WLT_ACCT_GROUP SET SHARD_COUNT = p_new_shard_count WHERE GROUP_ID = p_group_id;
+
+  RETURN QUERY SELECT p_group_id, v_grp.SHARD_COUNT, p_new_shard_count,
+                      v_settle.ACCT_NO, v_accts, v_rebal;
 END $$;
 
 
@@ -5322,6 +5940,11 @@ GRANT USAGE ON SCHEMA public TO wallet_pii_ro;
 --
 
 GRANT ALL ON FUNCTION public.activate_hot_wallet(p_group_id character varying, p_shard_count smallint, p_channel character varying, p_actor character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.provision_acct_group(p_client_no character varying, p_group_id character varying, p_group_type character varying, p_acct_type character varying, p_ccy character varying, p_shard_threshold numeric, p_shard_buffer numeric, p_sweep_interval_sec smallint, p_channel character varying, p_actor character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.rescale_hot_wallet(p_group_id character varying, p_new_shard_count smallint, p_channel character varying, p_actor character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.post_merchant_deposit(p_group_id character varying, p_amount numeric, p_reference character varying, p_metadata jsonb, p_channel character varying, p_actor character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.post_fee_charge(p_acct_no character varying, p_amount numeric, p_reference character varying, p_fee_code character varying, p_narrative character varying, p_metadata jsonb, p_channel character varying, p_actor character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.post_fee_charge_reversal(p_orig_reference character varying, p_reason character varying, p_initiator character varying, p_channel character varying, p_actor character varying) TO wallet_app;
 
 
 --

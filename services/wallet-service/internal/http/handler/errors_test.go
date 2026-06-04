@@ -46,8 +46,14 @@ func TestRenderError_DomainError(t *testing.T) {
 		t.Errorf("status = %d, want 422", w.Code)
 	}
 	p := decodeProblem(t, w)
-	if p.Code != domain.CodeInsufficientFunds {
-		t.Errorf("code = %q, want INSUFFICIENT_FUNDS", p.Code)
+	if p.ErrorCode != domain.CodeInsufficientFunds {
+		t.Errorf("errorCode = %q, want INSUFFICIENT_FUNDS", p.ErrorCode)
+	}
+	if p.ErrorMessage == "" {
+		t.Error("errorMessage is empty")
+	}
+	if p.ErrorMessage != "The account balance is not sufficient to cover this transaction" {
+		t.Errorf("errorMessage = %q, want stable message", p.ErrorMessage)
 	}
 	if p.ISO20022Reason != "AM04" {
 		t.Errorf("iso20022_reason_code = %q, want AM04", p.ISO20022Reason)
@@ -94,8 +100,8 @@ func TestRenderError_NonDomainDoesNotLeak(t *testing.T) {
 		t.Errorf("status = %d, want 500", w.Code)
 	}
 	p := decodeProblem(t, w)
-	if p.Code != domain.CodeInternal {
-		t.Errorf("code = %q, want INTERNAL_ERROR", p.Code)
+	if p.ErrorCode != domain.CodeInternal {
+		t.Errorf("errorCode = %q, want INTERNAL_ERROR", p.ErrorCode)
 	}
 	if strings.Contains(w.Body.String(), "secret-table") {
 		t.Errorf("response leaked internal error detail: %s", w.Body.String())
@@ -123,8 +129,8 @@ func TestRenderValidationError_FieldErrors(t *testing.T) {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 	p := decodeProblem(t, w)
-	if p.Code != domain.CodeInvalidRequest {
-		t.Errorf("code = %q, want INVALID_REQUEST", p.Code)
+	if p.ErrorCode != domain.CodeInvalidRequest {
+		t.Errorf("errorCode = %q, want INVALID_REQUEST", p.ErrorCode)
 	}
 	if len(p.Errors) != 2 {
 		t.Fatalf("errors len = %d, want 2 (%+v)", len(p.Errors), p.Errors)

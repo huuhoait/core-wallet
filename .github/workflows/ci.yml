@@ -1,0 +1,169 @@
+# =============================================================================
+# Core Wallet — CI Pipeline
+# Runs on every push and PR to master. Gates: lint, vet, test, build, SQL tests.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [master, "feature/**"]
+  pull_request:
+    branches: [master]
+
+env:
+  GO_VERSION: "1.23"
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/core-wallet
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Go: lint + vet + test + build
+  # ──────────────────────────────────────────────────────────────────────────
+  go-checks:
+    name: Go Lint & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/wallet-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: services/wallet-service/go.sum
+
+      - name: go mod tidy (check)
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          working-directory: services/wallet-service
+
+      - name: go test
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: go build (linux/amd64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/server
+
+      - name: Upload coverage
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-wallet-service
+          path: services/wallet-service/coverage.out
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Outbox Relay: lint + build
+  # ──────────────────────────────────────────────────────────────────────────
+  outbox-relay-checks:
+    name: Outbox Relay Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/outbox-relay
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: services/outbox-relay/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/relay
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # SQL Tests: spin up PG17 + run assertion suites
+  # ──────────────────────────────────────────────────────────────────────────
+  sql-tests:
+    name: SQL Test Suites
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: wallet
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci
+        options: >-
+          --health-cmd "pg_isready -U postgres -d wallet"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+          --health-start-period 30s
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for PG ready
+        run: until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done
+
+      - name: Load schema
+        run: |
+          PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -f db/export/schema.sql
+          PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -f db/export/partitions.sql
+          PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -f db/export/seed.sql
+
+      - name: Run accounting tests
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_accounting_test.sql
+
+      - name: Run restraint tests
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_restraint_test.sql
+
+      - name: Run transfer reversal tests
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_transfer_reversal_test.sql
+
+      - name: Run merchant flow tests
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_merchant_flow_test.sql
+
+      - name: Run merchant hotwallet tests
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_merchant_hotwallet_test.sql
+
+      - name: Run activate hotwallet tests
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_activate_hotwallet_test.sql
+
+      - name: Run EOD period lock tests
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_eod_period_lock_test.sql
+
+      - name: Run reconciliation check
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_reconciliation_check.sql
+
+      - name: Run reversal check
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_reversal_check.sql
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Terraform: validate + plan (no apply in CI)
+  # ──────────────────────────────────────────────────────────────────────────
+  terraform-validate:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.7"
+
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive
+
+      - name: terraform init
+        run: terraform init -backend=false
+
+      - name: terraform validate
+        run: terraform validate

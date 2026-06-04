@@ -45,6 +45,10 @@ type WalletRepository interface {
 	// Topup reversal (post_topup_reversal).
 	ReverseTopup(ctx context.Context, in domain.TopupReversalInput) (*domain.TopupReversalResult, error)
 
+	// Standalone fee charge + its reversal (post_fee_charge / post_fee_charge_reversal).
+	PostFeeCharge(ctx context.Context, in domain.FeeChargeInput) (*domain.FeeChargeResult, error)
+	ReverseFeeCharge(ctx context.Context, in domain.FeeChargeReversalInput) (*domain.FeeChargeReversalResult, error)
+
 	// Restraint management (add_restraint / release_restraint).
 	AddRestraint(ctx context.Context, in domain.RestraintInput) (*domain.RestraintResult, error)
 	ReleaseRestraint(ctx context.Context, in domain.ReleaseRestraintInput) (*domain.RestraintResult, error)
@@ -74,7 +78,17 @@ type WalletRepository interface {
 	OpenAccount(ctx context.Context, in domain.AccountOpenInput) (*domain.AccountOpenResult, error)
 	UpdateAccountStatus(ctx context.Context, in domain.AccountStatusInput) (*domain.AccountStatusResult, error)
 
-	// Merchant hot-wallet group lifecycle (activate_hot_wallet) — promote a cold
-	// group (0 shards) to N hot SHARD sub-accounts.
+	// Merchant hot-wallet group lifecycle.
+	// ProvisionAcctGroup (provision_acct_group, US-1.10): create a cold group row
+	// + its settlement account in one TX.
+	ProvisionAcctGroup(ctx context.Context, in domain.ProvisionGroupInput) (*domain.ProvisionGroupResult, error)
+	// ActivateHotWallet (activate_hot_wallet, US-1.9): promote a cold group
+	// (0 shards) to N hot SHARD sub-accounts.
 	ActivateHotWallet(ctx context.Context, in domain.ActivateHotWalletInput) (*domain.ActivateHotWalletResult, error)
+	// RescaleHotWallet (rescale_hot_wallet, US-1.12): grow an already-hot group up
+	// a tier (4→8→16), draining existing shards back to settlement first.
+	RescaleHotWallet(ctx context.Context, in domain.RescaleHotWalletInput) (*domain.RescaleHotWalletResult, error)
+	// MerchantDeposit (post_merchant_deposit, US-1.11): route an inbound deposit
+	// into a group — settlement while cold, a shard once hot.
+	MerchantDeposit(ctx context.Context, in domain.MerchantDepositInput) (*domain.MerchantDepositResult, error)
 }
