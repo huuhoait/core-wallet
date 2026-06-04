@@ -192,6 +192,88 @@ services:
     profiles:
       - dev          # only starts with `docker compose --profile dev up`
 
+  # ---------------------------------------------------------------------------
+  # Outbox → Kafka relay (services/outbox-relay). Polls WLT_OUTBOX (status
+  # PENDING/FAILED) and publishes each row to its `topic` with key=partition_key,
+  # then stamps it SENT (kafka_partition/offset). Opt-in via the `relay` profile:
+  #   docker compose --profile relay up -d
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: wallet-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - wallet-net
+    profiles:
+      - relay
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: wallet-kafka
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Two listeners: PLAINTEXT for in-network clients (relay → kafka:9092),
+      # PLAINTEXT_HOST for host tools (localhost:29092).
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "${KAFKA_HOST_PORT:-29092}:29092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - wallet-net
+    profiles:
+      - relay
+
+  outbox-relay:
+    build:
+      context: ./services/outbox-relay
+      dockerfile: Dockerfile
+    image: core-wallet/outbox-relay:dev
+    container_name: wallet-outbox-relay
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      # Direct to PostgreSQL (NOT PgBouncer): one claim+publish+mark cycle is a
+      # single tx holding FOR UPDATE SKIP LOCKED locks across the Kafka publish.
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: wallet_app
+      DB_PASSWORD: ${WALLET_APP_PASSWORD:-wallet_app_dev}
+      DB_NAME: ${POSTGRES_DB:-wallet}
+      KAFKA_BROKERS: kafka:9092
+      POLL_INTERVAL: ${RELAY_POLL_INTERVAL:-1s}
+      BATCH_SIZE: ${RELAY_BATCH_SIZE:-100}
+      MAX_RETRIES: ${RELAY_MAX_RETRIES:-5}
+      WORKER_COUNT: ${RELAY_WORKER_COUNT:-4}
+      METRICS_PORT: 9090
+      LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+    ports:
+      - "${RELAY_METRICS_PORT:-9090}:9090"
+    networks:
+      - wallet-net
+    profiles:
+      - relay
+
 volumes:
   pg_data:
     name: wallet_pg_data
