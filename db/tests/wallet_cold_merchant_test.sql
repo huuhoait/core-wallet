@@ -55,7 +55,7 @@ BEGIN
      v_bal = 1000000, format('A balance=%s (expect 1000000)', v_bal));
 
   -- ════════ TC2: consumer→consumer transfer credits receiver in full ════════
-  PERFORM post_transfer(v_a, v_b, 300000, 'CMT-TRAN-1', 'TRFOUT', '{}'::jsonb, 'MOBILE', 'test');
+  PERFORM post_transfer(v_a, v_b, 300000, 'CMT-TFR-1', 'TRFOUT', '{}'::jsonb, 'MOBILE', 'test');
   SELECT actual_bal INTO v_balB FROM WLT_ACCT WHERE acct_no = v_b;
   INSERT INTO _t(name,ok,detail) VALUES
     ('TC2 consumer→consumer transfer credits receiver',
