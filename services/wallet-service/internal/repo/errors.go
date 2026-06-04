@@ -136,8 +136,11 @@ func httpStatusFor(code string) int {
 		domain.CodeClientAlreadyExists,
 		domain.CodePhoneAlreadyRegistered,
 		domain.CodeMaxWalletExceeded,
-		domain.CodeGroupAlreadyActivated:
-		// Group already promoted to hot — re-activation conflicts with current state.
+		domain.CodeGroupAlreadyActivated,
+		domain.CodeGroupAlreadyExists,
+		domain.CodeGroupNotActivated:
+		// Group lifecycle state conflicts: already hot / group_id taken / still
+		// cold when a rescale needs it hot — all conflict with current state.
 		return http.StatusConflict
 	case domain.CodeRestraintTypeInvalid,
 		domain.CodeRestraintPurposeInvalid,
@@ -149,8 +152,10 @@ func httpStatusFor(code string) int {
 		domain.CodeInvalidAcctType,
 		domain.CodeAcctCloseNonzeroBal,
 		domain.CodeOrgFieldsRequired,
-		domain.CodeInvalidShardCount:
-		// Schema-valid request but the shard count is not a supported hot tier.
+		domain.CodeInvalidShardCount,
+		domain.CodeInvalidGroupType:
+		// Schema-valid request but a business rule fails (e.g. shard count not a
+		// supported hot tier, or group_type not in the allowed set).
 		return http.StatusUnprocessableEntity
 	case domain.CodePIIDekNotSet,
 		domain.CodeBatchUnbalanced:

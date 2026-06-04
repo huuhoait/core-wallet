@@ -8,7 +8,7 @@ docs alone).
 > dựa trên **code / stored procedure / test thực tế** trong repo, không chỉ dựa
 > trên tài liệu thiết kế.
 
-**Last reviewed / Cập nhật:** 2026-05-31
+**Last reviewed / Cập nhật:** 2026-06-04
 
 ## Status legend / Chú thích trạng thái
 
@@ -22,17 +22,17 @@ docs alone).
 
 | Epic | ✅ | 🟡 | ⬜ |
 |------|:--:|:--:|:--:|
-| 1. Onboarding & Wallet Management | 5 | 0 | 10 |
-| 2. Transactions — Posting | 6 | 0 | 0 |
-| 3. Reversals & Refunds | 6 | 0 | 1 |
+| 1. Onboarding & Wallet Management | 12 | 2 | 1 |
+| 2. Transactions — Posting | 7 | 0 | 0 |
+| 3. Reversals & Refunds | 5 | 1 | 1 |
 | 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
-| 6. Accounting & GL Operations | 6 | 1 | 2 |
+| 6. Accounting & GL Operations | 6 | 1 | 3 |
 | 7. Eventing & Integration | 1 | 0 | 3 |
 | 8. Audit, PII & Compliance | 2 | 1 | 2 |
 | 9. Platform / Infra / Observability | 11 | 0 | 6 |
 | 10. Quality — Testing & Load | 8 | 1 | 0 |
-| **Total** | **52** | **3** | **25** |
+| **Total** | **59** | **6** | **17** |
 
 ---
 
@@ -47,32 +47,36 @@ docs alone).
 > table (renamed from `WLT_CLIENT_KYC`, US-9.16) carrying a JSONB `extra_data`
 > key-value bag for type-specific fields — `FM_CLIENT_INDVL` folds in (US-1.15).
 > Client master CRUD (US-1.8) and wallet open/block/close (US-1.3/1.5) with
-> count limits (US-1.4) are implemented; the end-to-end onboarding wrapper that
-> chains the 4 steps is **not**.
+> count limits (US-1.4) are implemented. The onboarding workflow has shipped:
+> step 1 (`onboard_client` → `POST /v1/onboard`, US-1.1, incl. ORG path US-1.7),
+> step 2 (`update_kyc` → `POST /v1/clients/:client_no/kyc`, US-1.2) and bank
+> linking (`link_client_bank`, US-1.14) are wired with integration tests;
+> centralized KYC with `extra_data` JSONB is live (US-1.15). Pending: related-doc
+> attachment writer (US-1.13, schema slot only) and the tier-progression framing.
 > Spec: [docs/specs/wallet_onboarding.md](docs/specs/wallet_onboarding.md).
 >
-> Merchant **hot-wallet lifecycle**: activation (US-1.9) is done; group
-> provisioning (US-1.10), cold→hot deposit routing (US-1.11) and rescaling
-> (US-1.12) are pending — see
-> [docs/specs/finance_transaction.md](docs/specs/finance_transaction.md) §3/§4.8.
+> Merchant **hot-wallet lifecycle** is now complete end-to-end: group
+> provisioning (US-1.10), activation (US-1.9), cold→hot deposit routing (US-1.11)
+> and rescaling with rebalance (US-1.12) are all implemented (SP + Go + tests) —
+> see [docs/specs/finance_transaction.md](docs/specs/finance_transaction.md) §3/§4.8.
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-1.1 | As a new user, I register with basic identity (**no OTP**) and the platform creates my client record **and** a zero-balance wallet in one onboarding step | ⬜ | **Step 1** of the flow. OTP register removed (2026-05-31). Building blocks exist — `create_client` (US-1.8) + `open_account` (US-1.3) — but no single `/v1/onboard` call chains them in one TX. Spec §3, §7.1. |
-| US-1.2 | As a user, I submit / update KYC info (eKYC) to raise my KYC tier | ⬜ | **Step 2** of the flow. Writes `FM_CLIENT_KYC` (tier, eKYC score / liveness, type-specific `extra_data`). Spec §5.1, §7.2. Not implemented. |
+| US-1.1 | As a new user, I register with basic identity (**no OTP**) and the platform creates my client record **and** a zero-balance wallet in one onboarding step | ✅ | **Step 1** done. SP `onboard_client` (`db/export/schema.sql`) chains `create_client` + `open_account` in one TX (RETURNS client_no + acct_no + tier); `POST /v1/onboard` → `h.Onboard` (`server.go`). Integration test `internal/repo/onboard_integration_test.go`. OTP register removed (2026-05-31). Spec §3, §7.1. |
+| US-1.2 | As a user, I submit / update KYC info (eKYC) to raise my KYC tier | ✅ | **Step 2** done. SP `update_kyc` (tier / status / risk / eKYC provider+ref / face-match / liveness / `extra_data`) writes `FM_CLIENT_KYC`; `POST /v1/clients/:client_no/kyc` → `h.UpdateKYC` (`server.go`), repo `client.go`. Spec §5.1, §7.2. |
 | US-1.3 | As ops, I open a wallet (ACCT_NO gen, zero balance) | ✅ | SP `open_account`; `POST /v1/accounts`. ACCT_NO = `9701`+10 (seq_acct_no), `ACTUAL_BAL=0`. (KYC-tier gate **not** enforced — onboarding out of scope; EOD makes the historical snapshot.) |
 | US-1.4 | As the platform, I enforce wallet-count limits per customer | ✅ | In `open_account` (§4.3): CONSUMER 3/CCY, MERCHANT 10 (closed excluded) → `MAX_WALLET_PER_CLIENT_EXCEEDED` (409). |
 | US-1.5 | As ops, I block / close / re-activate a wallet (close requires balance = 0) | ✅ | SP `update_account_status`; `PATCH /v1/accounts/:acct_no`. State machine A↔B→C; close→`ACCT_CLOSE_NONZERO_BAL` if bal≠0; mutate closed→`ACCT_NOT_ACTIVE`. |
 | US-1.6 | As compliance, KYC downgrade & 12-month re-KYC | ⬜ | Spec §5.2, §13 (open item). |
-| US-1.7 | As a corporate / organization customer, I onboard (CORP / MER, legal rep / UBO) | ⬜ | No longer needs a separate ORG table — org-specific fields (legal_rep, ubo[], business_reg_no, …) live in `FM_CLIENT_KYC.extra_data` (US-1.15). `create_client` already accepts CORP / MER; the org KYC payload + UBO capture are still undesigned end-to-end. Spec §1, §13. |
+| US-1.7 | As a corporate / organization customer, I onboard (CORP / MER, legal rep / UBO) | ✅ | ORG path wired in `onboard_client`: BR-09 `ORG_FIELDS_REQUIRED` (P0077) enforces `business_reg_no` + `legal_rep`; org-specific fields land in `FM_CLIENT_KYC.extra_data` (no separate ORG table — US-1.15). Test `TestOnboardClient_Org_Integration` (`onboard_integration_test.go`). Remaining polish: structured UBO[] capture is still a loose `extra_data` bag. Spec §1, §13. |
 | US-1.8 | As ops, I create/update a **client master record** (identity only, no KYC/onboarding flow) | ✅ | SP `create_client`/`update_client` (SECURITY DEFINER); `POST /v1/clients` + `PATCH /v1/clients/:client_no`. FM_CLIENT (+FM_CLIENT_INDVL — to fold into `FM_CLIENT_KYC.extra_data` per US-1.15). Wallet opening/KYC still out of scope. |
 | US-1.9 | As ops, I **activate a merchant hot wallet** (promote a cold group, 0 shards → N) | ✅ | SP `activate_hot_wallet(group_id, shard_count:=4)` (SECURITY DEFINER); `POST /v1/merchant-groups/:group_id/activate`. Creates N empty `SHARD` sub-accounts (index 0..N-1, balance 0 — no funds move, same invariant as `open_account`), flips `WLT_ACCT_GROUP.SHARD_COUNT`. Tiers 4/8/16 (4 = default); groups are now created **cold** (`SHARD_COUNT` default 0, `chk_shard_count IN (0,4,8,16)`). One-way from cold → `GROUP_ALREADY_ACTIVATED` (P0053); bad tier → `INVALID_SHARD_COUNT` (P0052); missing settlement → `SETTLEMENT_NOT_FOUND` (P0054). Tests: `wallet_activate_hotwallet_test.sql` (12/12) + `dto/group_test.go` + `repo/errors_test.go`. |
-| US-1.10 | As ops, I **provision a merchant/agent group** (group row + settlement account in one TX) | ⬜ | No SP yet — `WLT_ACCT_GROUP` + its `SETTLEMENT` account are created by hand (tests/seed). DLD §3.7 names `provision_acct_group(...)` but it does not exist. Prerequisite for US-1.9 on a real merchant (deferred settlement FK needs the same-TX pattern). |
-| US-1.11 | As the platform, I **route merchant deposits** to settlement while cold (0 shards), to a shard once hot | ⬜ | `fn_resolve_shard_acct_no` raises `GROUP_NOT_FOUND` (P0050) for a cold group (proved in `wallet_cold_merchant_test.sql` TC4); **no caller branch** chooses settlement-vs-shard. Deposit/payment posting into a merchant group is not wired. |
-| US-1.12 | As ops, I **rescale a hot wallet** (4→8→16) and rebalance existing shards | ⬜ | `activate_hot_wallet` is one-way cold→hot only. No SP adds shards to an already-hot group or rebalances balances across the new fan-out. |
-| US-1.13 | As a user / ops, I attach & update **related documents** (CCCD images, business licence, UBO proofs) on a client's KYC | ⬜ | **Step 3** of the flow. Replaces the single scalar `FM_CLIENT_KYC.doc_url` with a `related_docs` JSONB array — `[{doc_type, link, status, uploaded_at}]` where `link` is an object-store URL / handle. No SP / endpoint yet. Spec §7.3, §11. |
-| US-1.14 | As a user, I **link a bank account** during onboarding and receive a `linkId` token to reference it | ⬜ | **Step 4** of the flow. `link_client_bank` (`POST /v1/clients/:client_no/banks`) already returns `link_id` and encrypts `acct_no` → `ACCT_NO_ENC`; the **onboarding wrapper** that treats `link_id` as the client-facing opaque token (used by the default-bank `PUT`) and ties linkage to tier progression is pending. Spec §3.2, §7.4. |
-| US-1.15 | As the platform, I centralize **individual *and* organization** KYC into one `FM_CLIENT_KYC` table with a JSONB `extra_data` key-value bag | ⬜ | Design-only. Folds `FM_CLIENT_INDVL` (surname / given_name / birth_date / sex / resident_status / …) and a new ORG branch (legal_rep, ubo[], business_reg_no, incorporation_date, industry_code) into `extra_data` JSONB on the single KYC row — no per-type child tables. Pairs with the `WLT_CLIENT_KYC` → `FM_CLIENT_KYC` rename (US-9.16); sequence both in one migration. Spec §2, §5. |
+| US-1.10 | As ops, I **provision a merchant/agent group** (group row + settlement account in one TX) | ✅ | SP `provision_acct_group` (SECURITY DEFINER); `POST /v1/merchant-groups`. Creates the `WLT_ACCT_GROUP` row **cold** (`SHARD_COUNT=0`) + its `SETTLEMENT` account atomically — solves the chicken-and-egg via the deferred `fk_group_settlement` (group inserted first, settlement acct second). Validates client/acct-type/group-type, duplicate `group_id` → `GROUP_ALREADY_EXISTS` (P0056), bad type → `INVALID_GROUP_TYPE` (P0055). Go: domain/repo/usecase/handler/dto/route. Tests: `wallet_merchant_group_lifecycle_test.sql` TC1–TC5. Prereq for US-1.9 satisfied. |
+| US-1.11 | As the platform, I **route merchant deposits** to settlement while cold (0 shards), to a shard once hot | ✅ | SP `post_merchant_deposit` (SECURITY DEFINER); `POST /v1/finance/merchant-deposit`. The settlement-vs-shard branch lives in the **caller** (the resolver `fn_resolve_shard_acct_no` stays shard-only and still raises P0050 for cold groups — `wallet_cold_merchant_test.sql` TC4 unchanged): a deposit credits the `SETTLEMENT` account while cold and a reference-hashed `SHARD` once hot. Idempotent by reference, balanced double-entry (DR payment-clearing `109.03.001` / CR merchant liability), new `MERCHDEP` tran-def. Tests: lifecycle TC6–TC11. |
+| US-1.12 | As ops, I **rescale a hot wallet** (4→8→16) and rebalance existing shards | ✅ | SP `rescale_hot_wallet` (SECURITY DEFINER); `POST /v1/merchant-groups/:group_id/rescale`. Grows an already-hot group up a tier (upscale-only; `INVALID_SHARD_COUNT` P0052 if not larger, `GROUP_NOT_ACTIVATED` P0057 if cold). **Rebalance** = drain every existing shard back to settlement via `post_sweep_shard` URGENT (shards are transient buffers, settlement is source of truth — group total conserved, verified), then materialise the new shards at the high index range. Go: domain/repo/usecase/handler/dto/route. Tests: lifecycle TC12–TC17. |
+| US-1.13 | As a user / ops, I attach & update **related documents** (CCCD images, business licence, UBO proofs) on a client's KYC | 🟡 | **Step 3** — schema slot only. `FM_CLIENT_KYC.related_docs` JSONB array + `chk_kyc_reldocs_arr` CHECK already exist (`db/export/schema.sql`), shape `[{doc_type, link, status, uploaded_at}]`. **No SP / endpoint writes it yet** — the attach/update path is not implemented. Spec §7.3, §11. |
+| US-1.14 | As a user, I **link a bank account** during onboarding and receive a `linkId` token to reference it | 🟡 | **Step 4** — core linking done, onboarding integration pending. SP `link_client_bank` returns `link_id` + encrypts `acct_no` → `ACCT_NO_ENC`; `POST /v1/clients/:client_no/banks` (`h.LinkClientBank`) + `PUT /v1/clients/:client_no/banks/:link_id/default` (`h.SetDefaultClientBank`, SP `set_default_client_bank`). Pending: treating `link_id` as the client-facing opaque token and tying linkage to tier progression. Spec §3.2, §7.4. |
+| US-1.15 | As the platform, I centralize **individual *and* organization** KYC into one `FM_CLIENT_KYC` table with a JSONB `extra_data` key-value bag | ✅ | Implemented. `FM_CLIENT_KYC.extra_data jsonb NOT NULL` + `chk_kyc_extra_obj` on the single KYC row; `FM_CLIENT_INDVL` **folded in and removed** (no per-type child table — only referenced in comments now); INDVL fields + the ORG branch (legal_rep, business_reg_no, …) land in `extra_data`, written by `onboard_client`/`update_kyc`. Rename to `FM_CLIENT_KYC` (US-9.16) also done. Spec §2, §5. |
 
 ## Epic 2 — Transactions (Posting) / Giao dịch ghi sổ
 
@@ -87,6 +91,7 @@ docs alone).
 | US-2.4 | As a merchant, I withdraw with hot-shard sweep + settlement | ✅ | SP `post_merchant_withdraw`, `post_sweep_shard`, `fn_resolve_shard_acct_no`; `POST /v1/finance/merchant-withdraw`. Groups are now created **cold** (0 shards) and promoted via `activate_hot_wallet` (US-1.9); withdraw still works cold (URGENT sweep loops over 0 shards → debits settlement directly). Deposit-side shard routing for cold groups = US-1.11. |
 | US-2.5 | As finance, fees + VAT are computed and posted as separate legs | ✅ | Fee/VAT engine inside posting SPs; GL revenue + VAT payable. |
 | US-2.7 | As risk/ops, each posting carries a metadata bag | ✅ | SP `fn_validate_metadata`; `WLT_TRAN_HIST.METADATA` (≤1KB, P1-forbidden). Client-info snapshot **retired**: `CLIENT_INFO` + `fn_build_client_info` removed (write-only, no reader); redundant `TRAN_DATE`/`EFFECT_DATE` also dropped (they always equalled `POST_DATE`). |
+| US-2.8 | As finance/ops, I charge a **standalone fee + VAT** against a wallet (annual / penalty / service fee) not tied to any money movement | ✅ | SP `post_fee_charge` (+ `post_fee_charge_reversal`), `SECURITY DEFINER`; `POST /v1/finance/fee-charge` (+ `/fee-charge/reverse`). **DR** wallet liability (gross) / **CR** fee revenue (net) / **CR** VAT payable 203.01 — VAT-inclusive `vat = round(gross×rate/(1+rate))`; 1 `FEECHG` TRAN_HIST leg (VAT is GL-only). Revenue GL resolved per acct_type via `WLT_GL_MAP('FEE_CR')` (consumer 401.01 / merchant 401.02). Guards: amount>0 (P0010), acct active (P0021/P0022), `calc_bal ≥ gross` (P0026); idempotent by `reference`; outbox `wallet.fee.charged.v1`; reversal refunds gross + flips revenue/VAT (`RVFEE`), idempotent. New tran-def `FEECHG`. Go: domain/repo/usecase/handler/dto/port/routes. Tests: `db/tests/wallet_fee_charge_test.sql` (13/13). |
 
 > **Cross-cutting (✅):** posting is **idempotent** by `reference` (`ON CONFLICT` /
 > duplicate guard in `wallet_sp.sql`), and honours holds via `WLT_RESTRAINTS`.
@@ -98,10 +103,10 @@ docs alone).
 | US-3.1 | As ops, I reverse an in-book transfer (refund incl. fee + VAT) | ✅ | SP `post_transfer_reversal`; `POST /v1/finance/reverse`; test `wallet_transfer_reversal_test.sql`. |
 | US-3.2 | As ops, I reverse a top-up | ✅ | SP `post_topup_reversal`; `POST /v1/finance/topup/reverse`. |
 | US-3.3 | As Treasury, I reverse a withdrawal (refund amount + fee + VAT) | ✅ | SP `post_withdraw_reversal`; `POST /v1/treasury/withdrawals/:ref/reverse`. |
-| US-3.4 | As ops, I reverse a merchant withdrawal | ✅ | SP `post_merchant_withdraw_reversal`. |
+| US-3.4 | As ops, I reverse a merchant withdrawal | 🟡 | SP `post_merchant_withdraw_reversal` exists (`db/export/schema.sql`, refunds + outbox), but **no HTTP endpoint / handler / repo method wires it** — not reachable via API (unlike US-3.1/3.2/3.3 which have routes). DB layer only. |
 | US-3.5 | Reversals are idempotent and refund fee + VAT legs | ✅ | Reversal SPs write outbox + refund all legs. |
 | US-3.6 | Reversal is rejected outside the allowed time window | ⬜ | Spec §6.4 defines the window, but **no reversal SP enforces it** (no `WINDOW_EXPIRED` / time check in any `*_reversal` SP). |
-| US-3.7 | VAT reversal across a closed period is handled correctly | ✅ | Period locking (US-6.1) now makes a closed day immutable, so the closed VAT period (e.g. May) cannot be mutated; a reversal posts `POST_DATE = CURRENT_DATE` into the open period (June) per spec §6.8. Guaranteed by the write-freeze (`fn_freeze_closed_period`), proved in `db/tests/wallet_eod_period_lock_test.sql`. |
+| US-3.7 | VAT reversal across a closed period is handled correctly | ✅ | Period locking (US-6.1) makes a closed accounting day immutable, so the closed VAT period (e.g. May) cannot be mutated; a reversal posts `POST_DATE = CURRENT_DATE` into the open period (June) per spec §6.8. Guaranteed by the write-freeze (`fn_freeze_closed_period`, attached to `WLT_GL_BATCH` via `trg_freeze_batch` — keys off `ACCOUNTING_DATE`), proved in `db/tests/wallet_eod_period_lock_test.sql`. |
 
 ## Epic 4 — Balance & Statements / Số dư & sao kê
 
@@ -123,23 +128,27 @@ docs alone).
 
 ## Epic 6 — Accounting & GL Operations / Kế toán & vận hành sổ cái
 
-> Subsystem §9b. The **EOD-close batch** (write-DB, posting-safe) is implemented
-> in `db/procedures/wallet_sp_eod.sql` — US-6.1 (incl. period locking) + US-6.3 +
-> US-6.6–6.9, plus the GL-feed post of US-6.2. The full suspense/clearing GL
-> framework, e-invoice and manual-JE workflows (US-6.2 remainder / 6.4 / 6.5)
-> remain HLD design only.
+> Subsystem §9b. The **EOD batch** (write-DB, posting-safe) is implemented in
+> `db/export/schema.sql` (the single source of truth — there is **no**
+> `db/procedures/` directory) as two orchestrators: `run_eod` (customer close:
+> T1 snapshot → T2 prev-day roll → T5 restraint expiry) and `run_gl_close` (GL
+> close: T3 gl-feed → T6 trial balance → T7 close period). Covers US-6.1 (period
+> locking) + US-6.3 + US-6.6–6.9, plus the GL-feed post of US-6.2. The full
+> suspense/clearing GL framework, e-invoice and manual-JE workflows (US-6.2
+> remainder / 6.4 / 6.5) remain HLD design only.
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
-| US-6.1 | EOD close & period locking | ✅ | Close batch `run_eod` (T1→T2→T5→T3→T6→**T7 close**), `wallet_sp_eod.sql`. **Period locking** done: `eod_close_period(D)` seals each past day in `WLT_PERIOD` (D < CURRENT_DATE; runs last, only after all tasks DONE), advancing the high-water mark; `fn_freeze_closed_period` triggers on `WLT_GL_BATCH`/`WLT_TRAN_HIST` make a closed day **fully immutable** (no INSERT/UPDATE/DELETE, SQLSTATE P0092 → `PERIOD_CLOSED`/409). Verified end-to-end + `db/tests/wallet_eod_period_lock_test.sql` (10/10). Unblocks US-3.7. |
+| US-6.1 | EOD close & period locking | ✅ | `db/export/schema.sql`. The GL-close chain is `run_gl_close` (T3 gl-feed → T6 trial balance → **T7 `eod_close_period`**) — *not* `run_eod` (which is the customer chain T1→T2→T5). **Period locking** done: `eod_close_period(D)` seals the accounting day in `WLT_PERIOD` (runs last, only after its tasks are DONE), advancing the high-water mark; the `fn_freeze_closed_period` trigger `trg_freeze_batch` on **`WLT_GL_BATCH`** (keys off `ACCOUNTING_DATE`) makes a closed day **immutable** (no INSERT/UPDATE/DELETE, SQLSTATE P0092 → `PERIOD_CLOSED`/409). Verified + `db/tests/wallet_eod_period_lock_test.sql`. Unblocks US-3.7. |
 | US-6.2 | Suspense / clearing GL framework | 🟡 | **GL-feed post** built: `eod_gl_feed_post(D)` (T3) finalises the day's GL journal `WLT_GL_BATCH` `'P'`→`'S'`, chunked + restart-safe. Full suspense/clearing GL framework (HLD §9b) still design only. |
-| US-6.3 | Daily trial-balance materialization + signed proof | ✅ | SP `eod_trial_balance` (`wallet_sp_eod.sql`, T6 in `run_eod`). Per-`(gl_code,ccy)` from `WLT_GL_BATCH` → `WLT_TRIAL_BALANCE` (opening carry-forward + period DR/CR + closing); proves ΣDR=ΣCR ∧ Σclosing=0; seals each day in `WLT_TRIAL_BALANCE_PROOF` via a `sha256` **hash chain** (`chain=H(totals‖content‖prev)`). `eod_verify_chain()` re-derives & detects tampering (verified: editing a sealed line flips `chain_ok`→false). |
+| US-6.3 | Daily trial-balance materialization + signed proof | ✅ | SP `eod_trial_balance` (`db/export/schema.sql`, T6 in `run_gl_close`). Per-`(gl_code,ccy)` from `WLT_GL_BATCH` → `WLT_TRIAL_BALANCE` (opening carry-forward + period DR/CR + closing); proves ΣDR=ΣCR ∧ Σclosing=0; seals each day in `WLT_TRIAL_BALANCE_PROOF` via a `sha256` **hash chain** (`chain=H(totals‖content‖prev)`). `eod_verify_chain()` re-derives & detects tampering (verified: editing a sealed line flips `chain_ok`→false). |
 | US-6.4 | E-invoice integration (Decree 123/2020, Circular 78/2021) | ⬜ | HLD §9b. Design only. |
 | US-6.5 | Maker-checker manual journal entry workflow | ⬜ | HLD §9b. Design only. |
-| US-6.6 | EOD daily balance snapshot → `WLT_ACCT_BAL[D]` | ✅ | SP `eod_snapshot` (`wallet_sp_eod.sql`). Sparse (accounts that moved on D); close = last `WLT_TRAN_HIST` leg (ledger-authoritative, 24/7-correct); **finalises** the row posting maintains intraday (`ON CONFLICT DO UPDATE`), incl. `calc_bal` = close − final restraint overlay. Chunked short-TX (`COMMIT`/chunk → no xmin pinning), restart-safe. |
+| US-6.6 | EOD daily balance snapshot → `WLT_ACCT_BAL[D]` | ✅ | SP `eod_snapshot` (`db/export/schema.sql`, T1 in `run_eod`). Sparse (accounts that moved on D); close = last `WLT_TRAN_HIST` leg (ledger-authoritative, 24/7-correct); **finalises** the row posting maintains intraday (`ON CONFLICT DO UPDATE`), incl. `calc_bal` = close − final restraint overlay. Chunked short-TX (`COMMIT`/chunk → no xmin pinning), restart-safe. |
 | US-6.7 | EOD prev-day balance roll | ✅ | SP `eod_prev_day_roll`. `WLT_ACCT.prev_day_actual_bal := close(D)` from the snapshot; sparse, skips no-ops (`IS DISTINCT FROM`), HOT update (non-indexed col, fillfactor 80), chunk 10k; depends on US-6.6. |
 | US-6.8 | EOD restraint auto-expiry | ✅ | SP `eod_expire_restraints`. Restraints past `END_DATE` (`A`→`E`, `removed_by='EOD'`) + recompute `WLT_ACCT.{total_restrained_amt,cr_blocked,restraint_present}` (mirrors `release_restraint`); one account / TX. cf. US-8.2. |
 | US-6.9 | EOD run history (audit log) + restart / failure handling | ✅ | Append-only `WLT_EOD_AUDIT_LOG` (status, started/finished, duration, rows — one row per run, via `eod_log`) + `WLT_EOD_RUN` resume cursor (`last_key`); `eod_mark_failed` records FAILED and keeps the cursor for retry. Batch/scheduler-driven (pg_cron / direct primary — no HTTP route by design). |
+| US-6.10 | As accounting/ops, I tag the GL config with the owning **branch / legal-entity** code so the ledger records which booking entity it belongs to | ⬜ | **Label-only**, design. Add `branch_code varchar(20)` to **`WLT_GL_CONFIG`** (the singleton config row) as descriptive entity identity — it does **not** enter `fn_accounting_date()` nor the period-close / write-freeze logic. **Deliberately NOT on `WLT_PERIOD`**: that table is one row per `biz_date`, so a non-key `branch_code` could only hold one value per day (a redundant constant); representing multiple branches per day would force `branch_code` into the PK `(branch_code, biz_date)` and propagate the dimension through `WLT_GL_BATCH` → account/posting → trial balance → `fn_freeze_closed_period` — i.e. full multi-branch GL, a separate epic, not a label. No FK target yet (no branch master table) — free-text label (optionally a CHECK). Confirms the **keep-separate** decision: entity identity is global/singleton (`WLT_GL_CONFIG`), period status is per-day operational (`WLT_PERIOD`). Touch points: `db/export/schema.sql` (`ADD COLUMN`), `db/export/seed.sql` (`COPY` for the singleton row). No Go change if the app does not read the label. |
 
 ## Epic 7 — Eventing & Integration / Sự kiện & tích hợp
 
@@ -200,13 +209,13 @@ docs alone).
 
 ## Next priorities (suggested) / Ưu tiên tiếp theo (gợi ý)
 
-1. **getClient** (Epic 1) — `GET /v1/clients/:id` needs the masked PII view (`v_kyc_masked`). (client CRUD + account open/block/close already done — US-1.3/1.4/1.5/1.8.)
-2. **Outbox relay worker** (US-7.2) — events are written but never published.
-3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
-4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
-5. **Onboarding service** (Epic 1) — currently seed-only; no production path.
+1. **Outbox relay worker** (US-7.2) — events are written but never published.
+2. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
+3. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
+4. **Merchant-withdrawal reversal endpoint** (US-3.4) — SP `post_merchant_withdraw_reversal` exists but has no HTTP route; wire handler + route to make it reachable.
+5. **Related-document attachment** (US-1.13) — `FM_CLIENT_KYC.related_docs` JSONB slot exists but no SP/endpoint writes it.
 6. ~~**EOD period-locking + GL feed** (US-6.1/6.2)~~ — ✅ done: `eod_close_period` write-freeze (full immutability) on closed business dates (unblocks US-3.7) + chunked `eod_gl_feed_post` (`WLT_GL_BATCH` P→S). Remaining Epic-6 gaps: full suspense/clearing GL (US-6.2), e-invoice (US-6.4), maker-checker JE (US-6.5), reversal time-window (US-3.6).
-7. **Merchant hot-wallet lifecycle** — activation (US-1.9) ✅ done. Next, in order: group provisioning SP (US-1.10) → cold→hot deposit routing (US-1.11) → hot-wallet rescale 4→8→16 with rebalance (US-1.12).
+7. ~~**Merchant hot-wallet lifecycle**~~ — ✅ complete: provisioning (US-1.10), activation (US-1.9), deposit routing (US-1.11), rescale + rebalance (US-1.12) all shipped with SP + Go + `wallet_merchant_group_lifecycle_test.sql`.
 
 > These are suggestions based on the gap analysis above — confirm against the
 > product roadmap before scheduling. / Đây là gợi ý dựa trên phân tích khoảng

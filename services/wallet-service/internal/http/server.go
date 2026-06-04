@@ -59,9 +59,12 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			finance.POST("/topup", h.Topup)
 			finance.POST("/transfer", h.Transfer)
 			finance.POST("/withdraw", h.Withdraw)
+			finance.POST("/merchant-deposit", h.MerchantDeposit)   // route deposit → settlement (cold) | shard (hot)
 			finance.POST("/merchant-withdraw", h.MerchantWithdraw) // settlement withdraw + hot-shard sweep
 			finance.POST("/reverse", h.ReverseTransfer)            // in-book transfer reversal (reference in body)
 			finance.POST("/topup/reverse", h.ReverseTopup)         // topup reversal (reference in body)
+			finance.POST("/fee-charge", h.FeeCharge)               // standalone fee + VAT charge (US-2.8)
+			finance.POST("/fee-charge/reverse", h.ReverseFeeCharge) // reverse a standalone fee charge
 			finance.GET("/transactions", h.ListTransactions)       // account statement: ?acct_no=&limit=&before_seq=
 			finance.GET("/transactions/:tran_key", h.GetTransaction) // all legs of one transaction
 			finance.GET("/restraints", h.ListRestraints)           // list holds/liens: ?acct_no=&limit=&before_seq=
@@ -92,10 +95,12 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			accounts.GET("/:acct_no", h.GetAccount)              // account profile (no client PII)
 			accounts.GET("/:acct_no/balance", h.GetBalance)      // realtime + historical (?as_of_date=)
 		}
-		// ── Merchant groups: hot-wallet lifecycle (cold → N shards) ──
+		// ── Merchant groups: lifecycle (provision cold → activate → rescale) ──
 		groups := v1.Group("/merchant-groups")
 		{
-			groups.POST("/:group_id/activate", h.ActivateHotWallet) // promote cold group → 4|8|16 shards
+			groups.POST("", h.ProvisionAcctGroup)                   // provision a cold group + settlement (US-1.10)
+			groups.POST("/:group_id/activate", h.ActivateHotWallet) // promote cold group → 4|8|16 shards (US-1.9)
+			groups.POST("/:group_id/rescale", h.RescaleHotWallet)   // grow hot tier 4→8→16 + rebalance (US-1.12)
 		}
 		ops := v1.Group("/ops/accounts")
 		{
