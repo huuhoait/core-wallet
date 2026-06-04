@@ -1,0 +1,97 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wallet
+
+resources:
+  - ../../base
+  - postgres.yaml
+
+patchesStrategicMerge:
+  - configmap-patch.yaml
+
+patches:
+  # ── Ingress: nginx with TLS ──
+  - target:
+      kind: Ingress
+      name: wallet-service
+    patch: |
+      - op: replace
+        path: /spec/ingressClassName
+        value: nginx
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: wallet-api.prod.local
+      - op: replace
+        path: /spec/rules/0/host
+        value: wallet-api.prod.local
+      - op: add
+        path: /metadata/annotations/nginx.ingress.kubernetes.io~1limit-rps
+        value: "200"
+
+  # ── Deployment: production sizing, single-AZ (no topology spread) ──
+  - target:
+      kind: Deployment
+      name: wallet-service
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 3
+      - op: remove
+        path: /spec/template/spec/topologySpreadConstraints
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: "2"
+            memory: 1Gi
+      - op: replace
+        path: /spec/template/spec/containers/1/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+      - op: replace
+        path: /spec/template/spec/containers/1/env/0/value
+        value: pg-primary.wallet.svc.cluster.local
+
+  # ── HPA: 3–8 pods (single AZ, bounded by node capacity) ──
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: wallet-service
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 3
+      - op: replace
+        path: /spec/maxReplicas
+        value: 8
+      - op: replace
+        path: /spec/metrics
+        value:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 65
+
+  # ── PDB: min 2 available (3 replicas, tolerate 1 eviction) ──
+  - target:
+      kind: PodDisruptionBudget
+      name: wallet-service
+    patch: |
+      - op: replace
+        path: /spec/minAvailable
+        value: 2
+
+images:
+  - name: ghcr.io/OWNER/core-wallet/wallet-service
+    newName: registry.prod.local/core-wallet/wallet-service
+    newTag: latest

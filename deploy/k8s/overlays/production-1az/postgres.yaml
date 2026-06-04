@@ -1,0 +1,267 @@
+# =============================================================================
+# PostgreSQL 17 — Production single-AZ (primary + optional streaming replica)
+#
+# For HA in a single AZ: use CloudNativePG operator or Patroni.
+# This manifest is a tuned standalone StatefulSet for production workloads.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-primary
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: primary
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: primary
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-primary-headless
+  namespace: wallet
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: 5432
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: primary
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg-primary
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: primary
+    app.kubernetes.io/part-of: core-wallet
+spec:
+  serviceName: pg-primary-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/component: primary
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: primary
+        app.kubernetes.io/part-of: core-wallet
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: wallet
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wallet-db-credentials
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: TZ
+              value: Asia/Ho_Chi_Minh
+          args:
+            - "-c"
+            - "config_file=/etc/postgresql/postgresql.conf"
+            - "-c"
+            - "hba_file=/etc/postgresql/pg_hba.conf"
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+            limits:
+              cpu: "8"
+              memory: 32Gi
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "wallet"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "wallet"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: pg-config
+              mountPath: /etc/postgresql
+            - name: pg-init
+              mountPath: /docker-entrypoint-initdb.d
+
+        # postgres_exporter sidecar for Prometheus metrics
+        - name: pg-exporter
+          image: prometheuscommunity/postgres-exporter:v0.15.0
+          ports:
+            - name: metrics
+              containerPort: 9187
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@localhost:5432/wallet?sslmode=disable"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wallet-db-credentials
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+      volumes:
+        - name: pg-config
+          configMap:
+            name: pg-production-config
+        - name: pg-init
+          configMap:
+            name: pg-init-scripts
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 500Gi
+---
+# Production-tuned postgresql.conf for 8 vCPU / 32 GB node (single-AZ)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-production-config
+  namespace: wallet
+data:
+  postgresql.conf: |
+    # ==========================================================================
+    # Core Wallet PG17 — Production (8 vCPU, 32 GB RAM, NVMe SSD)
+    # Single-AZ deployment, optimized for 2,000 TPS sustained
+    # ==========================================================================
+    listen_addresses = '*'
+    port = 5432
+
+    # ── Connection ──
+    max_connections = 300
+    superuser_reserved_connections = 5
+
+    # ── Memory ──
+    shared_buffers = 8GB
+    effective_cache_size = 24GB
+    work_mem = 64MB
+    maintenance_work_mem = 1GB
+    huge_pages = try
+
+    # ── WAL ──
+    wal_level = replica
+    wal_buffers = 128MB
+    min_wal_size = 2GB
+    max_wal_size = 8GB
+    checkpoint_completion_target = 0.9
+    checkpoint_timeout = 15min
+
+    # ── Replication (ready for streaming replica) ──
+    max_wal_senders = 5
+    max_replication_slots = 5
+    hot_standby = on
+
+    # ── Parallelism ──
+    max_worker_processes = 8
+    max_parallel_workers_per_gather = 4
+    max_parallel_workers = 8
+    max_parallel_maintenance_workers = 4
+
+    # ── Planner ──
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+    default_statistics_target = 200
+
+    # ── Timeout (global = 0; SP sets per-TX via SET LOCAL) ──
+    statement_timeout = 0
+    lock_timeout = 0
+    idle_in_transaction_session_timeout = 30000
+
+    # ── Logging ──
+    log_min_duration_statement = 200
+    log_checkpoints = on
+    log_lock_waits = on
+    log_temp_files = 0
+    log_autovacuum_min_duration = 1000
+    log_line_prefix = '%m [%p] %q%u@%d '
+
+    # ── Autovacuum (aggressive for high-write wallet workload) ──
+    autovacuum_max_workers = 4
+    autovacuum_naptime = 10s
+    autovacuum_vacuum_scale_factor = 0.02
+    autovacuum_analyze_scale_factor = 0.01
+    autovacuum_vacuum_cost_limit = 2000
+
+    # ── Extensions ──
+    shared_preload_libraries = 'pg_stat_statements,pgcrypto'
+    pg_stat_statements.max = 10000
+    pg_stat_statements.track = all
+    track_io_timing = on
+    track_functions = all
+
+  pg_hba.conf: |
+    # TYPE  DATABASE  USER             ADDRESS      METHOD
+    local   all       postgres                      peer
+    host    all       all              0.0.0.0/0    scram-sha-256
+    host    replication all            0.0.0.0/0    scram-sha-256
+---
+# Init scripts ConfigMap — mount the schema files
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-init-scripts
+  namespace: wallet
+data:
+  00-create-roles.sql: |
+    -- Create application roles (passwords set by Vault secrets)
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'wallet_app') THEN
+        CREATE ROLE wallet_app LOGIN PASSWORD 'CHANGE_ME';
+      END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'wallet_pii_ro') THEN
+        CREATE ROLE wallet_pii_ro LOGIN PASSWORD 'CHANGE_ME';
+      END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'wallet_eod') THEN
+        CREATE ROLE wallet_eod LOGIN PASSWORD 'CHANGE_ME';
+      END IF;
+    END $$;
+  # NOTE: schema.sql, partitions.sql, seed.sql are loaded separately
+  # via a one-time Job or kubectl exec (too large for ConfigMap).
+  # See README for the schema loading procedure.
