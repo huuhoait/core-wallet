@@ -33,7 +33,7 @@
 
 ## 2. Bảng KHỚP cột hoàn toàn (12 bảng — chỉ cần xét thứ tự, không đụng nội dung)
 
-`FM_CLIENT_INDVL`, `FM_CLIENT_IDENTIFIERS`, `WLT_ACCT_TYPE`, `WLT_ACCT_GROUP`, `WLT_GL_BATCH`, `WLT_RESTRAINTS`, `WLT_SWEEP_LOG`, `WLT_GL_MAP`, `WLT_NOSTRO_LINK`, `WLT_API_MESSAGE`, `WLT_OUTBOX`, `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`.
+`FM_CLIENT_INDVL`, `FM_CLIENT_IDENTIFIERS`, `WLT_ACCT_TYPE`, `WLT_ACCT_GROUP`, `WLT_GL_BATCH`, `WLT_RESTRAINTS`, `WLT_SWEEP_LOG`, `WLT_GL_MAP`, `WLT_NOSTRO_LINK`, `WLT_API_MESSAGE`, `WLT_OUTBOX`, `WLT_WITHDRAW_TRACK`, `FM_CLIENT_AUDIT_LOG`.
 
 *(Lưu ý: một số bảng trên ở `wallet_schema.sql` có thêm CHECK constraint — vd `chk_gl_batch_status`, `chk_api_status` — nhưng tập cột & thứ tự cột trùng khớp.)*
 
@@ -86,7 +86,7 @@ VERIFIED_AT, CREATED_AT, UPDATED_AT
 - `[sch]` **STATUS** VARCHAR(4) NOT NULL DEFAULT 'A' (cuối bảng); thêm NOT NULL cho `ACCT_TYPE`, `CCY`.
 - Thứ tự cột chung: khớp.
 
-### 3.7 `WLT_CLIENT_KYC`  (ddl 574 · sch 193) — ⚠️ BẢO MẬT (PII)
+### 3.7 `FM_CLIENT_KYC`  (ddl 574 · sch 193) — ⚠️ BẢO MẬT (PII)
 | wallet_ddl.sql | wallet_schema.sql |
 |---|---|
 | `PHONE_NO VARCHAR(20) NOT NULL UNIQUE` (plaintext) | `PHONE_NO_ENC BYTEA` + `PHONE_NO_HASH BYTEA` (mã hóa + HMAC) |
@@ -150,7 +150,7 @@ VERIFIED_AT, CREATED_AT, UPDATED_AT
 
 ## 5. Hiện trạng so với khối ERD mermaid (nguồn thứ 3)
 
-Khối ERD (wallet_ddl.sql 72–391) chỉ liệt kê **tập cột rút gọn, minh họa**, thứ tự & số lượng cột **không khớp** cả hai bản DDL (vd `FM_CLIENT` ERD liệt kê 13 cột, DDL thật 17–19 cột; `WLT_CLIENT_KYC` ERD ghi `PHONE_NO` plaintext giống bản ddl, sai so với bản chạy mã hóa). → ERD cần cập nhật **sau khi** chốt schema chuẩn, không nên đồng bộ ngược.
+Khối ERD (wallet_ddl.sql 72–391) chỉ liệt kê **tập cột rút gọn, minh họa**, thứ tự & số lượng cột **không khớp** cả hai bản DDL (vd `FM_CLIENT` ERD liệt kê 13 cột, DDL thật 17–19 cột; `FM_CLIENT_KYC` ERD ghi `PHONE_NO` plaintext giống bản ddl, sai so với bản chạy mã hóa). → ERD cần cập nhật **sau khi** chốt schema chuẩn, không nên đồng bộ ngược.
 
 ---
 
@@ -192,9 +192,9 @@ Diff hai kết quả phải rỗng cho các bảng cần đồng bộ.
 
 ### 8.1 Bảng ĐÃ hợp lý — giữ nguyên (19 bảng)
 
-`FM_CURRENCY`, `FM_GL_MAST`, `FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_NOS_VOS`, `WLT_CLIENT_KYC`, `WLT_ACCT_TYPE`, `WLT_ACCT_GROUP`, `WLT_ACCT_BAL`, `WLT_GL_BATCH`, `WLT_RESTRAINTS`, `WLT_SWEEP_LOG`, `WLT_GL_MAP`, `WLT_NOSTRO_BAL`, `WLT_API_MESSAGE`, `WLT_WITHDRAW_TRACK`, `WLT_CLIENT_AUDIT_LOG`, + 3 bảng ddl-only (`WLT_RECON_BREAK`, `WLT_API_TRACE`, `WLT_STMT_DETAIL`).
+`FM_CURRENCY`, `FM_GL_MAST`, `FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_NOS_VOS`, `FM_CLIENT_KYC`, `WLT_ACCT_TYPE`, `WLT_ACCT_GROUP`, `WLT_ACCT_BAL`, `WLT_GL_BATCH`, `WLT_RESTRAINTS`, `WLT_SWEEP_LOG`, `WLT_GL_MAP`, `WLT_NOSTRO_BAL`, `WLT_API_MESSAGE`, `WLT_WITHDRAW_TRACK`, `FM_CLIENT_AUDIT_LOG`, + 3 bảng ddl-only (`WLT_RECON_BREAK`, `WLT_API_TRACE`, `WLT_STMT_DETAIL`).
 
-→ PK đầu bảng, audit/timestamp cuối bảng, các khối nghiệp vụ gom hợp lý theo tính năng (vd state-machine của `WLT_WITHDRAW_TRACK`, khối WHO/WHAT/WHERE của `WLT_CLIENT_AUDIT_LOG`, khối relay-state của `WLT_OUTBOX`).
+→ PK đầu bảng, audit/timestamp cuối bảng, các khối nghiệp vụ gom hợp lý theo tính năng (vd state-machine của `WLT_WITHDRAW_TRACK`, khối WHO/WHAT/WHERE của `FM_CLIENT_AUDIT_LOG`, khối relay-state của `WLT_OUTBOX`).
 
 ### 8.2 Bảng NÊN sắp lại — `WLT_ACCT` (đáng làm)
 

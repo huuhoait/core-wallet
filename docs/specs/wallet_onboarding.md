@@ -170,7 +170,7 @@ sequenceDiagram
 > them in one TX (US-1.1). Step 4's primitive is live: `POST /v1/clients/:client_no/banks`
 > (SP `link_client_bank`, encrypts `acct_no` → `ACCT_NO_ENC`, returns `link_id`; `is_default`
 > flag) and `PUT /v1/clients/:client_no/banks/:link_id/default` (SP `set_default_client_bank`).
-> Both are audited into `WLT_CLIENT_AUDIT_LOG` via `trg_audit_fm_client_bk`. The onboarding
+> Both are audited into `FM_CLIENT_AUDIT_LOG` via `trg_audit_fm_client_bk`. The onboarding
 > wrappers (`/v1/onboard/*`, with KYC-tier side effects) are still pending.
 
 ---

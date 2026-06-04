@@ -8,6 +8,19 @@ condensed from the HLD changelog.
 
 ## [Unreleased]
 
+### Changed — Close US-9.16 / US-9.17: doc sync for `WLT_CLIENT_*` → `FM_CLIENT_*` (2026-06-02)
+- The table re-prefix `WLT_CLIENT_KYC` → `FM_CLIENT_KYC` (US-9.16) and
+  `WLT_CLIENT_AUDIT_LOG` → `FM_CLIENT_AUDIT_LOG` (US-9.17) was **already present in
+  schema/code/DB** (verified against `origin/master` + the live DB: tables,
+  partitions of the audit log, PK/indexes, masked view `v_kyc_masked`, triggers
+  `trg_audit_fm_kyc`/`fn_audit_client_change`, and Go `repo/client.go`).
+- This change closes the stories by **syncing the lagging documentation** to the
+  new names: `docs/dld/wallet_DLD.md`, `docs/hld/*`, `docs/specs/wallet_onboarding.md`,
+  `docs/specs/web_portal.md`, `claudedocs/`, and `CLAUDE.md` (incl. fixing the stale
+  `trg_audit_wlt_kyc` → `trg_audit_fm_kyc`). `USER_STORIES.md` US-9.16/9.17 → ✅.
+- **No API / schema / code change** — provenance mentions ("renamed from …",
+  "`WLT_` → `FM_`") are intentionally preserved in story/changelog text.
+
 ### Changed — Complete the `tfr` → `tran` rename, incl. the public API (2026-06-02)
 - Finishes what US-9.14 left backward-compatible: every remaining `tfr` token is
   renamed to `tran`, **except the `TFR_SEQ_NO` family** (`TFR_SEQ_NO` /

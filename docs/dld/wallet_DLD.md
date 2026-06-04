@@ -6,7 +6,7 @@
 **Companion**: `wallet_HLD.md`, `wallet_onboarding.md` (BRD onboarding + wallet opening + KYC tier), `finance_transaction.md` (BRD + API for topup/deposit/withdraw/transfer/reversal/history with Fee & VAT), `wallet_seed.sql` (operational seed + helper functions + bulk test-data generator)
 
 **Changelog**
-- v1.6.6 (2026-05-28): **Transaction metadata + client-info snapshot + client change-data audit**. Extend `WLT_TRAN_HIST` (§2.5) with two JSONB columns: `METADATA` (caller-supplied open bag, ≤ 1 KB, P1-forbidden) and `CLIENT_INFO` (SP-computed snapshot at posting time, ≤ 512 B, P2-only). Add `WLT_CLIENT_AUDIT_LOG` (§2.13) with a generic SECURITY DEFINER trigger `fn_audit_client_change` that captures every INSERT/UPDATE/DELETE on `WLT_CLIENT_KYC` (and recommended on FM_CLIENT*) with OLD/NEW JSONB + diff'd `CHANGED_FIELDS[]` + maker-checker fields. Application sets `SET LOCAL audit.actor/source/reason/request_id/...` GUCs per TX so the trigger can attribute changes. Posting and audit are **decoupled**: the posting SP does **not** read `WLT_CLIENT_AUDIT_LOG` (would add ~500 reads/sec at peak); investigators join `WLT_TRAN_HIST.POST_DATE` ↔ `WLT_CLIENT_AUDIT_LOG.CHANGED_AT` by time-range instead. PII rules: audit columns inherit §8.3 masking + every P1 read appends to `WLT_PII_ACCESS_LOG`; retention 18mo hot → 10yr archive (§9a).
+- v1.6.6 (2026-05-28): **Transaction metadata + client-info snapshot + client change-data audit**. Extend `WLT_TRAN_HIST` (§2.5) with two JSONB columns: `METADATA` (caller-supplied open bag, ≤ 1 KB, P1-forbidden) and `CLIENT_INFO` (SP-computed snapshot at posting time, ≤ 512 B, P2-only). Add `FM_CLIENT_AUDIT_LOG` (§2.13) with a generic SECURITY DEFINER trigger `fn_audit_client_change` that captures every INSERT/UPDATE/DELETE on `FM_CLIENT_KYC` (and recommended on FM_CLIENT*) with OLD/NEW JSONB + diff'd `CHANGED_FIELDS[]` + maker-checker fields. Application sets `SET LOCAL audit.actor/source/reason/request_id/...` GUCs per TX so the trigger can attribute changes. Posting and audit are **decoupled**: the posting SP does **not** read `FM_CLIENT_AUDIT_LOG` (would add ~500 reads/sec at peak); investigators join `WLT_TRAN_HIST.POST_DATE` ↔ `FM_CLIENT_AUDIT_LOG.CHANGED_AT` by time-range instead. PII rules: audit columns inherit §8.3 masking + every P1 read appends to `WLT_PII_ACCESS_LOG`; retention 18mo hot → 10yr archive (§9a).
 - v1.6.5 (2026-05-28): **Transactional outbox + withdraw disbursement tracking** — close the two P0 gaps from the senior-SA architecture review. Add `WLT_OUTBOX` (§2.11): every posting SP writes one row inside the same TX as `WLT_TRAN_HIST`, ensuring Kafka emission is atomic with the ledger commit. Relay topology: Debezium CDC on `WLT_OUTBOX` (primary) with Go polling worker using `SELECT ... FOR UPDATE SKIP LOCKED` as Y1 fallback. Add `WLT_WITHDRAW_TRACK` (§2.12): mutable disbursement state machine (`SUBMITTED → ACKED → DISBURSING → COMPLETED | FAILED → REVERSED`) keyed by `EXT_PAYOUT_REF`, separate from append-only `WLT_TRAN_HIST`. Add `post_withdraw_reversal` SP signature (§2.12) — idempotent on `EXT_PAYOUT_REF`, refunds amount + fee + VAT in one TX. The Treasury → Wallet callback mechanism that drives this SP lives in the Treasury Service spec (out of scope).
 - v1.6.4 (2026-05-28): **Fix `CALC_BAL` invariant**. Change `CALC_BAL` to `GENERATED ALWAYS AS (ACTUAL_BAL - TOTAL_RESTRAINED_AMT) STORED` instead of a regular column + `CHECK`. Remove `chk_acct_calc` (structurally true). Reason: the SPs in §3.7 only UPDATE `ACTUAL_BAL` without updating `CALC_BAL` → CHECK fails on every posting. Generated stored eliminates this entire bug class. Impact: remove `CALC_BAL` from the target list of every INSERT/UPDATE into `WLT_ACCT` (PG forbids writing to a generated column); `WLT_ACCT_BAL.CALC_BAL` remains as is (separate snapshot).
 - v1.6.3 (2026-05-28): **Sub-account sharding pattern** for merchant/agent hot wallets > 30 TPS. Add `WLT_ACCT_GROUP` (§2.2a), 3 new columns on `WLT_ACCT` (`GROUP_ID`, `SHARD_INDEX`, `ACCT_ROLE`), official DDL for `WLT_RESTRAINTS` (§2.6a) with `GROUP_ID` for group-level scope, audit `WLT_SWEEP_LOG` (§2.6b), views `v_wlt_group_balance` + `v_wlt_active_restraints_effective` (§2.6c). Seed adds tran types: `SWEEPO`, `SWEEPI`, `RVSWP`, `MERCHWD`, `FEEMW`, `RVMWD`. SP catalog (§3.7.1) adds 4 new SPs: `provision_acct_group`, `fn_resolve_shard_acct_no`, `post_sweep_shard`, `post_sweep_group_all`, `post_merchant_withdraw`. Pattern detail + performance calculation §3.6.6.
@@ -47,7 +47,7 @@ erDiagram
     FM_CLIENT ||--o{ FM_CLIENT_IDENTIFIERS : "IDs"
     FM_CLIENT ||--o{ FM_CLIENT_CONTACT : "contacts"
     FM_CLIENT ||--o{ FM_CLIENT_BANKS : "linked banks"
-    FM_CLIENT ||--o{ WLT_CLIENT_KYC : "KYC info"
+    FM_CLIENT ||--o{ FM_CLIENT_KYC : "KYC info"
     FM_CLIENT ||--o{ WLT_ACCT : "owns wallet"
     FM_CURRENCY ||--o{ WLT_ACCT : "CCY"
     FM_GL_MAST ||--o{ WLT_ACCT_TYPE : "liability GL"
@@ -72,8 +72,8 @@ erDiagram
     WLT_API_MESSAGE ||--o{ WLT_API_TRACE : "trace"
     WLT_TRAN_HIST ||--o{ WLT_OUTBOX : "emits event (same TX)"
     WLT_TRAN_HIST ||--|| WLT_WITHDRAW_TRACK : "withdraw disbursement state"
-    FM_CLIENT ||--o{ WLT_CLIENT_AUDIT_LOG : "field-level change history"
-    WLT_CLIENT_KYC ||--o{ WLT_CLIENT_AUDIT_LOG : "field-level change history"
+    FM_CLIENT ||--o{ FM_CLIENT_AUDIT_LOG : "field-level change history"
+    FM_CLIENT_KYC ||--o{ FM_CLIENT_AUDIT_LOG : "field-level change history"
 
     FM_CLIENT {
         VARCHAR CLIENT_NO PK
@@ -137,7 +137,7 @@ erDiagram
         BIGINT  INTERNAL_KEY
     }
 
-    WLT_CLIENT_KYC {
+    FM_CLIENT_KYC {
         BIGINT  KYC_ID PK
         VARCHAR CLIENT_NO FK
         VARCHAR PHONE_NO UK
@@ -234,7 +234,7 @@ erDiagram
         JSONB   CLIENT_INFO
     }
 
-    WLT_CLIENT_AUDIT_LOG {
+    FM_CLIENT_AUDIT_LOG {
         BIGINT      AUDIT_ID PK
         VARCHAR     CLIENT_NO FK
         VARCHAR     TABLE_NAME
@@ -304,7 +304,7 @@ erDiagram
 
 ### 1.2 Cardinality principles
 - 1 `FM_CLIENT` → N `WLT_ACCT` (one customer can open multiple wallets)
-- 1 `FM_CLIENT` → 1 `WLT_CLIENT_KYC` (KYC tier per client)
+- 1 `FM_CLIENT` → 1 `FM_CLIENT_KYC` (KYC tier per client)
 - 1 `WLT_ACCT` → 1 row/day in `WLT_ACCT_BAL` (snapshot)
 - 1 transfer transaction → 2 `WLT_TRAN_HIST` rows linked by `TRAN_INTERNAL_ID`
 - 1 `WLT_TRAN_HIST` → ≥ 2 `WLT_GL_BATCH` rows (double-entry into GL)
@@ -421,13 +421,13 @@ CREATE TABLE FM_NOS_VOS (
 
 ---
 
-### 2.1 WLT_CLIENT_KYC (replaces the old WLT_CLIENT)
+### 2.1 FM_CLIENT_KYC (replaces the old WLT_CLIENT)
 
 ```sql
 -- WLT_CLIENT has been REMOVED — the customer master lives in FM_CLIENT.
 -- WLT only keeps supplementary KYC info that FM does not have.
 
-CREATE TABLE WLT_CLIENT_KYC (
+CREATE TABLE FM_CLIENT_KYC (
   KYC_ID            BIGINT        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   CLIENT_NO         VARCHAR(48)   NOT NULL,              -- → FM_CLIENT.CLIENT_NO
   PHONE_NO          VARCHAR(20)   NOT NULL UNIQUE,
@@ -448,8 +448,8 @@ CREATE TABLE WLT_CLIENT_KYC (
   CONSTRAINT chk_kyc_st    CHECK (STATUS IN ('A','B','C','P'))
 );
 
-CREATE INDEX idx_kyc_client ON WLT_CLIENT_KYC(CLIENT_NO);
-CREATE INDEX idx_kyc_phone  ON WLT_CLIENT_KYC(PHONE_NO);
+CREATE INDEX idx_kyc_client ON FM_CLIENT_KYC(CLIENT_NO);
+CREATE INDEX idx_kyc_phone  ON FM_CLIENT_KYC(PHONE_NO);
 ```
 
 ### 2.1b WLT_ACCT_TYPE (classifier — limit & GL mapping)
@@ -710,7 +710,7 @@ CREATE TABLE WLT_TRAN_HIST (
   -- Suggested keys: channel, device_fp_hash, geo_country, ip_hash, session_id, app_ver,
   --                 risk_score, merchant_category, partner_ref, idemp_replay
   METADATA            JSONB,
-  -- Client snapshot (v1.6.6) — populated by the posting SP from FM_CLIENT + WLT_CLIENT_KYC
+  -- Client snapshot (v1.6.6) — populated by the posting SP from FM_CLIENT + FM_CLIENT_KYC
   -- AT POSTING TIME. P2-only fields (no raw P1). Read-only for compliance/AML lookback.
   -- Suggested keys: client_no, kyc_tier, name_initials, residence_status, country_loc,
   --                 risk_level, customer_segment, fm_client_version
@@ -763,11 +763,11 @@ ALTER TABLE WLT_TRAN_HIST ALTER COLUMN CLIENT_INFO SET COMPRESSION lz4;
 > - **Forbidden**: data that already lives in a typed column (amount, ccy, post_date — duplicates rot when the typed column changes).
 >
 > **`CLIENT_INFO` — SP-computed snapshot**
-> - Populated **inside** the posting SP by reading FM_CLIENT + WLT_CLIENT_KYC. **Never** accept this from the caller — it would let the caller lie about identity.
+> - Populated **inside** the posting SP by reading FM_CLIENT + FM_CLIENT_KYC. **Never** accept this from the caller — it would let the caller lie about identity.
 > - **Hard size cap**: 512 B per row.
 > - **Allowed fields**: `client_no`, `kyc_tier`, `name_initials` (3 chars max), `residence_status`, `country_loc`, `country_citizen`, `risk_level`, `customer_segment`.
 > - **Forbidden**: raw P1 fields (per §8.3). Use `name_initials` not `full_name`. Use last-4 of identifiers not full identifiers.
-> - **Why snapshot at posting time**: a customer can change name / KYC tier / residence status after a transaction. For AML lookback we must know who they *were* at the moment of posting, not who they *are* now. The snapshot is the source of truth for "what did the customer look like at this transaction?" — investigators reconstruct *change history* by joining `WLT_TRAN_HIST.POST_DATE` against `WLT_CLIENT_AUDIT_LOG.CHANGED_AT` by time range, **not** by carrying an audit ID on every transaction (that coupling would force a hot-path read against the audit table at every posting).
+> - **Why snapshot at posting time**: a customer can change name / KYC tier / residence status after a transaction. For AML lookback we must know who they *were* at the moment of posting, not who they *are* now. The snapshot is the source of truth for "what did the customer look like at this transaction?" — investigators reconstruct *change history* by joining `WLT_TRAN_HIST.POST_DATE` against `FM_CLIENT_AUDIT_LOG.CHANGED_AT` by time range, **not** by carrying an audit ID on every transaction (that coupling would force a hot-path read against the audit table at every posting).
 >
 > **Storage impact** at Y5 (~9B rows): 1 KB METADATA + 512 B CLIENT_INFO + JSONB overhead ≈ ~1.8 KB/row uncompressed → with LZ4 (~3× ratio on structured JSON) → ~600 B/row added → **~5.4 TB additional** over the base ~6.6 TB. Updated 5Y volume in §9a.1 should reflect this; lifecycle (hot/warm/cold) unchanged because both columns are part of the row, not separate storage.
 
@@ -1412,17 +1412,17 @@ END $$;
 
 ---
 
-### 2.13 WLT_CLIENT_AUDIT_LOG (change-data-capture for client info)
+### 2.13 FM_CLIENT_AUDIT_LOG (change-data-capture for client info)
 
-**Problem solved**: customer-identifying data (name, phone, email, KYC tier, residence status, ID documents) changes over time. For AML/CFT investigations, dispute resolution, and Decree 13/2023 compliance, we must answer "**what did this client look like on 2025-11-03 when transaction X was posted?**" — not just "what do they look like now?". The `CLIENT_INFO` JSONB column on `WLT_TRAN_HIST` (§2.5) is the point-in-time snapshot; `WLT_CLIENT_AUDIT_LOG` is the **change history** that explains every transition between snapshots.
+**Problem solved**: customer-identifying data (name, phone, email, KYC tier, residence status, ID documents) changes over time. For AML/CFT investigations, dispute resolution, and Decree 13/2023 compliance, we must answer "**what did this client look like on 2025-11-03 when transaction X was posted?**" — not just "what do they look like now?". The `CLIENT_INFO` JSONB column on `WLT_TRAN_HIST` (§2.5) is the point-in-time snapshot; `FM_CLIENT_AUDIT_LOG` is the **change history** that explains every transition between snapshots.
 
-**Scope**: any table whose rows describe a customer's identity or KYC state. In WLT scope today: `WLT_CLIENT_KYC`. In FM scope (requires coordination with the FM data team): `FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_CLIENT_IDENTIFIERS`, `FM_CLIENT_CONTACT`, `FM_CLIENT_BANKS`. Both layers write into the same audit log so investigators have a single timeline.
+**Scope**: any table whose rows describe a customer's identity or KYC state. In WLT scope today: `FM_CLIENT_KYC`. In FM scope (requires coordination with the FM data team): `FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_CLIENT_IDENTIFIERS`, `FM_CLIENT_CONTACT`, `FM_CLIENT_BANKS`. Both layers write into the same audit log so investigators have a single timeline.
 
 ```sql
-CREATE TABLE WLT_CLIENT_AUDIT_LOG (
+CREATE TABLE FM_CLIENT_AUDIT_LOG (
   AUDIT_ID         BIGINT       GENERATED ALWAYS AS IDENTITY,
   CLIENT_NO        VARCHAR(48)  NOT NULL,             -- → FM_CLIENT.CLIENT_NO
-  TABLE_NAME       VARCHAR(40)  NOT NULL,             -- 'FM_CLIENT' | 'FM_CLIENT_INDVL' | 'WLT_CLIENT_KYC' | ...
+  TABLE_NAME       VARCHAR(40)  NOT NULL,             -- 'FM_CLIENT' | 'FM_CLIENT_INDVL' | 'FM_CLIENT_KYC' | ...
   ROW_PK           JSONB        NOT NULL,             -- PK identifier for the changed row (handles composite PKs)
   OPERATION        VARCHAR(8)   NOT NULL,             -- 'INSERT' | 'UPDATE' | 'DELETE'
   CHANGED_AT       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -1448,26 +1448,26 @@ CREATE TABLE WLT_CLIENT_AUDIT_LOG (
 ) PARTITION BY RANGE (CHANGED_AT);
 
 -- Initial monthly partitions (pg_partman manages going forward; retention per §9a)
-CREATE TABLE wlt_client_audit_log_2026_01 PARTITION OF WLT_CLIENT_AUDIT_LOG
+CREATE TABLE fm_client_audit_log_2026_01 PARTITION OF FM_CLIENT_AUDIT_LOG
   FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
-CREATE TABLE wlt_client_audit_log_2026_02 PARTITION OF WLT_CLIENT_AUDIT_LOG
+CREATE TABLE fm_client_audit_log_2026_02 PARTITION OF FM_CLIENT_AUDIT_LOG
   FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
 -- ...
 
 -- Indexes (created on parent → auto-propagate to all partitions)
-CREATE INDEX idx_caudit_client_time   ON WLT_CLIENT_AUDIT_LOG(CLIENT_NO, CHANGED_AT DESC);
-CREATE INDEX idx_caudit_table_time    ON WLT_CLIENT_AUDIT_LOG(TABLE_NAME, CHANGED_AT DESC);
-CREATE INDEX idx_caudit_changed_fields ON WLT_CLIENT_AUDIT_LOG USING GIN (CHANGED_FIELDS);
-CREATE INDEX idx_caudit_request       ON WLT_CLIENT_AUDIT_LOG(REQUEST_ID) WHERE REQUEST_ID IS NOT NULL;
+CREATE INDEX idx_caudit_client_time   ON FM_CLIENT_AUDIT_LOG(CLIENT_NO, CHANGED_AT DESC);
+CREATE INDEX idx_caudit_table_time    ON FM_CLIENT_AUDIT_LOG(TABLE_NAME, CHANGED_AT DESC);
+CREATE INDEX idx_caudit_changed_fields ON FM_CLIENT_AUDIT_LOG USING GIN (CHANGED_FIELDS);
+CREATE INDEX idx_caudit_request       ON FM_CLIENT_AUDIT_LOG(REQUEST_ID) WHERE REQUEST_ID IS NOT NULL;
 -- For "find every change to phone number across all clients in date range":
-CREATE INDEX idx_caudit_old_jsonb ON WLT_CLIENT_AUDIT_LOG USING GIN (OLD_VALUES jsonb_path_ops);
-CREATE INDEX idx_caudit_new_jsonb ON WLT_CLIENT_AUDIT_LOG USING GIN (NEW_VALUES jsonb_path_ops);
+CREATE INDEX idx_caudit_old_jsonb ON FM_CLIENT_AUDIT_LOG USING GIN (OLD_VALUES jsonb_path_ops);
+CREATE INDEX idx_caudit_new_jsonb ON FM_CLIENT_AUDIT_LOG USING GIN (NEW_VALUES jsonb_path_ops);
 
 -- Compression
-ALTER TABLE WLT_CLIENT_AUDIT_LOG ALTER COLUMN OLD_VALUES SET STORAGE EXTENDED;
-ALTER TABLE WLT_CLIENT_AUDIT_LOG ALTER COLUMN OLD_VALUES SET COMPRESSION lz4;
-ALTER TABLE WLT_CLIENT_AUDIT_LOG ALTER COLUMN NEW_VALUES SET STORAGE EXTENDED;
-ALTER TABLE WLT_CLIENT_AUDIT_LOG ALTER COLUMN NEW_VALUES SET COMPRESSION lz4;
+ALTER TABLE FM_CLIENT_AUDIT_LOG ALTER COLUMN OLD_VALUES SET STORAGE EXTENDED;
+ALTER TABLE FM_CLIENT_AUDIT_LOG ALTER COLUMN OLD_VALUES SET COMPRESSION lz4;
+ALTER TABLE FM_CLIENT_AUDIT_LOG ALTER COLUMN NEW_VALUES SET STORAGE EXTENDED;
+ALTER TABLE FM_CLIENT_AUDIT_LOG ALTER COLUMN NEW_VALUES SET COMPRESSION lz4;
 ```
 
 #### Capture mechanism — generic trigger
@@ -1522,7 +1522,7 @@ BEGIN
   -- and letting investigators query whichever keys they need)
   v_pk := jsonb_build_object('table', TG_TABLE_NAME, 'client_no', v_client_no);
 
-  INSERT INTO WLT_CLIENT_AUDIT_LOG (
+  INSERT INTO FM_CLIENT_AUDIT_LOG (
     CLIENT_NO, TABLE_NAME, ROW_PK, OPERATION,
     CHANGED_BY, CHANGE_SOURCE, CHANGE_REASON,
     OLD_VALUES, NEW_VALUES, CHANGED_FIELDS,
@@ -1545,13 +1545,13 @@ END $$;
 
 -- Lock down the audit table — only the trigger function (SECURITY DEFINER) can INSERT.
 -- App roles cannot INSERT/UPDATE/DELETE directly. This guarantees the log is authoritative.
-REVOKE INSERT, UPDATE, DELETE ON WLT_CLIENT_AUDIT_LOG FROM wallet_app, wallet_pii_ro;
-GRANT  SELECT ON WLT_CLIENT_AUDIT_LOG TO wallet_pii_ro;
+REVOKE INSERT, UPDATE, DELETE ON FM_CLIENT_AUDIT_LOG FROM wallet_app, wallet_pii_ro;
+GRANT  SELECT ON FM_CLIENT_AUDIT_LOG TO wallet_pii_ro;
 -- Compliance role has SELECT only; nobody has UPDATE/DELETE in production.
 
 -- Attach triggers to WLT-side client tables (wallet team owns)
 CREATE TRIGGER trg_audit_wlt_kyc
-  AFTER INSERT OR UPDATE OR DELETE ON WLT_CLIENT_KYC
+  AFTER INSERT OR UPDATE OR DELETE ON FM_CLIENT_KYC
   FOR EACH ROW EXECUTE FUNCTION fn_audit_client_change();
 
 -- FM-side tables (recommended — requires coordination with FM data team to install)
@@ -1583,7 +1583,7 @@ SET LOCAL audit.maker_id    = 'ops_user_42';
 SET LOCAL audit.checker_id  = 'ops_user_88';
 SET LOCAL audit.approval_ref= 'WF-2026-05-28-001';
 
-UPDATE WLT_CLIENT_KYC SET KYC_TIER='2', VERIFIED_AT=NOW(), VERIFIED_BY='ops_user_42'
+UPDATE FM_CLIENT_KYC SET KYC_TIER='2', VERIFIED_AT=NOW(), VERIFIED_BY='ops_user_42'
  WHERE CLIENT_NO = 'C0001234';
 
 COMMIT;
@@ -1593,7 +1593,7 @@ If the GUCs are not set, the trigger falls back to `session_user` and source `SP
 
 #### Linkage to posting snapshots
 
-The posting SP populates `WLT_TRAN_HIST.CLIENT_INFO` (§2.5) by reading FM_CLIENT + WLT_CLIENT_KYC only — it does **not** read `WLT_CLIENT_AUDIT_LOG`. Posting and audit are deliberately decoupled so:
+The posting SP populates `WLT_TRAN_HIST.CLIENT_INFO` (§2.5) by reading FM_CLIENT + FM_CLIENT_KYC only — it does **not** read `FM_CLIENT_AUDIT_LOG`. Posting and audit are deliberately decoupled so:
 
 - The audit table is never on the hot path (a `SELECT MAX(AUDIT_ID)` per posting at 500–2K TPS would add measurable load on a JSONB-heavy partitioned table).
 - The audit subsystem can be slow, locked, or even briefly offline without affecting posting throughput.
@@ -1615,7 +1615,7 @@ Investigators reconstruct the audit timeline by **time range**, not by ID linkag
 ```sql
 SELECT CHANGED_AT, TABLE_NAME, CHANGED_BY, CHANGE_REASON, CHANGED_FIELDS,
        OLD_VALUES, NEW_VALUES
-  FROM WLT_CLIENT_AUDIT_LOG
+  FROM FM_CLIENT_AUDIT_LOG
  WHERE CLIENT_NO = 'C0001234'
    AND CHANGED_AT BETWEEN '2026-03-01' AND '2026-04-15'
  ORDER BY CHANGED_AT;
@@ -1625,7 +1625,7 @@ Indexes `idx_caudit_client_time` already optimize this exact query shape.
 
 #### PII handling for audit data
 
-`OLD_VALUES` / `NEW_VALUES` capture **whatever was in the row** — which for `WLT_CLIENT_KYC` includes `PHONE_NO`, `EMAIL` (P1). The audit table inherits the same PII regime as the source tables:
+`OLD_VALUES` / `NEW_VALUES` capture **whatever was in the row** — which for `FM_CLIENT_KYC` includes `PHONE_NO`, `EMAIL` (P1). The audit table inherits the same PII regime as the source tables:
 
 - Stored with column-level encryption already in place on the source columns (§8.3.2).
 - Read only through `v_audit_client_log_masked` view (returns masked PII by default).
@@ -1650,7 +1650,7 @@ SELECT CLIENT_INFO FROM WLT_TRAN_HIST WHERE TRAN_INTERNAL_ID = 1234567890 LIMIT 
 
 -- Show me every change to C0001234 in 2026 with the actor and reason
 SELECT CHANGED_AT, TABLE_NAME, CHANGED_BY, CHANGE_SOURCE, CHANGE_REASON, CHANGED_FIELDS
-  FROM WLT_CLIENT_AUDIT_LOG
+  FROM FM_CLIENT_AUDIT_LOG
  WHERE CLIENT_NO = 'C0001234'
    AND CHANGED_AT >= '2026-01-01' AND CHANGED_AT < '2027-01-01'
  ORDER BY CHANGED_AT;
@@ -1659,7 +1659,7 @@ SELECT CHANGED_AT, TABLE_NAME, CHANGED_BY, CHANGE_SOURCE, CHANGE_REASON, CHANGED
 SELECT OLD_VALUES->>'PHONE_NO' AS old_phone,
        NEW_VALUES->>'PHONE_NO' AS new_phone,
        CHANGED_AT, CHANGED_BY, CHANGE_REASON
-  FROM WLT_CLIENT_AUDIT_LOG
+  FROM FM_CLIENT_AUDIT_LOG
  WHERE CLIENT_NO = 'C0001234'
    AND 'PHONE_NO' = ANY (CHANGED_FIELDS)
  ORDER BY CHANGED_AT;
@@ -1667,8 +1667,8 @@ SELECT OLD_VALUES->>'PHONE_NO' AS old_phone,
 -- All KYC tier upgrades in the last 7 days
 SELECT CLIENT_NO, OLD_VALUES->>'KYC_TIER' AS old_tier, NEW_VALUES->>'KYC_TIER' AS new_tier,
        CHANGED_AT, CHANGED_BY, APPROVAL_REF
-  FROM WLT_CLIENT_AUDIT_LOG
- WHERE TABLE_NAME = 'WLT_CLIENT_KYC'
+  FROM FM_CLIENT_AUDIT_LOG
+ WHERE TABLE_NAME = 'FM_CLIENT_KYC'
    AND 'KYC_TIER' = ANY (CHANGED_FIELDS)
    AND CHANGED_AT > NOW() - INTERVAL '7 days'
  ORDER BY CHANGED_AT DESC;
