@@ -1,0 +1,151 @@
+# =============================================================================
+# Core Wallet — CD Pipeline
+# Builds container images and deploys to staging/production via Terraform.
+# Triggered on merge to master (staging) or tag push (production).
+# =============================================================================
+name: CD
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+
+env:
+  GO_VERSION: "1.23"
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/core-wallet
+  AWS_REGION: ap-southeast-1
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write # OIDC for AWS assume role
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Build & Push container images
+  # ──────────────────────────────────────────────────────────────────────────
+  build-images:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - name: wallet-service
+            context: services/wallet-service
+            dockerfile: services/wallet-service/Dockerfile
+          - name: outbox-relay
+            context: services/outbox-relay
+            dockerfile: services/outbox-relay/Dockerfile
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Deploy to Staging (on push to master)
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy Staging
+    needs: build-images
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: deploy/terraform/environments/staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.7"
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="image_tag=${{ github.sha }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Deploy to Production (on tag push v*)
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy-production:
+    name: Deploy Production
+    needs: build-images
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: deploy/terraform/environments/production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.7"
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="image_tag=${{ github.ref_name }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan

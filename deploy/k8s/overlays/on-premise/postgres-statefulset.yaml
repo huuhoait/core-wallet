@@ -1,0 +1,206 @@
+# =============================================================================
+# On-premise PostgreSQL 17 StatefulSet
+# For production on-prem: consider CloudNativePG operator or Patroni HA.
+# This is a minimal single-primary setup for reference.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-primary
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: core-wallet
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: primary
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-primary-headless
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: primary
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-primary
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: core-wallet
+    app.kubernetes.io/component: primary
+spec:
+  serviceName: postgres-primary-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/component: primary
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: core-wallet
+        app.kubernetes.io/component: primary
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: wallet
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wallet-db-credentials
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: TZ
+              value: Asia/Ho_Chi_Minh
+          args:
+            - "-c"
+            - "config_file=/etc/postgresql/postgresql.conf"
+            - "-c"
+            - "hba_file=/etc/postgresql/pg_hba.conf"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+            limits:
+              cpu: "4"
+              memory: 16Gi
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: pg-config
+              mountPath: /etc/postgresql
+            - name: pg-init
+              mountPath: /docker-entrypoint-initdb.d
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+                - -d
+                - wallet
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+                - -d
+                - wallet
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: pg-config
+          configMap:
+            name: postgres-config
+        - name: pg-init
+          configMap:
+            name: postgres-init-scripts
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd  # on-prem: local-path or ceph-rbd
+        resources:
+          requests:
+            storage: 200Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: wallet
+data:
+  postgresql.conf: |
+    # Core Wallet PG17 — on-prem tuned for 8 vCPU / 16 GB
+    listen_addresses = '*'
+    max_connections = 200
+    shared_buffers = 4GB
+    effective_cache_size = 12GB
+    work_mem = 64MB
+    maintenance_work_mem = 512MB
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+    wal_buffers = 64MB
+    min_wal_size = 1GB
+    max_wal_size = 4GB
+    checkpoint_completion_target = 0.9
+    max_worker_processes = 8
+    max_parallel_workers_per_gather = 4
+    max_parallel_workers = 8
+    max_parallel_maintenance_workers = 4
+
+    # Logging
+    log_min_duration_statement = 500
+    log_checkpoints = on
+    log_connections = off
+    log_disconnections = off
+    log_lock_waits = on
+    log_temp_files = 0
+
+    # Timeout (global = 0; SP sets per-TX via SET LOCAL)
+    statement_timeout = 0
+    lock_timeout = 0
+    idle_in_transaction_session_timeout = 30000
+
+    # Replication (for future read replica)
+    wal_level = replica
+    max_wal_senders = 5
+    max_replication_slots = 5
+
+    # Extensions
+    shared_preload_libraries = 'pg_stat_statements'
+    pg_stat_statements.max = 5000
+    pg_stat_statements.track = all
+  pg_hba.conf: |
+    # TYPE  DATABASE  USER         ADDRESS     METHOD
+    local   all       postgres                 peer
+    host    all       all          0.0.0.0/0   scram-sha-256
+    host    replication all        0.0.0.0/0   scram-sha-256
+---
+# Secret for postgres superuser (on-prem)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wallet-db-credentials
+  namespace: wallet
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "CHANGE_ME_POSTGRES_SUPER"
+  DB_DSN: "postgres://wallet_app:CHANGE_ME_APP@localhost:6432/wallet?sslmode=disable"

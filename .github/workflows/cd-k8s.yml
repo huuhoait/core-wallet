@@ -1,0 +1,169 @@
+# =============================================================================
+# Core Wallet — CD Pipeline (Kubernetes)
+# Builds images, deploys to K8s via kustomize.
+# Supports both AWS EKS and on-premise clusters.
+# =============================================================================
+name: CD (Kubernetes)
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+
+env:
+  GO_VERSION: "1.23"
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/core-wallet
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Build & Push container images
+  # ──────────────────────────────────────────────────────────────────────────
+  build-images:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - name: wallet-service
+            context: services/wallet-service
+            dockerfile: services/wallet-service/Dockerfile
+          - name: outbox-relay
+            context: services/outbox-relay
+            dockerfile: services/outbox-relay/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Deploy to Staging (AWS EKS) — on push to master
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy-staging-eks:
+    name: Deploy Staging (EKS)
+    needs: build-images
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-southeast-1
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name core-wallet-staging-cluster --region ap-southeast-1
+
+      - name: Set image tag
+        run: |
+          cd deploy/k8s/overlays/aws-eks
+          kustomize edit set image \
+            "ghcr.io/OWNER/core-wallet/wallet-service=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/wallet-service:${{ github.sha }}"
+
+      - name: Deploy with kustomize
+        run: |
+          kubectl apply -k deploy/k8s/overlays/aws-eks
+          kubectl -n wallet rollout status deployment/wallet-service --timeout=300s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Deploy to Production (AWS EKS) — on tag push
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy-production-eks:
+    name: Deploy Production (EKS)
+    needs: build-images
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-southeast-1
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name core-wallet-production-cluster --region ap-southeast-1
+
+      - name: Set image tag
+        run: |
+          cd deploy/k8s/overlays/aws-eks
+          kustomize edit set image \
+            "ghcr.io/OWNER/core-wallet/wallet-service=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/wallet-service:${{ github.ref_name }}"
+
+      - name: Deploy with kustomize
+        run: |
+          kubectl apply -k deploy/k8s/overlays/aws-eks
+          kubectl -n wallet rollout status deployment/wallet-service --timeout=300s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Deploy to On-Premise K8s — manual trigger
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy-onprem:
+    name: Deploy On-Premise
+    needs: build-images
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: self-hosted  # self-hosted runner with kubeconfig access
+    environment: on-premise
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        run: |
+          cd deploy/k8s/overlays/on-premise
+          kustomize edit set image \
+            "ghcr.io/OWNER/core-wallet/wallet-service=registry.internal.local/core-wallet/wallet-service:${{ github.sha }}"
+
+      - name: Deploy with kustomize
+        run: |
+          kubectl apply -k deploy/k8s/overlays/on-premise
+          kubectl -n wallet rollout status deployment/wallet-service --timeout=300s
+
+      - name: Verify health
+        run: |
+          kubectl -n wallet wait --for=condition=ready pod -l app.kubernetes.io/name=wallet-service --timeout=120s
+          # Hit healthz via port-forward
+          kubectl -n wallet port-forward svc/wallet-service 8080:8080 &
+          sleep 3
+          curl -sf http://localhost:8080/healthz

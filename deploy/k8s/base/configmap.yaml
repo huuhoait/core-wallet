@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wallet-service-config
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: wallet-service
+    app.kubernetes.io/part-of: core-wallet
+data:
+  APP_ENV: "production"
+  GIN_MODE: "release"
+  HTTP_ADDR: ":8080"
+  DB_LOCK_TIMEOUT: "1500ms"
+  DB_STATEMENT_TIMEOUT: "2500ms"
+  HTTP_REQUEST_TIMEOUT: "10s"
+  HTTP_READ_TIMEOUT: "15s"
+  HTTP_WRITE_TIMEOUT: "15s"
+  HTTP_IDLE_TIMEOUT: "60s"
+  HTTP_SHUTDOWN_TIMEOUT: "15s"
+  DB_MAX_CONNS: "50"
+  DB_MIN_CONNS: "5"
+  DB_MAX_CONN_LIFETIME: "30m"
+  DB_MAX_CONN_IDLE: "5m"
+  DB_TX_MAX_RETRIES: "2"
+  OTEL_ENABLED: "true"
+  OTEL_SERVICE_NAME: "wallet-service"
+  OTEL_EXPORTER_OTLP_INSECURE: "true"
+  # EOD disabled by default — enable on ONE replica only
+  EOD_ENABLED: "false"
+  EOD_RUN_AT: "00:30:00"
+  EOD_GL_CUTOFF: "18:00:00"
+  EOD_TIMEZONE: "Asia/Ho_Chi_Minh"
+  EOD_RUN_TIMEOUT: "30m"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgbouncer-config
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: pgbouncer
+    app.kubernetes.io/part-of: core-wallet
+data:
+  pgbouncer.ini: |
+    [databases]
+    wallet = host=${DB_HOST} port=${DB_PORT} dbname=wallet
+
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 6432
+    auth_type = scram-sha-256
+    auth_file = /etc/pgbouncer/userlist.txt
+    pool_mode = transaction
+    default_pool_size = 16
+    max_client_conn = 200
+    reserve_pool_size = 5
+    reserve_pool_timeout = 5
+    server_idle_timeout = 600
+    max_prepared_statements = 200
+    ignore_startup_parameters = extra_float_digits,application_name,search_path
+    stats_period = 60
+    admin_users = postgres

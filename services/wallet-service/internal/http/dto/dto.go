@@ -218,10 +218,11 @@ type ProblemDetails struct {
 	Type     string `json:"type,omitempty"`     // RFC7807: URI to error doc
 	Title    string `json:"title"`              // RFC7807: short human title
 	Status   int    `json:"status"`             // RFC7807: HTTP status code
-	Detail   string `json:"detail,omitempty"`   // RFC7807: human-readable detail
+	Detail   string `json:"detail,omitempty"`   // RFC7807: human-readable detail (dynamic context)
 	Instance string `json:"instance,omitempty"` // RFC7807: request path
 
-	Code              string         `json:"code"`                           // business code (canonical contract)
+	ErrorCode         string         `json:"errorCode"`                      // stable business error code (canonical contract)
+	ErrorMessage      string         `json:"errorMessage"`                   // stable human message for this code (i18n source, safe for end-user)
 	InternalCode      string         `json:"internal_code,omitempty"`        // E#### for log/alert (§5)
 	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty"` // ISO 20022 External Status Reason (§13.2)
 	TransactionStatus string         `json:"transaction_status,omitempty"`   // pain.002 status (§13.3)
@@ -257,13 +258,18 @@ func NewProblem(code string, status int, detail, instance, traceID string) Probl
 	if title == "" {
 		title = code
 	}
+	errorMessage := m.Message
+	if errorMessage == "" {
+		errorMessage = title
+	}
 	return ProblemDetails{
 		Type:              ProblemTypeBase + code,
 		Title:             title,
 		Status:            status,
 		Detail:            detail,
 		Instance:          instance,
-		Code:              code,
+		ErrorCode:         code,
+		ErrorMessage:      errorMessage,
 		InternalCode:      m.InternalCode,
 		ISO20022Reason:    m.ISOReason,
 		TransactionStatus: m.TxStatus,

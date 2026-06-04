@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: wallet-service
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: wallet-service
+    app.kubernetes.io/part-of: core-wallet
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wallet-service
