@@ -1676,3 +1676,52 @@ SELECT CLIENT_NO, OLD_VALUES->>'KYC_TIER' AS old_tier, NEW_VALUES->>'KYC_TIER' A
 
 ---
 
+### 2.14 WLT_RECON_BREAK (persisted reconciliation breaks)
+
+**Problem solved**: the accounting reconciliation suite (`db/tests/wallet_reconciliation_check.sql`, invariants **A..M** — trial balance, double-entry, `ACTUAL_BAL = Σ ledger`, running-balance math, chain continuity, half-applied postings, GL mapping, VAT = 10 %, solvency, negative balances, per-flow balancing, fee-GL classification) was a **read-only** audit: it printed PASS/FAIL to whoever ran it and persisted nothing. A break seen at 02:00 by the EOD job left no record — no history, no owner, no attribution, nothing to query the next morning. `WLT_RECON_BREAK` turns each FAIL into a **tracked, attributable record**.
+
+**Mechanism**: `fn_record_recon_breaks(p_biz_date DATE DEFAULT CURRENT_DATE)` re-runs the identical A..M invariant logic and, instead of formatting a verdict, **INSERTs one row per FAILED invariant** — all tagged with a single generated `RUN_ID`. It returns `(run_id, biz_date, breaks_recorded)`; `breaks_recorded = 0` means a clean ledger. The function carries `SET statement_timeout = 0` (invariants D/G scan all history for cumulative `ACTUAL_BAL` and must not false-fail under the 2.5 s OLTP statement timeout). Each call is an **independent snapshot** (append-only); resolution is a manual `UPDATE` of `STATUS` `OPEN → RESOLVED | IGNORED` with `RESOLVED_BY` / `RESOLUTION_NOTE`. Inserts run through the `trg_audit_cols` trigger, so `CREATED_BY` / `CHANNEL` attribute *who* ran the reconciliation (via the `audit.*` GUCs, same as every other write path).
+
+```sql
+CREATE TABLE WLT_RECON_BREAK (
+  BREAK_ID        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  RUN_ID          UUID         NOT NULL,         -- groups all breaks of one run
+  BIZ_DATE        DATE         NOT NULL,
+  AREA            VARCHAR(2)   NOT NULL,         -- invariant code A..M
+  CHECK_NAME      VARCHAR(60)  NOT NULL,
+  SEVERITY        VARCHAR(8)   NOT NULL DEFAULT 'ERROR',   -- ERROR | WARN
+  DETAIL          VARCHAR(500) NOT NULL,         -- the audit's human-readable diff string
+  STATUS          VARCHAR(10)  NOT NULL DEFAULT 'OPEN',    -- OPEN | RESOLVED | IGNORED
+  DETECTED_AT     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  RESOLVED_AT     TIMESTAMPTZ,
+  RESOLVED_BY     VARCHAR(64),
+  RESOLUTION_NOTE VARCHAR(500),
+  CHANNEL         VARCHAR(20),
+  CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT now(), CREATED_BY VARCHAR(64) NOT NULL DEFAULT 'SYSTEM',
+  UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT now(), UPDATED_BY VARCHAR(64) NOT NULL DEFAULT 'SYSTEM'
+);
+CREATE INDEX idx_recon_break_open ON WLT_RECON_BREAK(BIZ_DATE DESC, AREA) WHERE STATUS = 'OPEN';
+CREATE INDEX idx_recon_break_run  ON WLT_RECON_BREAK(RUN_ID);
+```
+
+**Usage** (intended to be driven by the EOD job; runnable ad-hoc by ops):
+
+```sql
+-- run reconciliation for today and record any breaks
+SELECT * FROM fn_record_recon_breaks();          -- → (run_id, biz_date, breaks_recorded)
+
+-- triage the open breaks of the latest run
+SELECT area, check_name, detail, detected_at, created_by
+  FROM wlt_recon_break WHERE status = 'OPEN' ORDER BY biz_date DESC, area;
+
+-- close one after investigation
+UPDATE wlt_recon_break
+   SET status = 'RESOLVED', resolved_at = now(), resolved_by = 'ops.alice',
+       resolution_note = 'late MT940 posting, rebooked under TRAN X'
+ WHERE break_id = 42;
+```
+
+> **Scope.** This is the *internal* accounting reconciliation (ledger self-consistency, invariants A..M). External-rail reconciliation (NAPAS / partner-bank / MT940 settlement matching) is out of scope and belongs to the Treasury Service. Wiring `fn_record_recon_breaks` into the EOD schedule and any read API / alerting on `STATUS = 'OPEN'` are follow-ups, not part of this table's contract. Test: `db/tests/wallet_recon_break_test.sql`.
+
+---
+
