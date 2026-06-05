@@ -31,6 +31,32 @@
         └──────────────────────────┘     └──────────────────────────────────┘
 ```
 
+### Code layout (clean architecture)
+
+Dependencies point inward — adapters depend on the usecase ports, the usecase
+depends on `domain`, and `domain` depends on nothing but the standard library.
+
+```
+cmd/relay            composition root: load config, build adapters, wire usecases, run mode
+internal/
+  domain/            pure types (OutboxEvent, KafkaMessage, SentRef) + errors — no framework imports
+  usecase/           application services + driven ports (port.go)
+                       · PollingRelay      — claim batch → publish → commit (polling mode)
+                       · CDCStatusUpdater  — mark a CDC-delivered row SENT (cdc mode)
+                       · ports: OutboxRepository, Batch, EventPublisher, ConnectorController, MetricsRecorder
+  repo/              OutboxRepository over pgx (WLT_OUTBOX); Batch wraps the claim-and-mark TX
+  kafka/             EventPublisher (SyncProducer) + CDC consumer (drives CDCStatusUpdater)
+  debezium/          ConnectorController over the Kafka Connect REST API
+  metrics/           in-process counters (MetricsRecorder + GetStats for /metrics)
+  ops/               operational HTTP server (/health, /metrics, /config)
+  config/            env → Config
+```
+
+The `Batch` port is the key abstraction: it keeps the `FOR UPDATE SKIP LOCKED`
+transaction (locks held across the publishes) inside `repo`, so the usecase
+orchestrates a batch without importing `pgx`. The usecase layer is unit-tested
+with fakes (`internal/usecase/polling_test.go`) — no DB or broker required.
+
 ## Mode Comparison
 
 | Aspect | Polling | CDC (Debezium) |

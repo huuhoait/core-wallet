@@ -1,20 +1,25 @@
-package utils
+// Package metrics holds the in-process relay counters. The concrete *Metrics
+// satisfies usecase.MetricsRecorder (the write side used by the relay) and also
+// exposes GetStats for the ops HTTP server (the read side).
+package metrics
 
 import (
 	"sync"
 	"time"
+
+	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
 )
 
-// Metrics tracks worker performance metrics
+// Metrics tracks relay performance counters.
 type Metrics struct {
 	mu sync.RWMutex
 
 	// Counters
-	EventsFetched    int64
-	EventsProcessed  int64
-	EventsFailed     int64
-	KafkaPublished   int64
-	KafkaFailed      int64
+	EventsFetched   int64
+	EventsProcessed int64
+	EventsFailed    int64
+	KafkaPublished  int64
+	KafkaFailed     int64
 
 	// Errors by type
 	Errors map[string]int64
@@ -28,15 +33,17 @@ type Metrics struct {
 	startTime time.Time
 }
 
-// NewMetrics creates a new metrics instance
-func NewMetrics() *Metrics {
+var _ usecase.MetricsRecorder = (*Metrics)(nil)
+
+// New creates a new metrics instance.
+func New() *Metrics {
 	return &Metrics{
 		Errors:    make(map[string]int64),
 		startTime: time.Now(),
 	}
 }
 
-// IncrementSuccess increments the success counter
+// IncrementSuccess increments the success counter.
 func (m *Metrics) IncrementSuccess() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -45,7 +52,7 @@ func (m *Metrics) IncrementSuccess() {
 	m.LastProcessTime = time.Now()
 }
 
-// IncrementErrors increments the error counter for a specific error type
+// IncrementErrors increments the error counter for a specific error type.
 func (m *Metrics) IncrementErrors(errorType string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -53,7 +60,7 @@ func (m *Metrics) IncrementErrors(errorType string) {
 	m.Errors[errorType]++
 }
 
-// RecordFetch records a fetch operation
+// RecordFetch records a fetch operation.
 func (m *Metrics) RecordFetch(count int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -61,36 +68,36 @@ func (m *Metrics) RecordFetch(count int) {
 	m.LastFetchTime = time.Now()
 }
 
-// RecordProcessTime records the time taken to process a batch
+// RecordProcessTime records the time taken to process a batch.
 func (m *Metrics) RecordProcessTime(duration time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.TotalProcessTime += duration
 }
 
-// GetStats returns current metrics
-func (m *Metrics) GetStats() map[string]interface{} {
+// GetStats returns current metrics.
+func (m *Metrics) GetStats() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	uptime := time.Since(m.startTime)
 
-	return map[string]interface{}{
-		"uptime_seconds":            uptime.Seconds(),
-		"events_fetched":            m.EventsFetched,
-		"events_processed":          m.EventsProcessed,
-		"events_failed":             m.EventsFailed,
+	return map[string]any{
+		"uptime_seconds":             uptime.Seconds(),
+		"events_fetched":             m.EventsFetched,
+		"events_processed":           m.EventsProcessed,
+		"events_failed":              m.EventsFailed,
 		"kafka_published":            m.KafkaPublished,
 		"kafka_failed":               m.KafkaFailed,
 		"errors":                     m.Errors,
 		"last_fetch_time":            m.LastFetchTime,
 		"last_process_time":          m.LastProcessTime,
 		"total_process_time_seconds": m.TotalProcessTime.Seconds(),
-		"success_rate":              m.calculateSuccessRate(),
+		"success_rate":               m.calculateSuccessRate(),
 	}
 }
 
-// calculateSuccessRate calculates the success rate
+// calculateSuccessRate calculates the success rate.
 func (m *Metrics) calculateSuccessRate() float64 {
 	total := m.EventsProcessed + m.EventsFailed
 	if total == 0 {
@@ -99,7 +106,7 @@ func (m *Metrics) calculateSuccessRate() float64 {
 	return float64(m.EventsProcessed) / float64(total) * 100
 }
 
-// Reset resets all metrics (useful for testing)
+// Reset resets all metrics (useful for testing).
 func (m *Metrics) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -1,5 +1,7 @@
-// Package models holds the data types shared across the outbox relay.
-package models
+// Package domain holds the pure types of the outbox relay. It has no framework
+// or infrastructure imports (no pgx, sarama, http, zerolog) — only the standard
+// library — so the inner layers can depend on it freely.
+package domain
 
 import "time"
 
