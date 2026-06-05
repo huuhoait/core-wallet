@@ -8,7 +8,7 @@ docs alone).
 > dựa trên **code / stored procedure / test thực tế** trong repo, không chỉ dựa
 > trên tài liệu thiết kế.
 
-**Last reviewed / Cập nhật:** 2026-06-04
+**Last reviewed / Cập nhật:** 2026-06-05 (PR #39 — JWT/RBAC + merchant-withdraw reversal + reversal window)
 
 ## Status legend / Chú thích trạng thái
 
@@ -24,15 +24,15 @@ docs alone).
 |------|:--:|:--:|:--:|
 | 1. Onboarding & Wallet Management | 12 | 2 | 1 |
 | 2. Transactions — Posting | 7 | 0 | 0 |
-| 3. Reversals & Refunds | 5 | 1 | 1 |
+| 3. Reversals & Refunds | 7 | 0 | 0 |
 | 4. Balance & Statements | 5 | 0 | 0 |
 | 5. Withdrawal Disbursement | 2 | 0 | 1 |
 | 6. Accounting & GL Operations | 6 | 1 | 3 |
-| 7. Eventing & Integration | 1 | 0 | 3 |
+| 7. Eventing & Integration | 2 | 0 | 2 |
 | 8. Audit, PII & Compliance | 2 | 1 | 2 |
-| 9. Platform / Infra / Observability | 11 | 0 | 6 |
-| 10. Quality — Testing & Load | 8 | 1 | 0 |
-| **Total** | **59** | **6** | **17** |
+| 9. Platform / Infra / Observability | 14 | 1 | 2 |
+| 10. Quality — Testing & Load | 9 | 1 | 0 |
+| **Total** | **66** | **6** | **11** |
 
 ---
 
@@ -103,9 +103,9 @@ docs alone).
 | US-3.1 | As ops, I reverse an in-book transfer (refund incl. fee + VAT) | ✅ | SP `post_transfer_reversal`; `POST /v1/finance/reverse`; test `wallet_transfer_reversal_test.sql`. |
 | US-3.2 | As ops, I reverse a top-up | ✅ | SP `post_topup_reversal`; `POST /v1/finance/topup/reverse`. |
 | US-3.3 | As Treasury, I reverse a withdrawal (refund amount + fee + VAT) | ✅ | SP `post_withdraw_reversal`; `POST /v1/treasury/withdrawals/:ref/reverse`. |
-| US-3.4 | As ops, I reverse a merchant withdrawal | 🟡 | SP `post_merchant_withdraw_reversal` exists (`db/export/schema.sql`, refunds + outbox), but **no HTTP endpoint / handler / repo method wires it** — not reachable via API (unlike US-3.1/3.2/3.3 which have routes). DB layer only. |
+| US-3.4 | As ops, I reverse a merchant withdrawal | ✅ | **Done (2026-06-05, PR #39).** SP `post_merchant_withdraw_reversal` now fully wired: domain types `MerchantWithdrawReversalInput/Result`, repo method via `withTx` calling `post_merchant_withdraw_reversal($1..$6)`, usecase + handler + DTO, route `POST /v1/finance/merchant-withdraw/reverse`. Idempotent on the original reference (returns `was_already_reversed=true` on retry). Credits principal + fee/VAT back to the settlement account; emits `wallet.merchant_withdraw.reversed.v1` on the outbox. Reversal window honoured (US-3.6). |
 | US-3.5 | Reversals are idempotent and refund fee + VAT legs | ✅ | Reversal SPs write outbox + refund all legs. |
-| US-3.6 | Reversal is rejected outside the allowed time window | ⬜ | Spec §6.4 defines the window, but **no reversal SP enforces it** (no `WINDOW_EXPIRED` / time check in any `*_reversal` SP). |
+| US-3.6 | Reversal is rejected outside the allowed time window | ✅ | **Done (2026-06-05, PR #39).** New column `WLT_TRAN_DEF.reversal_window_hours INT NULL` (NULL = no restriction → fail-open). Seeded to **168h (7 days)** for every forward type carrying a `reversal_tran_type`. All 5 reversal SPs (`post_fee_charge_reversal`, `post_merchant_withdraw_reversal`, `post_topup_reversal`, `post_transfer_reversal`, `post_withdraw_reversal`) compare `clock_timestamp() - v_orig.PROCESSED_AT` (or `v_track.SUBMITTED_AT` for treasury) against the forward type's window **after the idempotency return** — out-of-window raises `REVERSAL_WINDOW_EXPIRED` (SQLSTATE `P0060`, HTTP **422**); idempotent retries of an already-reversed orig bypass the check by design. Go: `CodeReversalWindowExpired` + ISO 20022 metadata (E6105, reason AG09, RJCT) + 422 mapping. Tests `db/tests/wallet_reversal_window_test.sql` 6/6 PASS (in-window OK, out-of-window 422, idempotent retry bypass, NULL fail-open, transfer parity). |
 | US-3.7 | VAT reversal across a closed period is handled correctly | ✅ | Period locking (US-6.1) makes a closed accounting day immutable, so the closed VAT period (e.g. May) cannot be mutated; a reversal posts `POST_DATE = CURRENT_DATE` into the open period (June) per spec §6.8. Guaranteed by the write-freeze (`fn_freeze_closed_period`, attached to `WLT_GL_BATCH` via `trg_freeze_batch` — keys off `ACCOUNTING_DATE`), proved in `db/tests/wallet_eod_period_lock_test.sql`. |
 
 ## Epic 4 — Balance & Statements / Số dư & sao kê
@@ -155,7 +155,7 @@ docs alone).
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
 | US-7.1 | Every posting writes a Kafka event row atomically (transactional outbox) | ✅ | `WLT_OUTBOX`; `INSERT INTO WLT_OUTBOX` inside every posting SP. |
-| US-7.2 | Relay outbox → Kafka (Debezium CDC primary, Go polling worker fallback) | ✅ | Go Polling Worker implemented in `services/outbox-relay` (polls `WLT_OUTBOX` using `SKIP LOCKED`). Debezium CDC/Kafka production integration is a future goal. |
+| US-7.2 | Relay outbox → Kafka (Debezium CDC primary, Go polling worker fallback) | ✅ | **Dual-mode implemented (2026-06-05).** `services/outbox-relay`: switchable via `RELAY_MODE` env: (1) **polling** (default) — 4 Go workers poll `WLT_OUTBOX` with `FOR UPDATE SKIP LOCKED`, publish via Sarama SyncProducer (idempotent, acks=all), mark SENT with kafka_partition/offset; (2) **cdc** — Debezium CDC via Kafka Connect EventRouter, relay manages connector lifecycle (auto-register/pause/resume) + CDC consumer marks rows SENT. `docker-compose.cdc.yml` adds Kafka Connect (debezium/connect:2.6). Config: `debezium/config.json` (EventRouter transform routes each row to its `topic` column). Both modes proven at-least-once; `SKIP LOCKED` guarantees no duplicate publish across workers. |
 | US-7.3 | Downstream consumers react to `withdraw.posted` etc. | ⬜ | Out of scope here (Treasury Service). |
 | US-7.4 | As a downstream consumer, every outbox event carries a **consistent transaction-metadata envelope** (reference, tran_type, channel, actor, occurred_at, client/counterparty, schema version) so events are self-describing and routable **without joining back to the ledger** | ⬜ | **Enrichment of US-7.1**, not greenfield: the `INSERT INTO WLT_OUTBOX` in every posting/reversal SP (`db/export/schema.sql`) already emits *some* business fields (`tran_internal_id`, `amount`, `fee_gross`/`vat_amount`, `ext_payout_ref`, `ccy`, `group_id`), but the shape **varies per SP** and key meta is missing: most payloads omit the client **`reference`** (idempotency/external ref) and **`tran_type`**; `HEADERS` carries only `traceparent`; the `WLT_OUTBOX.CHANNEL` column is left **NULL** (posting INSERTs don't pass it) and `CREATED_BY` falls back to `SYSTEM` instead of `audit.actor`; `EVENT_VERSION` is a flat `'v1'` with no documented schema. Scope: define one canonical event envelope (meta keys + headers), populate it uniformly across all emitters (incl. the `CHANNEL`/`CREATED_BY`/`occurred_at` columns from the per-TX audit GUCs that `withTx` already sets), and pin a versioned JSON schema. Prerequisite for clean relay (US-7.2) and consumer routing/replay (US-7.3). Design-only. |
 
@@ -182,9 +182,9 @@ docs alone).
 | US-9.7 | Dockerized local dev stack | ✅ | `docker-compose.yml` (PG17 + PgBouncer + Adminer). |
 | US-9.8 | Liveness health check | ✅ | `GET /healthz`. |
 | US-9.9 | Input validators (money, acct_no) + timeout layering | ✅ | `server.go` custom validators; 3s/2.5s/1.5s layering. |
-| US-9.10 | AuthN / AuthZ + rate limiting | ⬜ | API-gateway concern (HLD §3); not in this service. |
-| US-9.11 | CI/CD pipeline | ⬜ | None in repo. |
-| US-9.12 | Metrics endpoint (Prometheus) | ⬜ | OTel traces only; no metrics endpoint. |
+| US-9.10 | AuthN / AuthZ + rate limiting | ✅ | **Done (2026-06-05, PR #39)** — defense-in-depth alongside the gateway. Bearer-token validation + per-route RBAC inside wallet-service, opt-in via `JWT_ENABLED` (default off → keeps existing `X-Caller-Subject` / `X-Channel` header path). Supports **HS256** (`JWT_HMAC_SECRET`) and **RS256** (`JWT_RSA_PUBLIC_KEY` inline PEM); validates `iss` / `aud` / `exp` with configurable `JWT_CLOCK_SKEW`. JWT middleware extracts `sub`, `roles`, and `channel` claims into the gin context; `resolveActor` / `resolveChannel` now prefer JWT-derived values over headers so the per-TX audit GUCs (`audit.actor`, `audit.channel`) are attributed to the verified token rather than a forwardable header. `RequireAnyRole(...)` (`middleware/rbac.go`) returns 403 on missing role; passthrough when JWT disabled. **Role catalog**: `wallet.finance.reverse` (4 reversal endpoints), `wallet.ops.read` (`/v1/ops/*`), `wallet.treasury` (`/v1/treasury/*`). Misconfig (HS256 without secret, unknown algorithm, bad PEM) fails fast at startup. Secret bound with `env:"JWT_HMAC_SECRET,unset"` so it's wiped from the process env after load. 18 unit tests in `middleware/jwt_test.go` + `rbac_test.go` cover valid/expired/missing/malformed/wrong-iss/wrong-aud/bad-sig/missing-sub + channel claim propagation + RBAC happy/sad/passthrough/empty-roles. Rate-limiting still a gateway concern (HLD §3). |
+| US-9.11 | CI/CD pipeline | ✅ | **Implemented (2026-06-05).** `.github/workflows/ci.yml` (Go lint/vet/test + SQL test suites on PG17 service container + Terraform validate), `.github/workflows/cd-k8s.yml` (build multi-arch images → GHCR, deploy via kustomize to staging on push-to-master, production on tag `v*` with manual approval). GitHub OIDC → AWS (keyless). Supports both EKS and on-premise (self-hosted runner). |
+| US-9.12 | Metrics endpoint (Prometheus) | 🟡 | **Observability stack deployed (2026-06-05):** `deploy/k8s/base/observability/` — OTel Collector + Prometheus + Tempo (traces) + Loki (logs) + Grafana (dashboards, pre-provisioned datasources + wallet-overview dashboard + alert rules). wallet-service emits OTel traces; **Prometheus scrape of `/metrics` on the service itself not yet wired** (needs `otelgin` Prometheus middleware or custom handler). |
 | US-9.13 | Read-replica routing for lag-tolerant reads | ✅ | `DB_READ_DSN` → separate read pool (`cmd/server`, `repo.readPool`). Only `GetAccount` (profile) + `ListTransactions` (statement) read it; unset → primary (strong consistency). Balance-realtime / tx-detail / ops stay on primary (read-your-writes). Both paths verified live. |
 | US-9.14 | Rename `tran_internal_key` → `tran_internal_id` for clarity (it groups the legs of **every** transaction type, not just transfers) | ✅ | Done. `tran`="transfer" was a misnomer — the column is the per-transaction grouping key for topup/transfer/withdraw/merchant/reversal. Renamed the **DB column** on `WLT_TRAN_HIST` (+ all partitions), `WLT_WITHDRAW_TRACK`, `WLT_SWEEP_LOG`; all posting/reversal SP bodies + `RETURNS` + idempotency-cache & outbox jsonb keys (`db/export/schema.sql`); SQL test suites; Go identifiers (`TranInternalKey`→`TranInternalID`) + repo SQL strings; DLD/HLD/spec docs. **API kept stable** — HTTP JSON field `tran_internal_key` / `reversal_tran_key` (Go DTO json tags) + route `:tran_key` unchanged, so no client breaks (events/internals now use `tran_internal_id`). Verified: fresh `docker compose up` (0 init errors, 202 cols renamed), all SQL suites pass, `go build` + `go test -race` green. Siblings `TFR_SEQ_NO`/`seq_tran` left as-is (out of scope). |
 | US-9.15 | Rename cryptic `TRAN_TYPE` codes for clarity — e.g. `WDRAW`→`WITHDRAW`, `TRFOUT`→`TRANSF_OUT` — the column is `varchar(10)` but codes use 5–6-char abbreviations that waste the headroom | ⬜ | Deferred (logged from a load-test session, 2026-05-31). `WLT_TRAN_DEF.TRAN_TYPE` is the PK (`varchar(10)`); referenced by `WLT_TRAN_HIST.TRAN_TYPE` (`varchar(10)`, NOT NULL — **no DB FK**, link is logical) and self-referenced via `reversal_tran_type` / `fee_tran_type`. For consistency, rename the whole family, not just the two named: `TRFOUT`/`TRFIN`/`TRFOUTF`, `WDRAW`/`RVWD`/`FEEWD`, `MERCHWD`/`FEEMW`/`RVMWD`, `TOPUP`/`RVTPUP`, `FEETRF`/`RVTRF`/`RVFEE`. **Blast radius** (mirror US-9.14): seed defs (`db/export/seed.sql` `wlt_tran_def`), SP `DEFAULT` args + bodies (`db/export/schema.sql`, e.g. `post_transfer(... p_tran_type DEFAULT 'TRFOUT')`), Go (`internal/domain/types.go`, `http/dto/dto.go`, `repo/postgres.go`), load tests (`deploy/loadtest/k6_wallet.js` + `transfer.sql`/`withdraw*.sql`/`reversal.sql`/`setup.sql`/`merchant_topup.sql`), `postman/`, SQL suites (`db/tests/*`), docs (`docs/specs/finance_transaction.md`, DLD/HLD, COA spec). **Open decisions (defer to roadmap):** (1) **final names** — `varchar(10)` fits `WITHDRAW` (8) but **not** `TRANSFEROUT` (11) → choose `TRANSF_OUT`/`XFER_OUT`/`TRF_OUT`; (2) **history migration** — existing `WLT_TRAN_HIST` rows already carry old codes, so either `UPDATE` them in place or keep old codes read-valid (cf. US-9.14's API-stable approach); (3) widen the column if 10 chars proves too tight. |
@@ -209,20 +209,46 @@ docs alone).
 
 ## Next priorities (suggested) / Ưu tiên tiếp theo (gợi ý)
 
-1. **getClient** (Epic 1) — `GET /v1/clients/:id` needs the masked PII view (`v_kyc_masked`). (client CRUD + account open/block/close already done — US-1.3/1.4/1.5/1.8.)
-2. ~~**Outbox relay worker** (US-7.2)~~ — ✅ Done (using Go Polling Worker; Kafka integration is a future goal).
-3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
-4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
-5. **Onboarding service** (Epic 1) — currently seed-only; no production path.
-1. **Outbox relay worker** (US-7.2) — events are written but never published.
-2. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
-3. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
-4. **Merchant-withdrawal reversal endpoint** (US-3.4) — SP `post_merchant_withdraw_reversal` exists but has no HTTP route; wire handler + route to make it reachable.
-5. **Related-document attachment** (US-1.13) — `FM_CLIENT_KYC.related_docs` JSONB slot exists but no SP/endpoint writes it.
+### Recently shipped (2026-06-05, PR #39)
 
-6. ~~**EOD period-locking + GL feed** (US-6.1/6.2)~~ — ✅ done: `eod_close_period` write-freeze (full immutability) on closed business dates (unblocks US-3.7) + chunked `eod_gl_feed_post` (`WLT_GL_BATCH` P→S). Remaining Epic-6 gaps: full suspense/clearing GL (US-6.2), e-invoice (US-6.4), maker-checker JE (US-6.5), reversal time-window (US-3.6).
-7. ~~**Merchant hot-wallet lifecycle**~~ — ✅ complete: provisioning (US-1.10), activation (US-1.9), deposit routing (US-1.11), rescale + rebalance (US-1.12) all shipped with SP + Go + `wallet_merchant_group_lifecycle_test.sql`.
+| Story | Delivered |
+|-------|-----------|
+| US-9.10 | JWT validation + per-route RBAC (HS256/RS256, opt-in, role catalog, channel claim, 18 unit tests) |
+| US-3.4 | Wired `POST /v1/finance/merchant-withdraw/reverse` end-to-end (domain → repo → usecase → handler → route) |
+| US-3.6 | `reversal_window_hours` column on WLT_TRAN_DEF + check in all 5 reversal SPs + `REVERSAL_WINDOW_EXPIRED` (P0060/422); 6/6 SQL tests pass |
 
-> These are suggestions based on the gap analysis above — confirm against the
-> product roadmap before scheduling. / Đây là gợi ý dựa trên phân tích khoảng
-> trống ở trên; cần đối chiếu roadmap sản phẩm trước khi lên kế hoạch.
+### Phase 1 — Production-ready (blocker cho go-live)
+
+| # | Story | Task | Effort |
+|---|-------|------|:------:|
+| 1 | US-5.3 | **SLA-timeout janitor** — auto-reverse withdrawals stuck > 24h (Go scheduler or pg_cron) | 3d |
+| 2 | US-9.12 | **Prometheus /metrics** — add `otelgin` Prometheus middleware, expose `wallet_requests_total` etc. | 1d |
+
+### Phase 2 — Compliance & quality
+
+| # | Story | Task | Effort |
+|---|-------|------|:------:|
+| 3 | US-8.5 | **Client audit triggers** — AFTER UPDATE on FM_CLIENT/FM_CLIENT_CONTACT/FM_CLIENT_IDENTIFIERS | 2d |
+| 4 | US-7.4 | **Outbox event envelope** — standardize payload shape (reference, tran_type, channel, actor) across all SPs | 3d |
+| 5 | US-10.7 | **Go integration tests** — testcontainers + real PG for posting paths | 5d |
+| 6 | US-1.13 | **Related-doc attachment** — SP + endpoint for `FM_CLIENT_KYC.related_docs` | 2d |
+
+### Phase 3 — Scale & polish (backlog)
+
+| # | Story | Task | Effort |
+|---|-------|------|:------:|
+| 7 | US-8.3 | Record reconciliation breaks (`WLT_RECON_BREAK` table + SP) | 3d |
+| 8 | US-8.4 | PII access log (`WLT_PII_ACCESS_LOG`) | 2d |
+| 9 | US-1.6 | KYC downgrade & 12-month re-KYC | 3d |
+| 10 | US-6.10 | Branch/legal-entity label on GL config | 1d |
+| 11 | US-9.15 | Rename TRAN_TYPE codes (high blast radius, schedule in quiet sprint) | 5d |
+
+### Deferred (not MVP)
+
+- US-6.2 remainder (full suspense GL) — when finance team needs GL recon with core banking
+- US-6.4 (e-invoice) — when launching consumer receipts
+- US-6.5 (maker-checker JE) — when ops needs manual adjustments
+- US-7.3 (downstream consumers) — Treasury Service scope
+
+> Phase 1 còn lại ~4 ngày (US-5.3 + US-9.12) sau khi PR #39 đóng auth + 2 reversal gaps.
+> Phase 2 cần cho internal audit pass. Phase 3 là nice-to-have, lên kế hoạch theo roadmap.
