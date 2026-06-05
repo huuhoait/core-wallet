@@ -3,10 +3,10 @@ package usecase
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
-
-	"github.com/rs/zerolog"
 
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/domain"
 )
@@ -72,7 +72,9 @@ func (m *fakeMetrics) IncrementSuccess()               { m.success++ }
 func (m *fakeMetrics) IncrementErrors(kind string)     { m.errors[kind]++ }
 func (m *fakeMetrics) RecordProcessTime(time.Duration) {}
 
-func nopLogger() *zerolog.Logger { l := zerolog.Nop(); return &l }
+func nopLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 func events() []domain.OutboxEvent {
 	return []domain.OutboxEvent{

@@ -11,13 +11,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/rs/zerolog"
 
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/config"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/debezium"
@@ -37,14 +37,13 @@ func main() {
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to load configuration")
+		fatal(logger, "Failed to load configuration", err)
 	}
 
-	logger.Info().
-		Str("mode", string(cfg.Mode)).
-		Str("db_host", cfg.DBHost).
-		Str("kafka_brokers", fmt.Sprintf("%v", cfg.KafkaBrokers)).
-		Msg("Configuration loaded")
+	logger.Info("Configuration loaded",
+		slog.String("mode", string(cfg.Mode)),
+		slog.String("db_host", cfg.DBHost),
+		slog.Any("kafka_brokers", cfg.KafkaBrokers))
 
 	m := metrics.New()
 
@@ -60,23 +59,24 @@ func main() {
 	case config.ModeCDC:
 		runCDC(ctx, cancel, cfg, m, logger)
 	default:
-		logger.Fatal().Str("mode", string(cfg.Mode)).Msg("Unknown relay mode")
+		logger.Error("Unknown relay mode", slog.String("mode", string(cfg.Mode)))
+		os.Exit(1)
 	}
 }
 
 // runPolling wires and runs the Go-worker polling relay.
-func runPolling(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, m *metrics.Metrics, logger *zerolog.Logger) {
-	logger.Info().Int("workers", cfg.WorkerCount).Msg("Starting in POLLING mode")
+func runPolling(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, m *metrics.Metrics, logger *slog.Logger) {
+	logger.Info("Starting in POLLING mode", slog.Int("workers", cfg.WorkerCount))
 
 	outboxRepo, err := repo.New(ctx, cfg.DSN(), cfg.DBName, cfg.DBHost, logger)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to initialize repository")
+		fatal(logger, "Failed to initialize repository", err)
 	}
 	defer outboxRepo.Close()
 
 	producer, err := kafka.NewSyncProducer(cfg.KafkaBrokers, cfg.MaxRetries, logger)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to initialize Kafka producer")
+		fatal(logger, "Failed to initialize Kafka producer", err)
 	}
 	defer func() { _ = producer.Close() }()
 
@@ -93,29 +93,28 @@ func runPolling(ctx context.Context, cancel context.CancelFunc, cfg *config.Conf
 
 // runCDC wires and runs the Debezium CDC relay: it ensures the connector, starts
 // the CDC consumer that marks rows SENT, and monitors connector health.
-func runCDC(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, m *metrics.Metrics, logger *zerolog.Logger) {
-	logger.Info().
-		Str("connect_url", cfg.CDC.ConnectURL).
-		Str("connector", cfg.CDC.ConnectorName).
-		Str("cdc_topic", cfg.CDC.CDCTopic).
-		Bool("auto_register", cfg.CDC.AutoRegister).
-		Msg("Starting in CDC mode (Debezium)")
+func runCDC(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, m *metrics.Metrics, logger *slog.Logger) {
+	logger.Info("Starting in CDC mode (Debezium)",
+		slog.String("connect_url", cfg.CDC.ConnectURL),
+		slog.String("connector", cfg.CDC.ConnectorName),
+		slog.String("cdc_topic", cfg.CDC.CDCTopic),
+		slog.Bool("auto_register", cfg.CDC.AutoRegister))
 
 	outboxRepo, err := repo.New(ctx, cfg.DSN(), cfg.DBName, cfg.DBHost, logger)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("CDC: failed to initialize repository")
+		fatal(logger, "CDC: failed to initialize repository", err)
 	}
 	defer outboxRepo.Close()
 
 	connMgr := debezium.NewConnectorManager(debeziumSettings(cfg), logger)
 	if err := connMgr.Ensure(ctx); err != nil {
-		logger.Fatal().Err(err).Msg("CDC: failed to ensure Debezium connector")
+		fatal(logger, "CDC: failed to ensure Debezium connector", err)
 	}
 
 	updater := usecase.NewCDCStatusUpdater(outboxRepo)
 	consumer, err := kafka.NewCDCConsumer(cfg.KafkaBrokers, cfg.CDC.ConsumerGroup, cfg.CDC.CDCTopic, updater, m, logger)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("CDC: failed to create consumer")
+		fatal(logger, "CDC: failed to create consumer", err)
 	}
 	consumer.Start(ctx)
 
@@ -131,7 +130,7 @@ func runCDC(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, 
 
 // monitorConnector periodically checks the Debezium connector health, resuming
 // it if it has paused.
-func monitorConnector(ctx context.Context, mgr usecase.ConnectorController, logger *zerolog.Logger) {
+func monitorConnector(ctx context.Context, mgr usecase.ConnectorController, logger *slog.Logger) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -141,11 +140,11 @@ func monitorConnector(ctx context.Context, mgr usecase.ConnectorController, logg
 		case <-ticker.C:
 			status, err := mgr.Status(ctx)
 			if err != nil {
-				logger.Warn().Err(err).Msg("CDC: connector health check failed")
+				logger.Warn("CDC: connector health check failed", slog.Any("error", err))
 				continue
 			}
 			if status != "RUNNING" {
-				logger.Warn().Str("status", status).Msg("CDC: connector not running")
+				logger.Warn("CDC: connector not running", slog.String("status", status))
 				if status == "PAUSED" {
 					_ = mgr.Resume(ctx)
 				}
@@ -172,7 +171,7 @@ func debeziumSettings(cfg *config.Config) debezium.Settings {
 	}
 }
 
-func startOpsServer(cfg *config.Config, m *metrics.Metrics, logger *zerolog.Logger) {
+func startOpsServer(cfg *config.Config, m *metrics.Metrics, logger *slog.Logger) {
 	srv := ops.New(cfg.MetricsPort, ops.Info{
 		Mode:          string(cfg.Mode),
 		KafkaBrokers:  cfg.KafkaBrokers,
@@ -184,31 +183,46 @@ func startOpsServer(cfg *config.Config, m *metrics.Metrics, logger *zerolog.Logg
 		CDCTopic:      cfg.CDC.CDCTopic,
 	}, m, logger)
 	if err := srv.ListenAndServe(); err != nil {
-		logger.Fatal().Err(err).Msg("Failed to start metrics server")
+		fatal(logger, "Failed to start metrics server", err)
 	}
 }
 
 // waitForSignal blocks until SIGINT/SIGTERM, then runs cleanup and cancels ctx.
-func waitForSignal(cancel context.CancelFunc, cleanup func(), logger *zerolog.Logger) {
+func waitForSignal(cancel context.CancelFunc, cleanup func(), logger *slog.Logger) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-sigChan
-	logger.Info().Str("signal", sig.String()).Msg("Received shutdown signal")
+	logger.Info("Received shutdown signal", slog.String("signal", sig.String()))
 
 	cleanup()
 	cancel()
-	logger.Info().Msg("Outbox relay service stopped")
+	logger.Info("Outbox relay service stopped")
 }
 
-func initLogger() *zerolog.Logger {
-	level, err := zerolog.ParseLevel(os.Getenv("LOG_LEVEL"))
-	if err != nil {
-		level = zerolog.InfoLevel
+// initLogger builds the JSON slog logger. The JSON handler stamps time + level;
+// the service field tags every line. LOG_LEVEL (debug|info|warn|error) sets the
+// threshold, defaulting to info.
+func initLogger() *slog.Logger {
+	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(os.Getenv("LOG_LEVEL"))})
+	return slog.New(h).With(slog.String("service", "outbox-relay"))
+}
+
+// parseLevel maps a LOG_LEVEL string to a slog.Level, defaulting to info for an
+// empty or unrecognised value.
+func parseLevel(s string) slog.Level {
+	if s == "" {
+		return slog.LevelInfo
 	}
-	logger := zerolog.New(os.Stdout).Level(level).With().
-		Timestamp().
-		Str("service", "outbox-relay").
-		Logger()
-	return &logger
+	var l slog.Level
+	if err := l.UnmarshalText([]byte(s)); err != nil {
+		return slog.LevelInfo
+	}
+	return l
+}
+
+// fatal logs at error level and exits non-zero (slog has no Fatal helper).
+func fatal(logger *slog.Logger, msg string, err error) {
+	logger.Error(msg, slog.Any("error", err))
+	os.Exit(1)
 }

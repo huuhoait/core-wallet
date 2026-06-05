@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/rs/zerolog"
 
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/domain"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
@@ -23,7 +23,7 @@ import (
 type CDCConsumer struct {
 	updater *usecase.CDCStatusUpdater
 	metrics usecase.MetricsRecorder
-	logger  *zerolog.Logger
+	logger  *slog.Logger
 
 	topic  string
 	group  sarama.ConsumerGroup
@@ -32,7 +32,7 @@ type CDCConsumer struct {
 }
 
 // NewCDCConsumer creates a consumer group bound to the CDC topic.
-func NewCDCConsumer(brokers []string, groupID, topic string, updater *usecase.CDCStatusUpdater, metrics usecase.MetricsRecorder, logger *zerolog.Logger) (*CDCConsumer, error) {
+func NewCDCConsumer(brokers []string, groupID, topic string, updater *usecase.CDCStatusUpdater, metrics usecase.MetricsRecorder, logger *slog.Logger) (*CDCConsumer, error) {
 	sc := sarama.NewConfig()
 	sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()}
 	sc.Consumer.Offsets.Initial = sarama.OffsetOldest
@@ -58,7 +58,7 @@ func (c *CDCConsumer) Start(ctx context.Context) {
 	ctx, c.cancel = context.WithCancel(ctx)
 	c.wg.Add(1)
 	go c.run(ctx)
-	c.logger.Info().Str("topic", c.topic).Msg("CDC consumer started")
+	c.logger.Info("CDC consumer started", slog.String("topic", c.topic))
 }
 
 // Stop gracefully shuts down the consumer.
@@ -68,7 +68,7 @@ func (c *CDCConsumer) Stop() {
 	}
 	c.wg.Wait()
 	_ = c.group.Close()
-	c.logger.Info().Msg("CDC consumer stopped")
+	c.logger.Info("CDC consumer stopped")
 }
 
 func (c *CDCConsumer) run(ctx context.Context) {
@@ -87,7 +87,7 @@ func (c *CDCConsumer) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			c.logger.Error().Err(err).Msg("CDC consumer error — retrying in 5s")
+			c.logger.Error("CDC consumer error — retrying in 5s", slog.Any("error", err))
 			time.Sleep(5 * time.Second)
 		}
 	}
@@ -97,7 +97,7 @@ func (c *CDCConsumer) run(ctx context.Context) {
 type cdcHandler struct {
 	updater *usecase.CDCStatusUpdater
 	metrics usecase.MetricsRecorder
-	logger  *zerolog.Logger
+	logger  *slog.Logger
 }
 
 func (h *cdcHandler) Setup(sarama.ConsumerGroupSession) error   { return nil }
@@ -108,10 +108,10 @@ func (h *cdcHandler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 func (h *cdcHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for msg := range claim.Messages() {
 		if err := h.handle(session.Context(), msg); err != nil {
-			h.logger.Warn().Err(err).
-				Int64("offset", msg.Offset).
-				Int32("partition", msg.Partition).
-				Msg("CDC message processing failed — skipping")
+			h.logger.Warn("CDC message processing failed — skipping",
+				slog.Any("error", err),
+				slog.Int64("offset", msg.Offset),
+				slog.Int("partition", int(msg.Partition)))
 			h.metrics.IncrementErrors("cdc_process")
 		} else {
 			h.metrics.IncrementSuccess()

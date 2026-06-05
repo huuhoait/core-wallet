@@ -9,11 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
-
-	"github.com/rs/zerolog"
 
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
 )
@@ -46,14 +45,14 @@ type Settings struct {
 // usecase.ConnectorController.
 type ConnectorManager struct {
 	cfg    Settings
-	logger *zerolog.Logger
+	logger *slog.Logger
 	client *http.Client
 }
 
 var _ usecase.ConnectorController = (*ConnectorManager)(nil)
 
 // NewConnectorManager creates a manager for the Debezium connector.
-func NewConnectorManager(cfg Settings, logger *zerolog.Logger) *ConnectorManager {
+func NewConnectorManager(cfg Settings, logger *slog.Logger) *ConnectorManager {
 	return &ConnectorManager{
 		cfg:    cfg,
 		logger: logger,
@@ -65,7 +64,7 @@ func NewConnectorManager(cfg Settings, logger *zerolog.Logger) *ConnectorManager
 // Idempotent: an existing connector is updated in place.
 func (m *ConnectorManager) Ensure(ctx context.Context) error {
 	if !m.cfg.AutoRegister {
-		m.logger.Info().Msg("CDC auto-register disabled — assuming connector managed externally")
+		m.logger.Info("CDC auto-register disabled — assuming connector managed externally")
 		return nil
 	}
 
@@ -83,12 +82,12 @@ func (m *ConnectorManager) Ensure(ctx context.Context) error {
 		if err := m.updateConnector(ctx, connectorConfig); err != nil {
 			return fmt.Errorf("debezium: update connector: %w", err)
 		}
-		m.logger.Info().Str("connector", m.cfg.ConnectorName).Msg("Debezium connector updated")
+		m.logger.Info("Debezium connector updated", slog.String("connector", m.cfg.ConnectorName))
 	} else {
 		if err := m.createConnector(ctx, connectorConfig); err != nil {
 			return fmt.Errorf("debezium: create connector: %w", err)
 		}
-		m.logger.Info().Str("connector", m.cfg.ConnectorName).Msg("Debezium connector created")
+		m.logger.Info("Debezium connector created", slog.String("connector", m.cfg.ConnectorName))
 	}
 	return nil
 }

@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
-
-	"github.com/rs/zerolog"
 
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/domain"
 )
@@ -30,14 +29,14 @@ type PollingRelay struct {
 	pub     EventPublisher
 	metrics MetricsRecorder
 	cfg     PollingSettings
-	log     *zerolog.Logger
+	log     *slog.Logger
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
 // NewPollingRelay wires the polling relay.
-func NewPollingRelay(repo OutboxRepository, pub EventPublisher, metrics MetricsRecorder, cfg PollingSettings, log *zerolog.Logger) *PollingRelay {
+func NewPollingRelay(repo OutboxRepository, pub EventPublisher, metrics MetricsRecorder, cfg PollingSettings, log *slog.Logger) *PollingRelay {
 	return &PollingRelay{repo: repo, pub: pub, metrics: metrics, cfg: cfg, log: log}
 }
 
@@ -49,7 +48,7 @@ func (r *PollingRelay) Start(ctx context.Context) {
 		r.wg.Add(1)
 		go r.run(ctx, i)
 	}
-	r.log.Info().Int("workers", r.cfg.WorkerCount).Msg("Outbox workers started")
+	r.log.Info("Outbox workers started", slog.Int("workers", r.cfg.WorkerCount))
 }
 
 // Stop signals the loops to finish and waits for in-flight batches to complete
@@ -59,14 +58,14 @@ func (r *PollingRelay) Stop() {
 		r.cancel()
 	}
 	r.wg.Wait()
-	r.log.Info().Msg("Outbox workers stopped")
+	r.log.Info("Outbox workers stopped")
 }
 
 // run is one poll loop: claim+relay a batch, then idle for PollInterval whenever
 // there was nothing pending.
 func (r *PollingRelay) run(ctx context.Context, id int) {
 	defer r.wg.Done()
-	log := r.log.With().Int("worker", id).Logger()
+	log := r.log.With(slog.Int("worker", id))
 	for {
 		select {
 		case <-ctx.Done():
@@ -79,7 +78,7 @@ func (r *PollingRelay) run(ctx context.Context, id int) {
 			if ctx.Err() != nil { // shutting down — not a real failure
 				return
 			}
-			log.Error().Err(err).Msg("batch failed")
+			log.Error("batch failed", slog.Any("error", err))
 		}
 		if n == 0 {
 			select {
@@ -121,11 +120,11 @@ func (r *PollingRelay) processBatch(ctx context.Context) (int, error) {
 			failIDs = append(failIDs, e.EventID)
 			lastErr = perr.Error()
 			r.metrics.IncrementErrors("publish")
-			r.log.Warn().Err(perr).
-				Str("event_uuid", e.EventUUID).
-				Str("event_type", e.EventType).
-				Int("attempts", e.Attempts).
-				Msg("publish failed — will retry")
+			r.log.Warn("publish failed — will retry",
+				slog.Any("error", perr),
+				slog.String("event_uuid", e.EventUUID),
+				slog.String("event_type", e.EventType),
+				slog.Int("attempts", e.Attempts))
 			continue
 		}
 		sent = append(sent, domain.SentRef{EventID: e.EventID, Partition: partition, Offset: offset})
@@ -148,7 +147,7 @@ func (r *PollingRelay) toMessage(e domain.OutboxEvent) domain.KafkaMessage {
 	var headers map[string]string
 	if len(e.Headers) > 0 {
 		if err := json.Unmarshal(e.Headers, &headers); err != nil {
-			r.log.Warn().Err(err).Str("event_uuid", e.EventUUID).Msg("unparseable headers — dropping")
+			r.log.Warn("unparseable headers — dropping", slog.Any("error", err), slog.String("event_uuid", e.EventUUID))
 			headers = nil
 		}
 	}

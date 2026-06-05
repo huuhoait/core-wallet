@@ -5,9 +5,9 @@ package kafka
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/IBM/sarama"
-	"github.com/rs/zerolog"
 
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/domain"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
@@ -19,14 +19,14 @@ import (
 // satisfies usecase.EventPublisher.
 type SyncProducer struct {
 	sync   sarama.SyncProducer
-	logger *zerolog.Logger
+	logger *slog.Logger
 }
 
 var _ usecase.EventPublisher = (*SyncProducer)(nil)
 
 // NewSyncProducer builds a SyncProducer against brokers with idempotent,
 // all-replicas-ack delivery. maxRetries bounds the per-send retry budget.
-func NewSyncProducer(brokers []string, maxRetries int, logger *zerolog.Logger) (*SyncProducer, error) {
+func NewSyncProducer(brokers []string, maxRetries int, logger *slog.Logger) (*SyncProducer, error) {
 	sc := sarama.NewConfig()
 	sc.Producer.RequiredAcks = sarama.WaitForAll
 	sc.Producer.Retry.Max = maxRetries
@@ -39,7 +39,7 @@ func NewSyncProducer(brokers []string, maxRetries int, logger *zerolog.Logger) (
 	if err != nil {
 		return nil, fmt.Errorf("kafka: connect to %v: %w", brokers, err)
 	}
-	logger.Info().Strs("brokers", brokers).Msg("Kafka producer ready")
+	logger.Info("Kafka producer ready", slog.Any("brokers", brokers))
 	return &SyncProducer{sync: sp, logger: logger}, nil
 }
 

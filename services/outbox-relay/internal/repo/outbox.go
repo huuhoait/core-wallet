@@ -6,10 +6,10 @@ package repo
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rs/zerolog"
 
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/domain"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
@@ -19,14 +19,14 @@ import (
 // usecase.OutboxRepository.
 type PgOutboxRepo struct {
 	pool   *pgxpool.Pool
-	logger *zerolog.Logger
+	logger *slog.Logger
 }
 
 // compile-time check that the adapter satisfies the port.
 var _ usecase.OutboxRepository = (*PgOutboxRepo)(nil)
 
 // New opens the pool and verifies connectivity.
-func New(ctx context.Context, dsn, dbName, dbHost string, logger *zerolog.Logger) (*PgOutboxRepo, error) {
+func New(ctx context.Context, dsn, dbName, dbHost string, logger *slog.Logger) (*PgOutboxRepo, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("repo: open pool: %w", err)
@@ -35,7 +35,7 @@ func New(ctx context.Context, dsn, dbName, dbHost string, logger *zerolog.Logger
 		pool.Close()
 		return nil, fmt.Errorf("repo: ping: %w", err)
 	}
-	logger.Info().Str("db", dbName).Str("host", dbHost).Msg("Outbox repository ready")
+	logger.Info("Outbox repository ready", slog.String("db", dbName), slog.String("host", dbHost))
 	return &PgOutboxRepo{pool: pool, logger: logger}, nil
 }
 

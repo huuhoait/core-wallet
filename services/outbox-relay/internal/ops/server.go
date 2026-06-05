@@ -6,9 +6,8 @@ package ops
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
-
-	"github.com/rs/zerolog"
 )
 
 // StatsProvider is the read side of the metrics the server renders.
@@ -34,11 +33,11 @@ type Server struct {
 	addr   string
 	info   Info
 	stats  StatsProvider
-	logger *zerolog.Logger
+	logger *slog.Logger
 }
 
 // New builds the ops server bound to :port.
-func New(port int, info Info, stats StatsProvider, logger *zerolog.Logger) *Server {
+func New(port int, info Info, stats StatsProvider, logger *slog.Logger) *Server {
 	return &Server{
 		addr:   fmt.Sprintf(":%d", port),
 		info:   info,
@@ -54,7 +53,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/config", s.handleConfig)
 
-	s.logger.Info().Str("addr", s.addr).Msg("Starting metrics/health server")
+	s.logger.Info("Starting metrics/health server", slog.String("addr", s.addr))
 	return http.ListenAndServe(s.addr, mux)
 }
 

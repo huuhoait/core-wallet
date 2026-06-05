@@ -4,9 +4,8 @@
 // (internal/repo, internal/kafka, internal/debezium, internal/metrics).
 //
 // Layering rule: usecase depends on internal/domain and the standard library
-// only. It MUST NOT import pgx, sarama, or net/http. The injected *zerolog.Logger
-// is the single permitted logging primitive (a leaf dependency, not a framework
-// that dictates structure).
+// only (including log/slog for the injected logger). It MUST NOT import pgx,
+// sarama, or net/http.
 package usecase
 
 import (
