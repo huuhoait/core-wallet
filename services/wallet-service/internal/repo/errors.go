@@ -130,8 +130,9 @@ func httpStatusFor(code string) int {
 		// KYC tier too low — auth/permission failure.
 		return http.StatusForbidden
 	case domain.CodeDRRestraintActive,
-		domain.CodeCRRestraintActive:
-		// Account is restrained/held → 423 Locked (error_management.md §2.1).
+		domain.CodeCRRestraintActive,
+		domain.CodeGroupRestrained:
+		// Account/group is restrained/held → 423 Locked (error_management.md §2.1).
 		return http.StatusLocked
 	case domain.CodeInsufficientFunds,
 		domain.CodeTierLimitExceeded,

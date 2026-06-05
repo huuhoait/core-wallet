@@ -61,6 +61,7 @@ const (
 	CodeAmountOutOfRange     = "AMOUNT_OUT_OF_RANGE"
 	CodeDRRestraintActive    = "DR_RESTRAINT_ACTIVE"
 	CodeCRRestraintActive    = "CR_RESTRAINT_ACTIVE"
+	CodeGroupRestrained      = "GROUP_RESTRAINED" // merchant-withdraw blocked by group-level DR restraint (P0025)
 	CodeInsufficientFunds    = "INSUFFICIENT_FUNDS"
 	CodeTierLimitExceeded    = "TIER_LIMIT_EXCEEDED"
 	CodeVersionConflict      = "VERSION_CONFLICT"

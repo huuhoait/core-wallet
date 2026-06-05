@@ -46,6 +46,7 @@ var codeMeta = map[string]CodeMeta{
 	CodeTierInsufficient: {"KYC tier insufficient", "Your KYC tier does not permit this operation; please upgrade your verification level", "E2007", "RR04", TxStatusRejected},
 	CodeDRRestraintActive: {"Debit restraint active", "The account has an active debit restraint (hold/lien) preventing this withdrawal or transfer", "E3005", "AC06", TxStatusRejected},
 	CodeCRRestraintActive: {"Credit restraint active", "The account has an active credit restraint preventing incoming funds", "E3006", "AC06", TxStatusRejected},
+	CodeGroupRestrained:   {"Group restrained", "The merchant group has an active debit restraint preventing this withdrawal", "E3007", "AC06", TxStatusRejected},
 	CodeInsufficientFunds: {"Insufficient funds", "The account balance is not sufficient to cover this transaction", "E4022", "AM04", TxStatusRejected},
 	CodeTierLimitExceeded: {"Transaction limit exceeded", "The transaction exceeds the daily or monthly limit for this account tier", "E4023", "AM02", TxStatusRejected},
 	CodeVersionConflict:   {"Concurrent update conflict", "Another transaction updated this account simultaneously; the operation can be retried", "E4025", "", TxStatusPending},
