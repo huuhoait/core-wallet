@@ -1,0 +1,22 @@
+# Local .terraform directories (provider binaries, modules) — recreated by `terraform init`
+**/.terraform/*
+
+# Terraform state files — never commit (may contain secrets)
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Variable files that may hold secrets
+*.tfvars
+*.tfvars.json
+
+# CLI config / override files
+.terraformrc
+terraform.rc
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
