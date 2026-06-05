@@ -36,3 +36,20 @@ func (s *WalletService) ReverseTopup(ctx context.Context, in domain.TopupReversa
 		slog.String("event_uuid", res.EventUUID.String()))
 	return res, nil
 }
+
+// ReverseMerchantWithdraw reverses a merchant-settlement withdraw (credit back
+// principal + fee/VAT to the settlement account).
+func (s *WalletService) ReverseMerchantWithdraw(ctx context.Context, in domain.MerchantWithdrawReversalInput) (*domain.MerchantWithdrawReversalResult, error) {
+	res, err := s.repo.ReverseMerchantWithdraw(ctx, in)
+	if err != nil {
+		s.logFailure(ctx, "merchant_withdraw_reversal", in.OrigReference, err)
+		return nil, err
+	}
+	s.log.InfoContext(ctx, "merchant withdraw reversed",
+		slog.String("orig_reference", in.OrigReference),
+		slog.String("fail_code", in.FailCode),
+		slog.Int64("reversal_tran_key", res.ReversalTranKey),
+		slog.Bool("was_already_reversed", res.WasAlreadyReversed),
+		slog.String("event_uuid", res.EventUUID.String()))
+	return res, nil
+}

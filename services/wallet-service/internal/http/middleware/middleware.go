@@ -65,8 +65,14 @@ func FromGin(c *gin.Context) domain.AuditContext {
 }
 
 func resolveActor(c *gin.Context) string {
-	// Phase 1: trust a header set by the API gateway after JWT validation.
-	// Phase 2: parse and verify JWT here.
+	// Prefer the JWT subject when this service validated the token itself
+	// (US-9.10). Fall back to a gateway-set header for the JWT-disabled path
+	// (dev / unit tests / staged rollout).
+	if v, ok := c.Get(CtxKeyJWTSubject); ok {
+		if s, _ := v.(string); s != "" {
+			return s
+		}
+	}
 	if v := strings.TrimSpace(c.GetHeader("X-Caller-Subject")); v != "" {
 		return v
 	}
@@ -74,7 +80,24 @@ func resolveActor(c *gin.Context) string {
 }
 
 func resolveChannel(c *gin.Context) domain.Channel {
-	switch strings.ToUpper(c.GetHeader("X-Channel")) {
+	// Prefer the channel claim from the JWT (US-9.10). The gateway / IdP
+	// stamps it onto the token so the caller can't override it from a header.
+	// Header is used only when JWT is disabled or the claim is absent.
+	if v, ok := c.Get(CtxKeyJWTChannel); ok {
+		if s, _ := v.(string); s != "" {
+			if ch := parseChannel(s); ch != "" {
+				return ch
+			}
+		}
+	}
+	if ch := parseChannel(c.GetHeader("X-Channel")); ch != "" {
+		return ch
+	}
+	return domain.ChannelAPI
+}
+
+func parseChannel(s string) domain.Channel {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case "MOBILE":
 		return domain.ChannelMobile
 	case "OPSUI":
@@ -86,7 +109,7 @@ func resolveChannel(c *gin.Context) domain.Channel {
 	case "API":
 		return domain.ChannelAPI
 	}
-	return domain.ChannelAPI
+	return ""
 }
 
 func spanIDFromGin(c *gin.Context) string {
