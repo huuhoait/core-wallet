@@ -2211,8 +2211,8 @@
                   "  pm.environment.set('last_reversal_tran_key', body.data.reversal_tran_key);",
                   "} else {",
                   "  const body = pm.response.json();",
-                  "  pm.test('code=WD_ALREADY_COMPLETED (expected if completed ran first)',",
-                  "    () => pm.expect(body.code).to.equal('WD_ALREADY_COMPLETED'));",
+                  "  pm.test('errorMessage mentions WD_ALREADY_COMPLETED (expected if completed ran first)',",
+                  "    () => pm.expect(body.errorMessage).to.match(/WD_ALREADY_COMPLETED/));",
                   "}"
                 ]
               }

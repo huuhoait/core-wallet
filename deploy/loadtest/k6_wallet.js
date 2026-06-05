@@ -129,18 +129,22 @@ function post(op, url, obj) {
 }
 
 // outcomeLabel derives a single business label from a response: the success
-// `status` field (SUCCESS/DUPLICATE), a reversal result, a balance read, or the
-// error envelope `code`. Falls back to HTTP_<status> when the body has neither.
+// status (SUCCESS/DUPLICATE) lives in body.data.status under the uniform
+// envelope (PR #39); a reversal result via body.data.was_already_reversed; a
+// balance read maps to BALANCE_OK. Errors use top-level body.errorCode (real
+// SQLSTATE for PG-raised, E#### for Go-side, "999999" for unknown/internal).
+// Falls back to HTTP_<status> when the body has neither.
 function outcomeLabel(res) {
   let body = null;
   try { body = res.json(); } catch (_) { body = null; }
+  const data = body && body.data;
   if (res.status >= 200 && res.status < 300) {
-    if (body && typeof body.status === 'string') return body.status;          // SUCCESS | DUPLICATE | SETTLEMENT_SWEEP_REQUIRED
-    if (body && 'was_already_reversed' in body) return body.was_already_reversed ? 'REVERSED_DUP' : 'REVERSED';
+    if (data && typeof data.status === 'string') return data.status;          // SUCCESS | DUPLICATE | SETTLEMENT_SWEEP_REQUIRED
+    if (data && 'was_already_reversed' in data) return data.was_already_reversed ? 'REVERSED_DUP' : 'REVERSED';
     if (res.request && res.request.method === 'GET') return 'BALANCE_OK';
     return `HTTP_${res.status}`;
   }
-  if (body && typeof body.code === 'string') return body.code;                // VERSION_CONFLICT | INSUFFICIENT_FUNDS | ...
+  if (body && typeof body.errorCode === 'string') return body.errorCode;      // P0060 | 40001 | 23505 | E1001 | 999999 | ...
   return `HTTP_${res.status}`;
 }
 
@@ -161,10 +165,11 @@ function recordOutcomeAs(res, okLabel) {
 function classify(res) {
   recordOutcome(res);
   const ok = check(res, { 'handled': (r) => [200, 201, 409, 422, 423].includes(r.status) });
-  // Fresh writes (201) must carry the ISO 20022 transaction_status (errors §13.3).
+  // Fresh writes (201) must carry the ISO 20022 transaction_status under data
+  // (PR #39 envelope, errors §13.3).
   if (res.status === 201) {
     check(res, { 'tx_status present': (r) => {
-      try { return typeof r.json().transaction_status === 'string'; } catch (_) { return false; }
+      try { return typeof r.json().data.transaction_status === 'string'; } catch (_) { return false; }
     } });
   }
   return ok;
@@ -191,7 +196,7 @@ function addReleaseRestraint() {
   recordOutcomeAs(add, 'RESTRAINT_ADDED');
   check(add, { 'handled': (r) => [201, 409, 422, 423].includes(r.status) });
   if (add.status !== 201) return;
-  let id = null; try { id = add.json().restraint_id; } catch (_) { id = null; }
+  let id = null; try { id = add.json().data.restraint_id; } catch (_) { id = null; }
   if (!id) return;
   const rel = post('restraint_release', `${BASE}/v1/finance/restraints/${id}/release`, {
     reason: 'k6 load-test release',
