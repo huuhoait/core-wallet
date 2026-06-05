@@ -218,13 +218,12 @@ const ProblemTypeBase = "https://docs.wallet.example/errors/"
 type ProblemDetails struct {
 	Type     string `json:"type,omitempty"`     // RFC7807: URI to error doc
 	Title    string `json:"title"`              // RFC7807: short human title
-	Status   int    `json:"status"`             // RFC7807: HTTP status code
+	Status   int    `json:"-"`                  // HTTP status — kept on struct so abortProblem can call c.Status(p.Status); excluded from body (status lives in the HTTP header)
 	Detail   string `json:"detail,omitempty"`   // RFC7807: human-readable detail (dynamic context)
 	Instance string `json:"instance,omitempty"` // RFC7807: request path
 
 	ErrorCode         string         `json:"errorCode"`                      // SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for PG-raised, E#### synthetic for Go-side, "999999" when the canonical name is not whitelisted (§3.3)
 	ErrorMessage      string         `json:"errorMessage"`                   // full raw "CODE: detail" message (pg.Message verbatim for PG errors, synthesized for Go); "Internal Error" when not whitelisted
-	InternalCode      string         `json:"internal_code,omitempty"`        // E#### for log/alert (§5)
 	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty"` // ISO 20022 External Status Reason (§13.2)
 	TransactionStatus string         `json:"transaction_status,omitempty"`   // pain.002 status (§13.3)
 	TraceID           string         `json:"trace_id,omitempty"`             // = X-Request-Id
@@ -315,7 +314,6 @@ func NewProblemFromError(de *domain.Error, instance, traceID string) ProblemDeta
 		Instance:          instance,
 		ErrorCode:         sqlState,
 		ErrorMessage:      rawMessage,
-		InternalCode:      m.InternalCode,
 		ISO20022Reason:    m.ISOReason,
 		TransactionStatus: m.TxStatus,
 		TraceID:           traceID,

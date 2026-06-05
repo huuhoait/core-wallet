@@ -61,9 +61,6 @@ func TestRenderError_DomainError(t *testing.T) {
 	if p.TransactionStatus != domain.TxStatusRejected {
 		t.Errorf("transaction_status = %q, want RJCT", p.TransactionStatus)
 	}
-	if p.InternalCode != "E4022" {
-		t.Errorf("internal_code = %q, want E4022", p.InternalCode)
-	}
 	if p.TraceID != "test-rid" {
 		t.Errorf("trace_id = %q, want test-rid", p.TraceID)
 	}
@@ -75,6 +72,14 @@ func TestRenderError_DomainError(t *testing.T) {
 	}
 	if p.Retry == nil || p.Retry.Retryable {
 		t.Errorf("retry = %+v, want non-retryable", p.Retry)
+	}
+	// PR #39: status + internal_code are no longer in the body (status lives
+	// in the HTTP header, internal_code is redundant with errorCode).
+	if strings.Contains(w.Body.String(), `"status":`) {
+		t.Errorf("body should not include \"status\" field: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"internal_code"`) {
+		t.Errorf("body should not include \"internal_code\" field: %s", w.Body.String())
 	}
 }
 
