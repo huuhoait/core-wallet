@@ -64,22 +64,17 @@ func TestRenderError_DomainError(t *testing.T) {
 	if p.TraceID != "test-rid" {
 		t.Errorf("trace_id = %q, want test-rid", p.TraceID)
 	}
-	if p.Instance != "/v1/transactions/transfer" {
-		t.Errorf("instance = %q", p.Instance)
-	}
 	if p.Timestamp == "" {
 		t.Error("timestamp is empty")
 	}
-	if p.Retry == nil || p.Retry.Retryable {
-		t.Errorf("retry = %+v, want non-retryable", p.Retry)
-	}
-	// PR #39: status + internal_code are no longer in the body (status lives
-	// in the HTTP header, internal_code is redundant with errorCode).
-	if strings.Contains(w.Body.String(), `"status":`) {
-		t.Errorf("body should not include \"status\" field: %s", w.Body.String())
-	}
-	if strings.Contains(w.Body.String(), `"internal_code"`) {
-		t.Errorf("body should not include \"internal_code\" field: %s", w.Body.String())
+	// PR #39: body is intentionally minimal. type / title / status /
+	// instance / internal_code / retry no longer appear (status lives in the
+	// HTTP header, retryability is conveyed via errorCode + standards
+	// metadata, the rest were redundant).
+	for _, field := range []string{`"type"`, `"title"`, `"status"`, `"instance"`, `"internal_code"`, `"retry"`} {
+		if strings.Contains(w.Body.String(), field) {
+			t.Errorf("body should not include %s field: %s", field, w.Body.String())
+		}
 	}
 }
 
@@ -89,9 +84,8 @@ func TestRenderError_Retriable(t *testing.T) {
 		http.StatusConflict, "version mismatch", nil))
 
 	p := decodeProblem(t, w)
-	if p.Retry == nil || !p.Retry.Retryable {
-		t.Errorf("retry = %+v, want retryable", p.Retry)
-	}
+	// PR #39: retryability is no longer in the body. Clients infer it from
+	// errorCode + transaction_status (PDNG = retryable here).
 	if p.TransactionStatus != domain.TxStatusPending {
 		t.Errorf("transaction_status = %q, want PDNG", p.TransactionStatus)
 	}

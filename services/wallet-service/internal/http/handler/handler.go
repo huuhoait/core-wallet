@@ -230,7 +230,6 @@ func renderError(c *gin.Context, err error) {
 	}
 	p := dto.NewProblemFromError(de, c.Request.URL.Path,
 		c.GetString(middleware.CtxKeyRequestID))
-	p.Retry = &dto.RetryInfo{Retryable: de.IsRetriable()}
 	abortProblem(c, p)
 }
 
