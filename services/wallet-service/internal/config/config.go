@@ -14,6 +14,7 @@ type Config struct {
 	DB   DB
 	Otel Otel
 	EOD  EOD
+	JWT  JWT
 	Env  string `env:"APP_ENV" envDefault:"dev"` // dev | staging | prod
 }
 
@@ -65,6 +66,28 @@ type Otel struct {
 	Endpoint      string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" envDefault:"otel-collector:4317"`
 	Insecure      bool   `env:"OTEL_EXPORTER_OTLP_INSECURE" envDefault:"true"`
 	SamplingRatio float64 `env:"OTEL_TRACES_SAMPLER_ARG"    envDefault:"1.0"`
+}
+
+// JWT controls bearer-token validation and per-route RBAC (US-9.10).
+//
+// Disabled by default (Enabled=false) → the middleware is a no-op and the
+// service falls back to the X-Caller-Subject header for actor attribution (the
+// pre-9.10 behaviour). Enable in staging/prod so this service validates tokens
+// independently of the API gateway (defense-in-depth).
+//
+// Algorithm = HS256 → expects JWT_HMAC_SECRET to be set.
+// Algorithm = RS256 → expects JWT_RSA_PUBLIC_KEY to hold a PEM-encoded RSA
+// public key (the inline PEM, not a file path).
+type JWT struct {
+	Enabled      bool          `env:"JWT_ENABLED"      envDefault:"false"`
+	Issuer       string        `env:"JWT_ISSUER"`
+	Audience     string        `env:"JWT_AUDIENCE"`
+	Algorithm    string        `env:"JWT_ALGORITHM"    envDefault:"HS256"` // HS256 | RS256
+	HMACSecret   string        `env:"JWT_HMAC_SECRET,unset"`               // unset after read so it's not in env
+	RSAPublicKey string        `env:"JWT_RSA_PUBLIC_KEY"`                  // PEM-encoded RSA public key
+	RolesClaim   string        `env:"JWT_ROLES_CLAIM"  envDefault:"roles"`   // claim path holding []string of roles
+	ChannelClaim string        `env:"JWT_CHANNEL_CLAIM" envDefault:"channel"` // claim path holding the source channel (MOBILE/OPSUI/TREASURY/PARTNER/API); empty/absent → X-Channel header fallback
+	ClockSkew    time.Duration `env:"JWT_CLOCK_SKEW"   envDefault:"30s"`
 }
 
 // EOD configures the in-process end-of-day scheduler (run_eod). Disabled by

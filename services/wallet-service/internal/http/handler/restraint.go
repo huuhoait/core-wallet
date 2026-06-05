@@ -35,7 +35,7 @@ func (h *Wallet) AddRestraint(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.RestraintRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.RestraintRespFrom(res))
 }
 
 // GET /v1/finance/restraints?acct_no=&limit=&before_seq= — list an account's
@@ -76,7 +76,7 @@ func (h *Wallet) ListRestraints(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.RestraintListRespFrom(q, views))
+	writeOK(c, http.StatusOK, dto.RestraintListRespFrom(q, views))
 }
 
 // GET /v1/finance/restraints/:id — a single restraint by id.
@@ -91,7 +91,7 @@ func (h *Wallet) GetRestraint(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.RestraintViewRespFrom(v))
+	writeOK(c, http.StatusOK, dto.RestraintViewRespFrom(v))
 }
 
 // POST /v1/finance/restraints/:id/release — release an active restraint.
@@ -116,5 +116,5 @@ func (h *Wallet) ReleaseRestraint(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.RestraintRespFrom(res))
+	writeOK(c, http.StatusOK, dto.RestraintRespFrom(res))
 }

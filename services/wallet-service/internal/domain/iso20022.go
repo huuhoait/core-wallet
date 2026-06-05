@@ -46,6 +46,7 @@ var codeMeta = map[string]CodeMeta{
 	CodeTierInsufficient: {"KYC tier insufficient", "Your KYC tier does not permit this operation; please upgrade your verification level", "E2007", "RR04", TxStatusRejected},
 	CodeDRRestraintActive: {"Debit restraint active", "The account has an active debit restraint (hold/lien) preventing this withdrawal or transfer", "E3005", "AC06", TxStatusRejected},
 	CodeCRRestraintActive: {"Credit restraint active", "The account has an active credit restraint preventing incoming funds", "E3006", "AC06", TxStatusRejected},
+	CodeGroupRestrained:   {"Group restrained", "The merchant group has an active debit restraint preventing this withdrawal", "E3007", "AC06", TxStatusRejected},
 	CodeInsufficientFunds: {"Insufficient funds", "The account balance is not sufficient to cover this transaction", "E4022", "AM04", TxStatusRejected},
 	CodeTierLimitExceeded: {"Transaction limit exceeded", "The transaction exceeds the daily or monthly limit for this account tier", "E4023", "AM02", TxStatusRejected},
 	CodeVersionConflict:   {"Concurrent update conflict", "Another transaction updated this account simultaneously; the operation can be retried", "E4025", "", TxStatusPending},
@@ -59,6 +60,7 @@ var codeMeta = map[string]CodeMeta{
 	CodeWDAlreadyCompleted: {"Withdrawal already completed", "This withdrawal has already reached COMPLETED status", "E6102", "", ""},
 	CodeWDInvalidState:     {"Withdrawal invalid state", "The withdrawal is in a state that does not permit this transition", "E6103", "", ""},
 	CodeWDAlreadyReversed:  {"Withdrawal already reversed", "This withdrawal has already been reversed", "E6104", "", ""},
+	CodeReversalWindowExpired: {"Reversal window expired", "The original transaction is older than the allowed reversal window; use a GL adjustment instead", "E6105", "AG09", TxStatusRejected},
 
 	// ── System / infra ──
 	CodeInternal:     {"Internal error", "An unexpected error occurred; please retry or contact support", "E9001", "", TxStatusPending},
@@ -133,6 +135,35 @@ func MetaFor(code string) CodeMeta {
 
 // ReasonFor is a convenience accessor for the ISO 20022 reason code.
 func ReasonFor(code string) string { return MetaFor(code).ISOReason }
+
+// IsClientSafeCode is the whitelist gate that decides whether an error's
+// canonical code may surface to the API consumer. Codes outside this set are
+// considered internal/unexpected — the response collapses to a generic
+// "999999 / Internal Error" envelope (§3.3) so SQLSTATEs from unknown SP
+// errors, raw connection failures, panics, etc. never leak.
+//
+// True when the code is either:
+//   - directly registered in codeMeta (an intentionally documented error), OR
+//   - a family-suffix variant (FROM_ACCT_NOT_FOUND / TO_ACCT_NOT_ACTIVE / …)
+//     that MetaFor already routes to a concrete ISO reason.
+//
+// CodeInternal is explicitly excluded — by definition we do NOT know what
+// happened, so it must render as the generic fallback.
+func IsClientSafeCode(code string) bool {
+	if code == "" || code == CodeInternal {
+		return false
+	}
+	if _, ok := codeMeta[code]; ok {
+		return true
+	}
+	switch {
+	case strings.HasSuffix(code, "_NOT_FOUND"),
+		strings.HasSuffix(code, "_NOT_ACTIVE"),
+		strings.HasSuffix(code, "_RESTRAINT_ACTIVE"):
+		return true
+	}
+	return false
+}
 
 // TxStatusForMark maps a treasury withdraw state-machine status to the ISO 20022
 // transactionStatus reported on the success response (§13.3).

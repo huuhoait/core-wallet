@@ -137,7 +137,8 @@ func (s *WalletService) logFailure(ctx context.Context, op, ref string, err erro
 		s.log.WarnContext(ctx, "operation failed",
 			slog.String("op", op),
 			slog.String("reference", ref),
-			slog.String("code", de.Code),
+			slog.String("code", de.Code),         // canonical name — for grep + alerts
+			slog.String("sql_state", de.SQLState), // matches client errorCode
 			slog.Int("http_status", de.HTTPStatus),
 			slog.String("detail", de.Detail),
 			slog.Any("cause", de.Cause))

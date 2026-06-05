@@ -27,7 +27,7 @@ type Server struct {
 }
 
 // New builds the gin engine + applies middleware + mounts routes.
-func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server, error) {
+func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *slog.Logger) (*Server, error) {
 	if cfg.Mode == "" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -35,6 +35,24 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 	}
 
 	registerCustomValidators()
+
+	// JWT validator runs before AuditContext so resolveActor() can prefer the
+	// token subject over the X-Caller-Subject header. When jwtCfg.Enabled is
+	// false the middleware is a no-op and the header fallback applies.
+	jwtMW, err := middleware.JWT(middleware.JWTConfig{
+		Enabled:      jwtCfg.Enabled,
+		Issuer:       jwtCfg.Issuer,
+		Audience:     jwtCfg.Audience,
+		Algorithm:    jwtCfg.Algorithm,
+		HMACSecret:   jwtCfg.HMACSecret,
+		RSAPublicKey: jwtCfg.RSAPublicKey,
+		RolesClaim:   jwtCfg.RolesClaim,
+		ChannelClaim: jwtCfg.ChannelClaim,
+		ClockSkew:    jwtCfg.ClockSkew,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	r := gin.New()
 	r.Use(
@@ -46,12 +64,13 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 	)
 
 	h := handler.New(svc)
-	r.GET("/healthz", h.Healthz) // no request timeout — cheap probe
+	r.GET("/healthz", h.Healthz) // no request timeout, no JWT — cheap probe
 
-	// Transactional + treasury endpoints carry the hard ctx deadline (HLD §9).
+	// Transactional + treasury endpoints carry the hard ctx deadline (HLD §9)
+	// and require a valid JWT when JWT_ENABLED=true.
 	// Everything below this group inherits middleware.WithTimeout(cfg.RequestTimeout).
 	v1 := r.Group("/v1")
-	v1.Use(middleware.WithTimeout(cfg.RequestTimeout))
+	v1.Use(middleware.WithTimeout(cfg.RequestTimeout), jwtMW)
 	{
 		// ── Finance: money movement + ledger reads ──
 		finance := v1.Group("/finance")
@@ -61,10 +80,15 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			finance.POST("/withdraw", h.Withdraw)
 			finance.POST("/merchant-deposit", h.MerchantDeposit)   // route deposit → settlement (cold) | shard (hot)
 			finance.POST("/merchant-withdraw", h.MerchantWithdraw) // settlement withdraw + hot-shard sweep
-			finance.POST("/reverse", h.ReverseTransfer)            // in-book transfer reversal (reference in body)
-			finance.POST("/topup/reverse", h.ReverseTopup)         // topup reversal (reference in body)
 			finance.POST("/fee-charge", h.FeeCharge)               // standalone fee + VAT charge (US-2.8)
-			finance.POST("/fee-charge/reverse", h.ReverseFeeCharge) // reverse a standalone fee charge
+			// Reversals are ops-only — RBAC gated by wallet.finance.reverse (US-9.10).
+			reverse := finance.Group("", middleware.RequireAnyRole(middleware.RoleFinanceReverse))
+			{
+				reverse.POST("/merchant-withdraw/reverse", h.ReverseMerchantWithdraw) // credit-back principal + fee/VAT to settlement
+				reverse.POST("/reverse", h.ReverseTransfer)                            // in-book transfer reversal (reference in body)
+				reverse.POST("/topup/reverse", h.ReverseTopup)                         // topup reversal (reference in body)
+				reverse.POST("/fee-charge/reverse", h.ReverseFeeCharge)                // reverse a standalone fee charge
+			}
 			finance.GET("/transactions", h.ListTransactions)       // account statement: ?acct_no=&limit=&before_seq=
 			finance.GET("/transactions/:tran_key", h.GetTransaction) // all legs of one transaction
 			finance.GET("/restraints", h.ListRestraints)           // list holds/liens: ?acct_no=&limit=&before_seq=
@@ -102,18 +126,22 @@ func New(cfg config.HTTP, svc *usecase.WalletService, log *slog.Logger) (*Server
 			groups.POST("/:group_id/activate", h.ActivateHotWallet) // promote cold group → 4|8|16 shards (US-1.9)
 			groups.POST("/:group_id/rescale", h.RescaleHotWallet)   // grow hot tier 4→8→16 + rebalance (US-1.12)
 		}
-		ops := v1.Group("/ops/accounts")
+		// /v1/ops/* — privileged ops views. wallet.ops.read required (US-9.10).
+		ops := v1.Group("/ops/accounts", middleware.RequireAnyRole(middleware.RoleOpsRead))
 		{
 			ops.GET("/:acct_no/balance", h.GetBalanceOps)
 			ops.POST("/balance/batch", h.GetBalanceBatch)
 		}
-		opsClients := v1.Group("/ops/clients")
+		opsClients := v1.Group("/ops/clients", middleware.RequireAnyRole(middleware.RoleOpsRead))
 		{
 			opsClients.GET("/:client_no", h.GetClientFull) // UNMASKED profile (privileged, wallet_pii_ro)
 		}
 
 		// ── Treasury: withdrawal disbursement state machine (S2S callbacks) ──
-		treasury := v1.Group("/treasury/withdrawals/:ext_payout_ref")
+		// wallet.treasury role required (US-9.10) — only the Treasury Service S2S
+		// identity should hit these.
+		treasury := v1.Group("/treasury/withdrawals/:ext_payout_ref",
+			middleware.RequireAnyRole(middleware.RoleTreasury))
 		{
 			treasury.POST("/acked", h.MarkAcked)
 			treasury.POST("/disbursing", h.MarkDisbursing)

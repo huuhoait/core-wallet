@@ -44,6 +44,8 @@ type WalletRepository interface {
 	ReverseTransfer(ctx context.Context, in domain.TransferReversalInput) (*domain.TransferReversalResult, error)
 	// Topup reversal (post_topup_reversal).
 	ReverseTopup(ctx context.Context, in domain.TopupReversalInput) (*domain.TopupReversalResult, error)
+	// Merchant-settlement withdrawal reversal (post_merchant_withdraw_reversal).
+	ReverseMerchantWithdraw(ctx context.Context, in domain.MerchantWithdrawReversalInput) (*domain.MerchantWithdrawReversalResult, error)
 
 	// Standalone fee charge + its reversal (post_fee_charge / post_fee_charge_reversal).
 	PostFeeCharge(ctx context.Context, in domain.FeeChargeInput) (*domain.FeeChargeResult, error)

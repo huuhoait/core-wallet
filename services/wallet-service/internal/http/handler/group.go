@@ -39,7 +39,7 @@ func (h *Wallet) ActivateHotWallet(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.ActivateHotWalletRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.ActivateHotWalletRespFrom(res))
 }
 
 // POST /v1/merchant-groups — provision a NEW cold merchant/agent group: the group
@@ -78,7 +78,7 @@ func (h *Wallet) ProvisionAcctGroup(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.ProvisionGroupRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.ProvisionGroupRespFrom(res))
 }
 
 // POST /v1/merchant-groups/:group_id/rescale — grow an already-hot group up a
@@ -98,7 +98,7 @@ func (h *Wallet) RescaleHotWallet(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.RescaleHotWalletRespFrom(res))
+	writeOK(c, http.StatusOK, dto.RescaleHotWalletRespFrom(res))
 }
 
 // POST /v1/finance/merchant-deposit — route an inbound merchant deposit/payment
@@ -120,5 +120,5 @@ func (h *Wallet) MerchantDeposit(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.MerchantDepositRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.MerchantDepositRespFrom(res))
 }

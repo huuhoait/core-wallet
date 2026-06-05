@@ -35,7 +35,7 @@ func (h *Wallet) CreateClient(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.ClientRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.ClientRespFrom(res))
 }
 
 // POST /v1/onboard — OTP-free step 1 (US-1.1/1.7): create client + KYC + first
@@ -70,7 +70,7 @@ func (h *Wallet) Onboard(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.OnboardRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.OnboardRespFrom(res))
 }
 
 // POST /v1/clients/:client_no/kyc — update KYC info / eKYC + raise tier (US-1.2).
@@ -96,7 +96,7 @@ func (h *Wallet) UpdateKYC(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.KycRespFrom(res))
+	writeOK(c, http.StatusOK, dto.KycRespFrom(res))
 }
 
 // GET /v1/clients/:client_no — MASKED client profile (wallet_app via
@@ -107,7 +107,7 @@ func (h *Wallet) GetClient(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ClientProfileRespFrom(res))
+	writeOK(c, http.StatusOK, dto.ClientProfileRespFrom(res))
 }
 
 // GET /v1/ops/clients/:client_no — UNMASKED client profile (privileged,
@@ -118,7 +118,7 @@ func (h *Wallet) GetClientFull(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ClientFullRespFrom(res))
+	writeOK(c, http.StatusOK, dto.ClientFullRespFrom(res))
 }
 
 // PATCH /v1/clients/:client_no — update mutable client fields.
@@ -144,7 +144,7 @@ func (h *Wallet) UpdateClient(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ClientRespFrom(res))
+	writeOK(c, http.StatusOK, dto.ClientRespFrom(res))
 }
 
 // POST /v1/clients/:client_no/banks — link a bank account (optionally default).
@@ -167,7 +167,7 @@ func (h *Wallet) LinkClientBank(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.BankLinkRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.BankLinkRespFrom(res))
 }
 
 // PUT /v1/clients/:client_no/banks/:link_id/default — set the default bank.
@@ -186,5 +186,5 @@ func (h *Wallet) SetDefaultClientBank(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.BankLinkRespFrom(res))
+	writeOK(c, http.StatusOK, dto.BankLinkRespFrom(res))
 }

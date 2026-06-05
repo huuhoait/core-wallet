@@ -55,3 +55,32 @@ func TopupReversalRespFrom(r *domain.TopupReversalResult) TopupReversalResponse 
 	}
 	return out
 }
+
+// MerchantWithdrawReversalRequest reverses a merchant-settlement withdraw by its
+// original reference. The reversal credits principal + fee/VAT back to the
+// settlement account and emits wallet.merchant_withdraw.reversed.v1.
+type MerchantWithdrawReversalRequest struct {
+	Reference  string `json:"reference"   binding:"required,min=8,max=64"`
+	FailCode   string `json:"fail_code"   binding:"required,min=3,max=64"`
+	FailReason string `json:"fail_reason" binding:"required,min=3,max=500"`
+	Initiator  string `json:"initiator"   binding:"omitempty,oneof=OPS_MANUAL FRAUD DISPUTE SYSTEM"`
+}
+
+type MerchantWithdrawReversalResponse struct {
+	ReversalTranKey        int64  `json:"reversal_tran_key"`
+	WasAlreadyReversed     bool   `json:"was_already_reversed"`
+	SettlementBalanceAfter string `json:"settlement_balance_after"`
+	EventUUID              string `json:"event_uuid,omitempty"`
+}
+
+func MerchantWithdrawReversalRespFrom(r *domain.MerchantWithdrawReversalResult) MerchantWithdrawReversalResponse {
+	out := MerchantWithdrawReversalResponse{
+		ReversalTranKey:        r.ReversalTranKey,
+		WasAlreadyReversed:     r.WasAlreadyReversed,
+		SettlementBalanceAfter: r.SettlementBalanceAfter,
+	}
+	if r.EventUUID.String() != "00000000-0000-0000-0000-000000000000" {
+		out.EventUUID = r.EventUUID.String()
+	}
+	return out
+}

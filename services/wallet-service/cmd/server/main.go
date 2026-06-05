@@ -47,7 +47,9 @@ func run(logger *slog.Logger) error {
 	logger.Info("config loaded",
 		slog.String("env", cfg.Env),
 		slog.String("http.addr", cfg.HTTP.Addr),
-		slog.Bool("otel.enabled", cfg.Otel.Enabled))
+		slog.Bool("otel.enabled", cfg.Otel.Enabled),
+		slog.Bool("jwt.enabled", cfg.JWT.Enabled),
+		slog.String("jwt.algorithm", cfg.JWT.Algorithm))
 
 	// ---- OpenTelemetry -----------------------------------------------------
 	shutdownOtel, err := telemetry.Setup(rootCtx, cfg.Otel, cfg.HTTP.ServiceName, cfg.Env)
@@ -109,7 +111,7 @@ func run(logger *slog.Logger) error {
 	walletRepo := repo.NewPgWalletRepo(pool, readPool, piiPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries)
 	walletSvc := usecase.NewWalletService(walletRepo, logger)
 
-	server, err := netHTTP.New(cfg.HTTP, walletSvc, logger)
+	server, err := netHTTP.New(cfg.HTTP, cfg.JWT, walletSvc, logger)
 	if err != nil {
 		return fmt.Errorf("http server: %w", err)
 	}

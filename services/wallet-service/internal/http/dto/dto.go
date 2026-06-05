@@ -4,6 +4,7 @@
 package dto
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
@@ -215,28 +216,17 @@ const ProblemTypeBase = "https://docs.wallet.example/errors/"
 // `application/problem+json`. The first five fields are RFC 7807; the rest are
 // bank extensions documented in error_management.md §3 / §13.
 type ProblemDetails struct {
-	Type     string `json:"type,omitempty"`     // RFC7807: URI to error doc
-	Title    string `json:"title"`              // RFC7807: short human title
-	Status   int    `json:"status"`             // RFC7807: HTTP status code
-	Detail   string `json:"detail,omitempty"`   // RFC7807: human-readable detail (dynamic context)
-	Instance string `json:"instance,omitempty"` // RFC7807: request path
+	Status int    `json:"-"`                // HTTP status — kept on struct so abortProblem can call c.Status(p.Status); excluded from body (status lives in the HTTP header)
+	Detail string `json:"detail,omitempty"` // human-readable detail (dynamic context)
 
-	ErrorCode         string         `json:"errorCode"`                      // stable business error code (canonical contract)
-	ErrorMessage      string         `json:"errorMessage"`                   // stable human message for this code (i18n source, safe for end-user)
-	InternalCode      string         `json:"internal_code,omitempty"`        // E#### for log/alert (§5)
+	ErrorCode         string         `json:"errorCode"`                      // SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for PG-raised, E#### synthetic for Go-side, "999999" when the canonical name is not whitelisted (§3.3)
+	ErrorMessage      string         `json:"errorMessage"`                   // full raw "CODE: detail" message (pg.Message verbatim for PG errors, synthesized for Go); "Internal Error" when not whitelisted
 	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty"` // ISO 20022 External Status Reason (§13.2)
 	TransactionStatus string         `json:"transaction_status,omitempty"`   // pain.002 status (§13.3)
 	TraceID           string         `json:"trace_id,omitempty"`             // = X-Request-Id
 	Timestamp         string         `json:"timestamp,omitempty"`            // RFC 3339
-	Retry             *RetryInfo     `json:"retry,omitempty"`
 	Details           map[string]any `json:"details,omitempty"`
 	Errors            []FieldError   `json:"errors,omitempty"` // field-level (Berlin Group / OBIE style)
-}
-
-// RetryInfo tells the caller whether/when a retry is permitted.
-type RetryInfo struct {
-	Retryable bool   `json:"retryable"`
-	AfterMs   *int64 `json:"after_ms"`
 }
 
 // FieldError is one field-level validation failure.
@@ -249,31 +239,107 @@ type FieldError struct {
 // nowRFC3339 is overridable in tests.
 var nowRFC3339 = func() string { return time.Now().Format(time.RFC3339) }
 
-// NewProblem builds a ProblemDetails from a canonical code, enriching it from
-// the domain standards registry (title, internal code, ISO 20022 reason, tx
-// status). Used by both the handler and middleware so the envelope is uniform.
-func NewProblem(code string, status int, detail, instance, traceID string) ProblemDetails {
-	m := domain.MetaFor(code)
-	title := m.Title
-	if title == "" {
-		title = code
+// FallbackErrorCode + FallbackErrorMessage are the safe defaults emitted when
+// the canonical code is NOT in the client-safe whitelist (`domain.IsClientSafeCode`).
+// They strip every internal hint (SQLSTATE, raw SP text, internal code, ISO
+// reason, tx status) so unknown errors collapse to a uniform 500 envelope.
+const (
+	FallbackErrorCode    = "999999"
+	FallbackErrorMessage = "Internal Error"
+)
+
+// SuccessErrorCode + SuccessErrorMessage are the uniform "success" markers
+// returned at the top of every 2xx response envelope. "00000" mirrors the
+// SQLSTATE for successful_completion, so the client always parses errorCode
+// the same way regardless of outcome.
+const (
+	SuccessErrorCode    = "00000"
+	SuccessErrorMessage = "Success!"
+)
+
+// SuccessEnvelope is the uniform 2xx response shape. The business payload
+// lives under `data`; trace_id + timestamp mirror the error envelope so logs
+// and clients can correlate either outcome the same way.
+type SuccessEnvelope struct {
+	ErrorCode    string `json:"errorCode"`
+	ErrorMessage string `json:"errorMessage"`
+	Data         any    `json:"data,omitempty"`
+	TraceID      string `json:"trace_id,omitempty"`
+	Timestamp    string `json:"timestamp,omitempty"`
+}
+
+// Ok wraps the business response in the standard success envelope.
+func Ok(data any, traceID string) SuccessEnvelope {
+	return SuccessEnvelope{
+		ErrorCode:    SuccessErrorCode,
+		ErrorMessage: SuccessErrorMessage,
+		Data:         data,
+		TraceID:      traceID,
+		Timestamp:    nowRFC3339(),
 	}
-	errorMessage := m.Message
-	if errorMessage == "" {
-		errorMessage = title
+}
+
+// NewProblem builds a ProblemDetails from a canonical code + inline detail —
+// used by middleware (JWT, RBAC, timeout, recovery) and validation paths where
+// no rich *domain.Error is available. The values are synthesized:
+//   - errorCode = MetaFor(code).InternalCode (E#### synthetic SQLSTATE)
+//   - errorMessage = "code: detail"
+// The whitelist gate still applies, so an unregistered code returns 999999.
+func NewProblem(code string, status int, detail, instance, traceID string) ProblemDetails {
+	return NewProblemFromError(&domain.Error{
+		Code: code, HTTPStatus: status, Detail: detail,
+		SQLState:   domain.MetaFor(code).InternalCode,
+		RawMessage: rawMessageFor(code, detail),
+	}, instance, traceID)
+}
+
+// NewProblemFromError builds a ProblemDetails from a rich *domain.Error,
+// preserving the original SQLSTATE + full RAISE message when the error
+// originated from PG. Used by handler.renderError for the main fast path.
+//
+// Whitelist gate (§3.3): when IsClientSafeCode(de.Code) is false the body
+// collapses to {errorCode: "999999", errorMessage: "Internal Error"} with
+// every internal field stripped — so unknown SP errors, raw pg failures, and
+// panics never leak SQLSTATE / message text to the client. HTTP status (500
+// in that case) is set on the struct for c.Status(...) only.
+//
+// The `instance` parameter is accepted for signature stability but no longer
+// echoed in the body (the path is observable via the access log + trace_id).
+func NewProblemFromError(de *domain.Error, instance, traceID string) ProblemDetails {
+	_ = instance
+	if !domain.IsClientSafeCode(de.Code) {
+		return ProblemDetails{
+			Status:       http.StatusInternalServerError,
+			ErrorCode:    FallbackErrorCode,
+			ErrorMessage: FallbackErrorMessage,
+			TraceID:      traceID,
+			Timestamp:    nowRFC3339(),
+		}
+	}
+	m := domain.MetaFor(de.Code)
+	sqlState := de.SQLState
+	if sqlState == "" {
+		sqlState = m.InternalCode
+	}
+	rawMessage := de.RawMessage
+	if rawMessage == "" {
+		rawMessage = rawMessageFor(de.Code, de.Detail)
 	}
 	return ProblemDetails{
-		Type:              ProblemTypeBase + code,
-		Title:             title,
-		Status:            status,
-		Detail:            detail,
-		Instance:          instance,
-		ErrorCode:         code,
-		ErrorMessage:      errorMessage,
-		InternalCode:      m.InternalCode,
+		Status:            de.HTTPStatus,
+		Detail:            de.Detail,
+		ErrorCode:         sqlState,
+		ErrorMessage:      rawMessage,
 		ISO20022Reason:    m.ISOReason,
 		TransactionStatus: m.TxStatus,
 		TraceID:           traceID,
 		Timestamp:         nowRFC3339(),
 	}
+}
+
+func rawMessageFor(code, detail string) string {
+	if detail == "" {
+		return code
+	}
+	return code + ": " + detail
 }

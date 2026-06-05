@@ -35,3 +35,21 @@ type TopupReversalResult struct {
 	NewBalance         string // wallet after claw-back
 	EventUUID          uuid.UUID
 }
+
+// MerchantWithdrawReversalInput reverses a merchant settlement withdraw by its
+// original reference (credit back principal + fee/VAT to the settlement).
+type MerchantWithdrawReversalInput struct {
+	OrigReference string
+	FailCode      string // e.g. NAPAS_TIMEOUT, BENEF_CLOSED, OPS_MANUAL
+	FailReason    string
+	Initiator     string // 'OPS_MANUAL' | 'FRAUD' | 'DISPUTE' | 'SYSTEM'
+	Audit         AuditContext
+}
+
+// MerchantWithdrawReversalResult is what post_merchant_withdraw_reversal returns.
+type MerchantWithdrawReversalResult struct {
+	ReversalTranKey        int64
+	WasAlreadyReversed     bool
+	SettlementBalanceAfter string // settlement balance after credit-back
+	EventUUID              uuid.UUID
+}

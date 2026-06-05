@@ -46,14 +46,14 @@ func TestRenderError_DomainError(t *testing.T) {
 		t.Errorf("status = %d, want 422", w.Code)
 	}
 	p := decodeProblem(t, w)
-	if p.ErrorCode != domain.CodeInsufficientFunds {
-		t.Errorf("errorCode = %q, want INSUFFICIENT_FUNDS", p.ErrorCode)
+	// New contract (PR #39): errorCode is the SQLSTATE-like code (real pg
+	// SQLSTATE for PG errors, InternalCode E#### for Go-side errors).
+	// errorMessage is the raw "CODE: detail" message text.
+	if p.ErrorCode != "E4022" {
+		t.Errorf("errorCode = %q, want E4022 (InternalCode for INSUFFICIENT_FUNDS)", p.ErrorCode)
 	}
-	if p.ErrorMessage == "" {
-		t.Error("errorMessage is empty")
-	}
-	if p.ErrorMessage != "The account balance is not sufficient to cover this transaction" {
-		t.Errorf("errorMessage = %q, want stable message", p.ErrorMessage)
+	if p.ErrorMessage != "INSUFFICIENT_FUNDS: balance 5 < 10" {
+		t.Errorf("errorMessage = %q, want raw \"INSUFFICIENT_FUNDS: balance 5 < 10\"", p.ErrorMessage)
 	}
 	if p.ISO20022Reason != "AM04" {
 		t.Errorf("iso20022_reason_code = %q, want AM04", p.ISO20022Reason)
@@ -61,20 +61,20 @@ func TestRenderError_DomainError(t *testing.T) {
 	if p.TransactionStatus != domain.TxStatusRejected {
 		t.Errorf("transaction_status = %q, want RJCT", p.TransactionStatus)
 	}
-	if p.InternalCode != "E4022" {
-		t.Errorf("internal_code = %q, want E4022", p.InternalCode)
-	}
 	if p.TraceID != "test-rid" {
 		t.Errorf("trace_id = %q, want test-rid", p.TraceID)
-	}
-	if p.Instance != "/v1/transactions/transfer" {
-		t.Errorf("instance = %q", p.Instance)
 	}
 	if p.Timestamp == "" {
 		t.Error("timestamp is empty")
 	}
-	if p.Retry == nil || p.Retry.Retryable {
-		t.Errorf("retry = %+v, want non-retryable", p.Retry)
+	// PR #39: body is intentionally minimal. type / title / status /
+	// instance / internal_code / retry no longer appear (status lives in the
+	// HTTP header, retryability is conveyed via errorCode + standards
+	// metadata, the rest were redundant).
+	for _, field := range []string{`"type"`, `"title"`, `"status"`, `"instance"`, `"internal_code"`, `"retry"`} {
+		if strings.Contains(w.Body.String(), field) {
+			t.Errorf("body should not include %s field: %s", field, w.Body.String())
+		}
 	}
 }
 
@@ -84,9 +84,8 @@ func TestRenderError_Retriable(t *testing.T) {
 		http.StatusConflict, "version mismatch", nil))
 
 	p := decodeProblem(t, w)
-	if p.Retry == nil || !p.Retry.Retryable {
-		t.Errorf("retry = %+v, want retryable", p.Retry)
-	}
+	// PR #39: retryability is no longer in the body. Clients infer it from
+	// errorCode + transaction_status (PDNG = retryable here).
 	if p.TransactionStatus != domain.TxStatusPending {
 		t.Errorf("transaction_status = %q, want PDNG", p.TransactionStatus)
 	}
@@ -100,8 +99,13 @@ func TestRenderError_NonDomainDoesNotLeak(t *testing.T) {
 		t.Errorf("status = %d, want 500", w.Code)
 	}
 	p := decodeProblem(t, w)
-	if p.ErrorCode != domain.CodeInternal {
-		t.Errorf("errorCode = %q, want INTERNAL_ERROR", p.ErrorCode)
+	// New contract: CodeInternal is NOT client-safe — the response collapses
+	// to the generic "999999 / Internal Error" envelope.
+	if p.ErrorCode != dto.FallbackErrorCode {
+		t.Errorf("errorCode = %q, want %q (whitelist fallback)", p.ErrorCode, dto.FallbackErrorCode)
+	}
+	if p.ErrorMessage != dto.FallbackErrorMessage {
+		t.Errorf("errorMessage = %q, want %q", p.ErrorMessage, dto.FallbackErrorMessage)
 	}
 	if strings.Contains(w.Body.String(), "secret-table") {
 		t.Errorf("response leaked internal error detail: %s", w.Body.String())
@@ -129,8 +133,8 @@ func TestRenderValidationError_FieldErrors(t *testing.T) {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 	p := decodeProblem(t, w)
-	if p.ErrorCode != domain.CodeInvalidRequest {
-		t.Errorf("errorCode = %q, want INVALID_REQUEST", p.ErrorCode)
+	if p.ErrorCode != "E4001" {
+		t.Errorf("errorCode = %q, want E4001 (InternalCode for INVALID_REQUEST)", p.ErrorCode)
 	}
 	if len(p.Errors) != 2 {
 		t.Fatalf("errors len = %d, want 2 (%+v)", len(p.Errors), p.Errors)
