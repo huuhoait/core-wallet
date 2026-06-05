@@ -1,0 +1,83 @@
+# =============================================================================
+# Docker Compose — CDC mode (Debezium + Kafka Connect)
+# Use together with the root docker-compose.yml:
+#   docker compose -f docker-compose.yml -f services/outbox-relay/docker-compose.cdc.yml \
+#     --profile relay up -d
+# =============================================================================
+
+services:
+  kafka-connect:
+    image: debezium/connect:2.6
+    container_name: wallet-kafka-connect
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: wallet-connect-cluster
+      CONFIG_STORAGE_TOPIC: _connect-configs
+      OFFSET_STORAGE_TOPIC: _connect-offsets
+      STATUS_STORAGE_TOPIC: _connect-status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: INFO
+    ports:
+      - "${CONNECT_PORT:-8083}:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - wallet-net
+    profiles:
+      - relay
+
+  # Outbox relay in CDC mode
+  outbox-relay-cdc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: core-wallet/outbox-relay:dev
+    container_name: wallet-outbox-relay-cdc
+    restart: unless-stopped
+    depends_on:
+      kafka-connect:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      RELAY_MODE: cdc
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: wallet_app
+      DB_PASSWORD: ${WALLET_APP_PASSWORD:-wallet_app_dev}
+      DB_NAME: ${POSTGRES_DB:-wallet}
+      KAFKA_BROKERS: kafka:9092
+      CDC_CONNECT_URL: http://kafka-connect:8083
+      CDC_CONNECTOR_NAME: wallet-outbox-connector
+      CDC_TOPIC: wallet.public.wlt_outbox
+      CDC_AUTO_REGISTER: "true"
+      CDC_SLOT_NAME: wallet_outbox_slot
+      CDC_PUBLICATION_NAME: wallet_outbox_publication
+      METRICS_PORT: 9091
+      LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+    ports:
+      - "${RELAY_CDC_METRICS_PORT:-9091}:9091"
+    networks:
+      - wallet-net
+    profiles:
+      - relay
+
+networks:
+  wallet-net:
+    external: true
+    name: wallet-net

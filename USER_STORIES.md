@@ -155,7 +155,7 @@ docs alone).
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
 | US-7.1 | Every posting writes a Kafka event row atomically (transactional outbox) | ✅ | `WLT_OUTBOX`; `INSERT INTO WLT_OUTBOX` inside every posting SP. |
-| US-7.2 | Relay outbox → Kafka (Debezium CDC primary, Go polling worker fallback) | ⬜ | HLD v1.9. Table only; no relay worker (`cmd/` has server only). |
+| US-7.2 | Relay outbox → Kafka (Debezium CDC primary, Go polling worker fallback) | ✅ | Go Polling Worker implemented in `services/outbox-relay` (polls `WLT_OUTBOX` using `SKIP LOCKED`). Debezium CDC/Kafka production integration is a future goal. |
 | US-7.3 | Downstream consumers react to `withdraw.posted` etc. | ⬜ | Out of scope here (Treasury Service). |
 | US-7.4 | As a downstream consumer, every outbox event carries a **consistent transaction-metadata envelope** (reference, tran_type, channel, actor, occurred_at, client/counterparty, schema version) so events are self-describing and routable **without joining back to the ledger** | ⬜ | **Enrichment of US-7.1**, not greenfield: the `INSERT INTO WLT_OUTBOX` in every posting/reversal SP (`db/export/schema.sql`) already emits *some* business fields (`tran_internal_id`, `amount`, `fee_gross`/`vat_amount`, `ext_payout_ref`, `ccy`, `group_id`), but the shape **varies per SP** and key meta is missing: most payloads omit the client **`reference`** (idempotency/external ref) and **`tran_type`**; `HEADERS` carries only `traceparent`; the `WLT_OUTBOX.CHANNEL` column is left **NULL** (posting INSERTs don't pass it) and `CREATED_BY` falls back to `SYSTEM` instead of `audit.actor`; `EVENT_VERSION` is a flat `'v1'` with no documented schema. Scope: define one canonical event envelope (meta keys + headers), populate it uniformly across all emitters (incl. the `CHANNEL`/`CREATED_BY`/`occurred_at` columns from the per-TX audit GUCs that `withTx` already sets), and pin a versioned JSON schema. Prerequisite for clean relay (US-7.2) and consumer routing/replay (US-7.3). Design-only. |
 
@@ -209,11 +209,17 @@ docs alone).
 
 ## Next priorities (suggested) / Ưu tiên tiếp theo (gợi ý)
 
+1. **getClient** (Epic 1) — `GET /v1/clients/:id` needs the masked PII view (`v_kyc_masked`). (client CRUD + account open/block/close already done — US-1.3/1.4/1.5/1.8.)
+2. ~~**Outbox relay worker** (US-7.2)~~ — ✅ Done (using Go Polling Worker; Kafka integration is a future goal).
+3. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
+4. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
+5. **Onboarding service** (Epic 1) — currently seed-only; no production path.
 1. **Outbox relay worker** (US-7.2) — events are written but never published.
 2. **SLA-timeout janitor** (US-5.3) — stuck withdrawals never auto-reverse.
 3. **Go test coverage** (US-10.7) — posting paths verified only via SQL today.
 4. **Merchant-withdrawal reversal endpoint** (US-3.4) — SP `post_merchant_withdraw_reversal` exists but has no HTTP route; wire handler + route to make it reachable.
 5. **Related-document attachment** (US-1.13) — `FM_CLIENT_KYC.related_docs` JSONB slot exists but no SP/endpoint writes it.
+
 6. ~~**EOD period-locking + GL feed** (US-6.1/6.2)~~ — ✅ done: `eod_close_period` write-freeze (full immutability) on closed business dates (unblocks US-3.7) + chunked `eod_gl_feed_post` (`WLT_GL_BATCH` P→S). Remaining Epic-6 gaps: full suspense/clearing GL (US-6.2), e-invoice (US-6.4), maker-checker JE (US-6.5), reversal time-window (US-3.6).
 7. ~~**Merchant hot-wallet lifecycle**~~ — ✅ complete: provisioning (US-1.10), activation (US-1.9), deposit routing (US-1.11), rescale + rebalance (US-1.12) all shipped with SP + Go + `wallet_merchant_group_lifecycle_test.sql`.
 
