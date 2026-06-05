@@ -35,6 +35,11 @@ Core/
 ├── docker-compose.yml        # local dev stack (PG17 + PgBouncer + Adminer)
 ├── .env.example              # infra env template (copy to .env)
 │
+├── .github/workflows/        # CI/CD pipelines
+│   ├── ci.yml                #   lint + test + SQL suites + terraform validate
+│   ├── cd.yml                #   build images → terraform deploy (ECS)
+│   └── cd-k8s.yml            #   build images → kustomize → kubectl apply (K8s)
+│
 ├── docs/                     # design documentation
 │   ├── INDEX.md              #   doc catalogue
 │   ├── hld/                  #   High-Level Design (+ 20-TPS variant)
@@ -47,14 +52,22 @@ Core/
 │   └── tests/                #   SQL assertion suites (accounting, recon, reversal)
 │
 ├── services/
-│   └── wallet-service/       # Go service — thin RPC over the stored procedures
-│       ├── cmd/server/       #   main entrypoint
-│       ├── internal/         #   domain / usecase / repo / http (clean architecture)
-│       └── postman/          #   Postman collection + environment
+│   ├── wallet-service/       # Go service — thin RPC over the stored procedures
+│   │   ├── cmd/server/       #   main entrypoint
+│   │   ├── internal/         #   domain / usecase / repo / http (clean architecture)
+│   │   └── postman/          #   Postman collection + environment
+│   └── outbox-relay/         # Outbox → Kafka relay worker
 │
 └── deploy/
     ├── docker/               # postgres + pgbouncer config & init scripts
-    └── loadtest/             # k6 (HTTP) + pgbench (DB) load tests
+    ├── loadtest/             # k6 (HTTP) + pgbench (DB) load tests
+    ├── k8s/                  # ⭐ Kubernetes manifests (Kustomize)
+    │   ├── base/             #   shared: deployment, service, HPA, PDB, netpol
+    │   └── overlays/         #   aws-eks/ | on-premise/
+    └── terraform/            # ⭐ AWS infrastructure as code
+        ├── modules/          #   vpc, rds, eks, ecs
+        ├── environments/     #   staging/ | production/
+        └── bootstrap/        #   S3 state + DynamoDB lock + OIDC role
 ```
 
 > Legacy spreadsheets live in `.archive/` (git-ignored, not part of the deliverable).
@@ -236,6 +249,170 @@ Latest sweep notes: [docs/specs/k6_sweep.md](docs/specs/k6_sweep.md).
 
 ---
 
+## Production Deployment / Triển khai production
+
+The system supports two deployment targets: **AWS (EKS)** and **on-premise
+Kubernetes**. Both use the same Kustomize base manifests with
+environment-specific overlays.
+
+> 🇻🇳 Hệ thống hỗ trợ triển khai trên **AWS (EKS)** hoặc **Kubernetes on-premise**.
+> Cả hai dùng chung Kustomize base, chỉ khác overlay.
+
+### Deployment architecture
+
+```
+Internet
+    │
+    ▼
+┌──────────────────┐
+│ Ingress          │  AWS: ALB (AWS LB Controller)
+│ (TLS termination)│  On-prem: nginx-ingress + MetalLB/F5
+└────────┬─────────┘
+         │ :8080
+         ▼
+┌──────────────────────────────────────────────────────┐
+│  Kubernetes Pods (HPA: 3–10 replicas)                 │
+│  ┌─────────────────────┐  ┌────────────────────────┐ │
+│  │  wallet-service      │  │  PgBouncer (sidecar)   │ │
+│  │  Go/Gin, OTel        │─▶│  transaction pooling   │ │
+│  │  :8080               │  │  localhost:6432        │ │
+│  └─────────────────────┘  └───────────┬────────────┘ │
+└────────────────────────────────────────┼──────────────┘
+                                         │ :5432
+                                         ▼
+                              ┌────────────────────────┐
+                              │  PostgreSQL 17          │
+                              │  AWS: RDS (multi-AZ)   │
+                              │  On-prem: StatefulSet  │
+                              │    or CloudNativePG    │
+                              └────────────────────────┘
+```
+
+### Directory structure (deploy)
+
+```
+deploy/
+├── docker/                    # local dev (docker compose)
+├── loadtest/                  # k6 + pgbench load tests
+├── k8s/                       # ⭐ Kubernetes manifests
+│   ├── base/                  #   shared (deployment, service, HPA, PDB, netpol)
+│   ├── overlays/aws-eks/      #   AWS: ALB Ingress, IRSA, RDS endpoint
+│   └── overlays/on-premise/   #   On-prem: nginx, PG StatefulSet, local storage
+└── terraform/                 # ⭐ AWS infra as code
+    ├── modules/vpc/           #   VPC 3-AZ, NAT, subnets
+    ├── modules/rds/           #   RDS PG17, secrets, read replica
+    ├── modules/eks/           #   EKS cluster, node groups, IRSA
+    ├── modules/ecs/           #   ECS Fargate (alternative to EKS)
+    ├── environments/staging/  #   staging tfvars + backend
+    ├── environments/production/ # production tfvars + backend
+    └── bootstrap/             #   S3 state bucket + DynamoDB lock + OIDC role
+```
+
+### Option A — AWS EKS
+
+**Prerequisites:** AWS account, Terraform, `kubectl`, ACM certificate for TLS.
+
+```bash
+# 1. Bootstrap Terraform state (one-time)
+cd deploy/terraform/bootstrap
+terraform init && terraform apply
+# → save output deploy_role_arn to GitHub secrets
+
+# 2. Provision infrastructure (VPC + RDS + EKS)
+cd deploy/terraform/environments/staging
+terraform init
+terraform plan -var="image_tag=$(git rev-parse --short HEAD)"
+terraform apply
+
+# 3. Connect kubectl to EKS
+aws eks update-kubeconfig --name core-wallet-staging-cluster --region ap-southeast-1
+
+# 4. Deploy wallet-service
+kubectl apply -k deploy/k8s/overlays/aws-eks
+kubectl -n wallet rollout status deployment/wallet-service
+
+# 5. Load DB schema (first time — via bastion or VPN)
+RDS_HOST=$(terraform output -raw rds_endpoint | cut -d: -f1)
+PGPASSWORD=<from-secrets-manager> psql -h $RDS_HOST -U postgres -d wallet \
+  -f db/export/schema.sql \
+  -f db/export/partitions.sql \
+  -f db/export/seed.sql
+```
+
+### Option B — On-Premise Kubernetes
+
+**Prerequisites:** K8s cluster (kubeadm/RKE2/k3s), nginx-ingress, StorageClass
+`fast-ssd` (local-path/ceph-rbd), private container registry.
+
+```bash
+# 1. Push images to internal registry
+docker build -t registry.internal.local/core-wallet/wallet-service:v1.0.0 \
+  services/wallet-service/
+docker push registry.internal.local/core-wallet/wallet-service:v1.0.0
+
+# 2. Update secrets (Vault/sealed-secrets — never commit real values)
+# Edit deploy/k8s/overlays/on-premise/kustomization.yaml with your DB endpoint
+
+# 3. Deploy (includes PostgreSQL StatefulSet)
+kubectl apply -k deploy/k8s/overlays/on-premise
+kubectl -n wallet rollout status deployment/wallet-service
+
+# 4. Load DB schema (first time)
+kubectl -n wallet exec -it postgres-primary-0 -- \
+  psql -U postgres -d wallet \
+    -f /docker-entrypoint-initdb.d/01-schema.sql \
+    -f /docker-entrypoint-initdb.d/02-partitions.sql \
+    -f /docker-entrypoint-initdb.d/03-seed.sql
+
+# 5. Verify
+kubectl -n wallet get pods
+curl -k https://wallet-api.internal.local/healthz
+```
+
+### CI/CD pipeline
+
+| Event | Action | Environment |
+|-------|--------|-------------|
+| Push to `master` | CI (lint + test + SQL suites) → Build images → Deploy | Staging (auto) |
+| Tag `v*` | Build images → Deploy (manual approval) | Production |
+
+Pipelines live in `.github/workflows/`:
+- `ci.yml` — Go lint/vet/test + SQL test suites + Terraform validate
+- `cd-k8s.yml` — Build images → `kustomize set image` → `kubectl apply`
+
+For on-premise without GitHub connectivity: use **ArgoCD** (watches git repo,
+auto-syncs) or a self-hosted runner with `kubeconfig` access.
+
+### Capacity sizing by TPS
+
+| TPS | K8s Pods | CPU/Pod | DB Instance | Est. Cost |
+|:---:|:---:|:---:|:---:|:---:|
+| 100 | 1–2 | 250m | db.t4g.medium / 2 vCPU | ~$125/mo |
+| 500 | 2–4 | 500m | db.r6g.medium / 4 vCPU | ~$350/mo |
+| 1,000 | 2–6 | 500m | db.r6g.large / 4 vCPU | ~$550/mo |
+| **2,000** | **3–10** | **1000m** | **db.r6g.xlarge / 8 vCPU** | **~$900/mo** |
+| 5,000 | 6–15 | 1000m | db.r6g.2xlarge / 16 vCPU | ~$1,800/mo |
+| 10,000 | 10–30 | 2000m | db.r6g.4xlarge / 32 vCPU | ~$3,500/mo |
+
+> Bottleneck is always the DB (single-writer PostgreSQL). The Go layer saturates
+> at ~5,000 req/s per vCPU — well above what the DB can handle. Horizontal pod
+> scaling provides redundancy, not throughput.
+
+Full sizing rationale + storage growth estimates → [deploy/terraform/DEPLOYMENT_ARCHITECTURE.md](deploy/terraform/DEPLOYMENT_ARCHITECTURE.md).
+
+### Key design decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| PgBouncer as **sidecar** (not shared) | Zero network hop (localhost); each pod gets its own pool; pool count scales with pods |
+| **Kustomize** (not Helm) | Simpler, transparent patching; no template logic for a single-service deployment |
+| NetworkPolicy + PDB | Least-privilege network; min 2 pods during rolling updates |
+| TopologySpreadConstraints | Pods spread across zones — survives single-AZ failure |
+| Separate DB overlay | AWS uses managed RDS; on-prem gets a StatefulSet (upgrade to CloudNativePG for HA) |
+| IRSA (AWS) / Vault (on-prem) | No long-lived credentials in pods; secrets rotatable without redeploy |
+
+---
+
 ## Documentation / Tài liệu
 
 | Document | Description |
@@ -247,6 +424,9 @@ Latest sweep notes: [docs/specs/k6_sweep.md](docs/specs/k6_sweep.md).
 | [docs/specs/error_management.md](docs/specs/error_management.md) | Error taxonomy & handling |
 | [docs/specs/wallet_gl_coa_spec.md](docs/specs/wallet_gl_coa_spec.md) | GL chart-of-accounts spec |
 | [docs/INDEX.md](docs/INDEX.md) | Full catalogue |
+| [deploy/k8s/README.md](deploy/k8s/README.md) | Kubernetes deployment guide (AWS EKS + on-premise) |
+| [deploy/terraform/README.md](deploy/terraform/README.md) | Terraform infrastructure guide |
+| [deploy/terraform/DEPLOYMENT_ARCHITECTURE.md](deploy/terraform/DEPLOYMENT_ARCHITECTURE.md) | Deployment model + TPS capacity sizing |
 
 ---
 

@@ -16,7 +16,19 @@ crash.*.log
 # CLI config / override files
 .terraformrc
 terraform.rc
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+.terraform.lock.hcl
+crash.log
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+*.auto.tfvars
+!*.auto.tfvars.example
+

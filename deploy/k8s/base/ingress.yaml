@@ -1,0 +1,34 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wallet-service
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: wallet-service
+    app.kubernetes.io/part-of: core-wallet
+  annotations:
+    # Common — override per overlay
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "15"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "15"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "5"
+    # Rate limiting (per source IP)
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+spec:
+  ingressClassName: nginx  # patched: nginx (on-prem) or alb (AWS)
+  tls:
+    - hosts:
+        - wallet-api.example.com  # patched per overlay
+      secretName: wallet-tls
+  rules:
+    - host: wallet-api.example.com  # patched per overlay
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wallet-service
+                port:
+                  number: 8080

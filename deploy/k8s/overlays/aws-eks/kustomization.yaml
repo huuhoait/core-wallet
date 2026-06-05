@@ -1,0 +1,61 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wallet
+
+resources:
+  - ../../base
+
+# AWS EKS-specific patches
+patches:
+  # Use ALB Ingress Controller instead of nginx
+  - target:
+      kind: Ingress
+      name: wallet-service
+    patch: |
+      - op: replace
+        path: /spec/ingressClassName
+        value: alb
+      - op: replace
+        path: /metadata/annotations
+        value:
+          alb.ingress.kubernetes.io/scheme: internet-facing
+          alb.ingress.kubernetes.io/target-type: ip
+          alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+          alb.ingress.kubernetes.io/certificate-arn: ${ACM_CERT_ARN}
+          alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+          alb.ingress.kubernetes.io/healthcheck-path: /healthz
+          alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+          alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+          alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+          alb.ingress.kubernetes.io/group.name: core-wallet
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: wallet-api.yourdomain.com
+      - op: replace
+        path: /spec/rules/0/host
+        value: wallet-api.yourdomain.com
+
+  # IRSA annotation for service account
+  - target:
+      kind: ServiceAccount
+      name: wallet-service
+    patch: |
+      - op: replace
+        path: /metadata/annotations
+        value:
+          eks.amazonaws.com/role-arn: ${EKS_SERVICE_ROLE_ARN}
+
+  # Point PgBouncer to RDS endpoint
+  - target:
+      kind: Deployment
+      name: wallet-service
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/1/env/0/value
+        value: ${RDS_PRIMARY_ENDPOINT}
+
+images:
+  - name: ghcr.io/OWNER/core-wallet/wallet-service
+    newName: ghcr.io/OWNER/core-wallet/wallet-service
+    newTag: latest  # replaced by CI/CD

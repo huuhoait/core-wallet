@@ -25,6 +25,7 @@ Catalogue of all design documents. Status of the features they describe lives in
 |----------|-------------|
 | [specs/finance_transaction.md](specs/finance_transaction.md) | Transaction flows + API specs: top-up, deposit, withdraw, merchant withdraw, transfer, reversal, history. |
 | [specs/wallet_onboarding.md](specs/wallet_onboarding.md) | Onboarding & wallet-opening flow, KYC tiers, state machines, acceptance criteria. |
+| [specs/hot_wallet.md](specs/hot_wallet.md) | Merchant/agent **hot-wallet sub-account sharding** end-to-end: overview, onboarding/provision, shard creation, deposit routing, payment, withdraw, sweep, rescale — with mermaid sequence diagrams, GL legs, config knobs, error codes (US-1.9–1.12, US-2.4). |
 | [specs/error_management.md](specs/error_management.md) | Error taxonomy, codes, and handling strategy. |
 | [specs/eod.md](specs/eod.md) | End-of-Day & GL accounting cutoff: the two closes (`run_eod` / `run_gl_close`), tasks T1–T7, write-freeze, the Go scheduler, and **dangerous DB-config / scheduler-config updates** (`WLT_GL_CONFIG.cutoff_time` ↔ `EOD_GL_CUTOFF` drift). |
 | [specs/wallet_gl_coa_spec.md](specs/wallet_gl_coa_spec.md) | GL chart-of-accounts specification (source for `db/seeds/coa/`). |

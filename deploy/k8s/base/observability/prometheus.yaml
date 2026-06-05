@@ -1,0 +1,251 @@
+# =============================================================================
+# Prometheus — metrics collection + alerting
+# Scrapes wallet-service pods, PgBouncer, OTel Collector, and node metrics.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: observability
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: core-wallet
+        environment: ${DEPLOYMENT_ENV:-production}
+
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+
+    scrape_configs:
+      # Kubernetes service discovery — pods with prometheus annotations
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+
+      # OTel Collector self-metrics
+      - job_name: otel-collector
+        static_configs:
+          - targets: ["otel-collector.observability.svc.cluster.local:8888"]
+
+      # Tempo metrics
+      - job_name: tempo
+        static_configs:
+          - targets: ["tempo.observability.svc.cluster.local:3200"]
+
+    # Remote write for receiving metrics from OTel Collector
+    # (enables prometheusremotewrite exporter in OTel)
+    remote_write: []
+
+  # Alerting rules for the wallet service
+  wallet-alerts.yml: |
+    groups:
+      - name: wallet-service
+        rules:
+          # P1 — double-entry invariant violation
+          - alert: BatchUnbalanced
+            expr: increase(wallet_errors_total{code="BATCH_UNBALANCED"}[5m]) > 0
+            for: 0m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Double-entry invariant violated (ΣDR ≠ ΣCR)"
+              description: "BATCH_UNBALANCED raised — page on-call immediately"
+
+          # P2 — error rate spike
+          - alert: HighErrorRate
+            expr: |
+              sum(rate(wallet_requests_total{status=~"5.."}[5m]))
+              / sum(rate(wallet_requests_total[5m])) > 0.005
+            for: 2m
+            labels:
+              severity: high
+            annotations:
+              summary: "5xx error rate > 0.5% for 2 minutes"
+
+          # P2 — timeout spike
+          - alert: TimeoutSpike
+            expr: increase(wallet_errors_total{code="TIMEOUT"}[5m]) > 50
+            for: 1m
+            labels:
+              severity: high
+            annotations:
+              summary: "More than 50 timeouts in 5 minutes"
+
+          # P3 — high lock contention
+          - alert: HighLockContention
+            expr: |
+              sum(rate(wallet_errors_total{code="VERSION_CONFLICT"}[5m]))
+              / sum(rate(wallet_requests_total[5m])) > 0.05
+            for: 5m
+            labels:
+              severity: medium
+            annotations:
+              summary: "VERSION_CONFLICT rate > 5% — review hot-account contention"
+
+          # P3 — pod restarts
+          - alert: PodCrashLooping
+            expr: increase(kube_pod_container_status_restarts_total{namespace="wallet"}[15m]) > 3
+            for: 5m
+            labels:
+              severity: medium
+            annotations:
+              summary: "wallet-service pod restarting repeatedly"
+
+      - name: database
+        rules:
+          # RDS / PG connection pool saturation
+          - alert: PgBouncerPoolNearFull
+            expr: pgbouncer_pools_server_active / pgbouncer_pools_server_pool_size > 0.85
+            for: 3m
+            labels:
+              severity: high
+            annotations:
+              summary: "PgBouncer pool > 85% utilized — risk of pool exhaustion"
+
+          # Replication lag (read replica)
+          - alert: ReplicationLagHigh
+            expr: pg_replication_lag_seconds > 5
+            for: 2m
+            labels:
+              severity: medium
+            annotations:
+              summary: "PostgreSQL replication lag > 5s"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prometheus-server
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: prometheus
+spec:
+  serviceName: prometheus-server
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.2
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=15d"
+            - "--web.enable-remote-write-receiver"
+            - "--web.enable-lifecycle"
+            - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+            - "--web.console.templates=/usr/share/prometheus/consoles"
+          ports:
+            - name: http
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-server
+  namespace: observability
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: prometheus
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources: [nodes, nodes/proxy, services, endpoints, pods]
+    verbs: [get, list, watch]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+  - nonResourceURLs: ["/metrics"]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: observability
