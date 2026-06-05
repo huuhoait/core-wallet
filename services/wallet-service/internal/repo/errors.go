@@ -124,9 +124,11 @@ func httpStatusFor(code string) int {
 		return http.StatusLocked
 	case domain.CodeInsufficientFunds,
 		domain.CodeTierLimitExceeded,
-		domain.CodeAcctRoleInvalid:
+		domain.CodeAcctRoleInvalid,
+		domain.CodeReversalWindowExpired:
 		// Schema valid, business rule fails → 422 Unprocessable Entity.
 		// (ACCT_ROLE_INVALID: caller addressed an internal SHARD/SETTLEMENT wallet.)
+		// (REVERSAL_WINDOW_EXPIRED: orig is older than WLT_TRAN_DEF window — use GL adjustment instead.)
 		return http.StatusUnprocessableEntity
 	case domain.CodeVersionConflict,
 		domain.CodeWDAlreadyCompleted,

@@ -59,6 +59,7 @@ var codeMeta = map[string]CodeMeta{
 	CodeWDAlreadyCompleted: {"Withdrawal already completed", "This withdrawal has already reached COMPLETED status", "E6102", "", ""},
 	CodeWDInvalidState:     {"Withdrawal invalid state", "The withdrawal is in a state that does not permit this transition", "E6103", "", ""},
 	CodeWDAlreadyReversed:  {"Withdrawal already reversed", "This withdrawal has already been reversed", "E6104", "", ""},
+	CodeReversalWindowExpired: {"Reversal window expired", "The original transaction is older than the allowed reversal window; use a GL adjustment instead", "E6105", "AG09", TxStatusRejected},
 
 	// ── System / infra ──
 	CodeInternal:     {"Internal error", "An unexpected error occurred; please retry or contact support", "E9001", "", TxStatusPending},

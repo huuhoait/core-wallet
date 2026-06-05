@@ -57,6 +57,7 @@ const (
 	CodeWDAlreadyCompleted   = "WD_ALREADY_COMPLETED"
 	CodeWDInvalidState       = "WD_INVALID_STATE"
 	CodeWDAlreadyReversed    = "WD_ALREADY_REVERSED"
+	CodeReversalWindowExpired = "REVERSAL_WINDOW_EXPIRED" // orig posted outside the per-tran-type allowed window (P0060)
 	CodeInternal             = "INTERNAL_ERROR"
 	CodeTimeout              = "TIMEOUT"
 	CodeUnauthorized         = "UNAUTHORIZED"
