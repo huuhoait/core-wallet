@@ -248,6 +248,37 @@ const (
 	FallbackErrorMessage = "Internal Error"
 )
 
+// SuccessErrorCode + SuccessErrorMessage are the uniform "success" markers
+// returned at the top of every 2xx response envelope. "00000" mirrors the
+// SQLSTATE for successful_completion, so the client always parses errorCode
+// the same way regardless of outcome.
+const (
+	SuccessErrorCode    = "00000"
+	SuccessErrorMessage = "Success!"
+)
+
+// SuccessEnvelope is the uniform 2xx response shape. The business payload
+// lives under `data`; trace_id + timestamp mirror the error envelope so logs
+// and clients can correlate either outcome the same way.
+type SuccessEnvelope struct {
+	ErrorCode    string `json:"errorCode"`
+	ErrorMessage string `json:"errorMessage"`
+	Data         any    `json:"data,omitempty"`
+	TraceID      string `json:"trace_id,omitempty"`
+	Timestamp    string `json:"timestamp,omitempty"`
+}
+
+// Ok wraps the business response in the standard success envelope.
+func Ok(data any, traceID string) SuccessEnvelope {
+	return SuccessEnvelope{
+		ErrorCode:    SuccessErrorCode,
+		ErrorMessage: SuccessErrorMessage,
+		Data:         data,
+		TraceID:      traceID,
+		Timestamp:    nowRFC3339(),
+	}
+}
+
 // NewProblem builds a ProblemDetails from a canonical code + inline detail —
 // used by middleware (JWT, RBAC, timeout, recovery) and validation paths where
 // no rich *domain.Error is available. The values are synthesized:

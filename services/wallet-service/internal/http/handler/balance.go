@@ -27,7 +27,7 @@ func (h *Wallet) GetBalance(c *gin.Context) {
 			renderError(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, dto.BalanceAsOfRespFrom(res))
+		writeOK(c, http.StatusOK, dto.BalanceAsOfRespFrom(res))
 		return
 	}
 
@@ -36,7 +36,7 @@ func (h *Wallet) GetBalance(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.BalanceRespFrom(res))
+	writeOK(c, http.StatusOK, dto.BalanceRespFrom(res))
 }
 
 // GET /v1/ops/wallets/:acct_no/balance — ops/internal full view (§9.3.2).
@@ -46,7 +46,7 @@ func (h *Wallet) GetBalanceOps(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.BalanceOpsRespFrom(res))
+	writeOK(c, http.StatusOK, dto.BalanceOpsRespFrom(res))
 }
 
 // POST /v1/ops/wallets/balance/batch — batch query, max 100 (§9.3.4).
@@ -61,5 +61,5 @@ func (h *Wallet) GetBalanceBatch(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.BalanceBatchRespFrom(req.AcctNos, found, time.Now()))
+	writeOK(c, http.StatusOK, dto.BalanceBatchRespFrom(req.AcctNos, found, time.Now()))
 }

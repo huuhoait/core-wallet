@@ -31,7 +31,7 @@ func (h *Wallet) OpenAccount(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.AccountOpenResponse{
+	writeOK(c, http.StatusCreated, dto.AccountOpenResponse{
 		AcctNo:     res.AcctNo,
 		ClientNo:   req.ClientNo,
 		AcctType:   req.AcctType,
@@ -56,5 +56,5 @@ func (h *Wallet) UpdateAccountStatus(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.AccountStatusRespFrom(res))
+	writeOK(c, http.StatusOK, dto.AccountStatusRespFrom(res))
 }

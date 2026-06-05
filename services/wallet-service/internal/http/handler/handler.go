@@ -43,7 +43,7 @@ func (h *Wallet) Topup(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusForTopup(res), dto.TopupRespFrom(res))
+	writeOK(c, statusForTopup(res), dto.TopupRespFrom(res))
 }
 
 // POST /v1/transactions/transfer
@@ -67,7 +67,7 @@ func (h *Wallet) Transfer(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.TransferRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.TransferRespFrom(res))
 }
 
 // POST /v1/transactions/withdraw
@@ -92,7 +92,7 @@ func (h *Wallet) Withdraw(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.WithdrawRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.WithdrawRespFrom(res))
 }
 
 // POST /v1/transactions/merchant-withdraw
@@ -118,7 +118,7 @@ func (h *Wallet) MerchantWithdraw(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.MerchantWithdrawRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.MerchantWithdrawRespFrom(res))
 }
 
 // POST /v1/treasury/withdrawals/:ext_payout_ref/acked
@@ -138,7 +138,7 @@ func (h *Wallet) MarkAcked(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MarkRespFrom(res))
+	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
 // POST /v1/treasury/withdrawals/:ext_payout_ref/disbursing
@@ -151,7 +151,7 @@ func (h *Wallet) MarkDisbursing(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MarkRespFrom(res))
+	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
 // POST /v1/treasury/withdrawals/:ext_payout_ref/completed
@@ -171,7 +171,7 @@ func (h *Wallet) MarkCompleted(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MarkRespFrom(res))
+	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
 // POST /v1/treasury/withdrawals/:ext_payout_ref/reverse
@@ -193,7 +193,7 @@ func (h *Wallet) Reverse(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ReversalRespFrom(res))
+	writeOK(c, http.StatusOK, dto.ReversalRespFrom(res))
 }
 
 // GET /healthz
@@ -231,6 +231,14 @@ func renderError(c *gin.Context, err error) {
 	p := dto.NewProblemFromError(de, c.Request.URL.Path,
 		c.GetString(middleware.CtxKeyRequestID))
 	abortProblem(c, p)
+}
+
+// writeOK wraps the business response in the standard success envelope and
+// emits it as application/json. All 2xx handlers (except /healthz) go through
+// this helper so every response shares the {errorCode, errorMessage, data}
+// shape regardless of outcome.
+func writeOK(c *gin.Context, status int, data any) {
+	c.JSON(status, dto.Ok(data, c.GetString(middleware.CtxKeyRequestID)))
 }
 
 // abortProblem writes p as application/problem+json and stops the chain.

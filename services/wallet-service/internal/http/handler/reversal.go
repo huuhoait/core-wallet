@@ -33,7 +33,7 @@ func (h *Wallet) ReverseTransfer(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.TransferReversalRespFrom(res))
+	writeOK(c, http.StatusOK, dto.TransferReversalRespFrom(res))
 }
 
 // POST /v1/transactions/topup/reverse — reverse a topup by reference.
@@ -57,7 +57,7 @@ func (h *Wallet) ReverseTopup(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.TopupReversalRespFrom(res))
+	writeOK(c, http.StatusOK, dto.TopupReversalRespFrom(res))
 }
 
 // POST /v1/finance/merchant-withdraw/reverse — reverse a merchant-settlement
@@ -84,5 +84,5 @@ func (h *Wallet) ReverseMerchantWithdraw(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MerchantWithdrawReversalRespFrom(res))
+	writeOK(c, http.StatusOK, dto.MerchantWithdrawReversalRespFrom(res))
 }

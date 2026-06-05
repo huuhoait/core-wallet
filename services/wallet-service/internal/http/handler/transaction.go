@@ -18,7 +18,7 @@ func (h *Wallet) GetAccount(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.AccountRespFrom(res))
+	writeOK(c, http.StatusOK, dto.AccountRespFrom(res))
 }
 
 // GET /v1/finance/transactions?acct_no=&from=&to=&limit=&before_seq= — account
@@ -79,7 +79,7 @@ func (h *Wallet) ListTransactions(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.TxListRespFrom(q, entries))
+	writeOK(c, http.StatusOK, dto.TxListRespFrom(q, entries))
 }
 
 // GET /v1/finance/transactions/:tran_key — all legs of one transaction.
@@ -94,5 +94,5 @@ func (h *Wallet) GetTransaction(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.TxDetailRespFrom(tranKey, legs))
+	writeOK(c, http.StatusOK, dto.TxDetailRespFrom(tranKey, legs))
 }

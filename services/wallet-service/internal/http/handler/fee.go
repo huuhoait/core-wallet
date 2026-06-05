@@ -31,7 +31,7 @@ func (h *Wallet) FeeCharge(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.FeeChargeRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.FeeChargeRespFrom(res))
 }
 
 // POST /v1/finance/fee-charge/reverse — reverse a standalone fee charge by its
@@ -56,5 +56,5 @@ func (h *Wallet) ReverseFeeCharge(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.FeeChargeReversalRespFrom(res))
+	writeOK(c, http.StatusOK, dto.FeeChargeReversalRespFrom(res))
 }
