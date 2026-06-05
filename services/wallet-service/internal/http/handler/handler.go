@@ -218,12 +218,17 @@ func renderValidationError(c *gin.Context, err error) {
 
 // renderError maps any error to the canonical problem+json envelope. Non-domain
 // errors collapse to INTERNAL_ERROR so internals (stack/SQL) never leak (§3.3).
+//
+// Uses NewProblemFromError to preserve the original SQLSTATE + full RAISE text
+// for PG-originated errors (errorCode = pgErr.Code, errorMessage = pgErr.Message).
+// The whitelist gate inside NewProblemFromError replaces unknown canonical
+// codes with the generic "999999 / Internal Error" envelope.
 func renderError(c *gin.Context, err error) {
 	var de *domain.Error
 	if !errors.As(err, &de) {
 		de = domain.Internal(err)
 	}
-	p := dto.NewProblem(de.Code, de.HTTPStatus, de.Detail, c.Request.URL.Path,
+	p := dto.NewProblemFromError(de, c.Request.URL.Path,
 		c.GetString(middleware.CtxKeyRequestID))
 	p.Retry = &dto.RetryInfo{Retryable: de.IsRetriable()}
 	abortProblem(c, p)

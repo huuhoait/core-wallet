@@ -4,6 +4,7 @@
 package dto
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
@@ -221,8 +222,8 @@ type ProblemDetails struct {
 	Detail   string `json:"detail,omitempty"`   // RFC7807: human-readable detail (dynamic context)
 	Instance string `json:"instance,omitempty"` // RFC7807: request path
 
-	ErrorCode         string         `json:"errorCode"`                      // stable business error code (canonical contract)
-	ErrorMessage      string         `json:"errorMessage"`                   // stable human message for this code (i18n source, safe for end-user)
+	ErrorCode         string         `json:"errorCode"`                      // SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for PG-raised, E#### synthetic for Go-side, "999999" when the canonical name is not whitelisted (§3.3)
+	ErrorMessage      string         `json:"errorMessage"`                   // full raw "CODE: detail" message (pg.Message verbatim for PG errors, synthesized for Go); "Internal Error" when not whitelisted
 	InternalCode      string         `json:"internal_code,omitempty"`        // E#### for log/alert (§5)
 	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty"` // ISO 20022 External Status Reason (§13.2)
 	TransactionStatus string         `json:"transaction_status,omitempty"`   // pain.002 status (§13.3)
@@ -249,31 +250,82 @@ type FieldError struct {
 // nowRFC3339 is overridable in tests.
 var nowRFC3339 = func() string { return time.Now().Format(time.RFC3339) }
 
-// NewProblem builds a ProblemDetails from a canonical code, enriching it from
-// the domain standards registry (title, internal code, ISO 20022 reason, tx
-// status). Used by both the handler and middleware so the envelope is uniform.
+// FallbackErrorCode + FallbackErrorMessage are the safe defaults emitted when
+// the canonical code is NOT in the client-safe whitelist (`domain.IsClientSafeCode`).
+// They strip every internal hint (SQLSTATE, raw SP text, internal code, ISO
+// reason, tx status) so unknown errors collapse to a uniform 500 envelope.
+const (
+	FallbackErrorCode    = "999999"
+	FallbackErrorMessage = "Internal Error"
+)
+
+// NewProblem builds a ProblemDetails from a canonical code + inline detail —
+// used by middleware (JWT, RBAC, timeout, recovery) and validation paths where
+// no rich *domain.Error is available. The values are synthesized:
+//   - errorCode = MetaFor(code).InternalCode (E#### synthetic SQLSTATE)
+//   - errorMessage = "code: detail"
+// The whitelist gate still applies, so an unregistered code returns 999999.
 func NewProblem(code string, status int, detail, instance, traceID string) ProblemDetails {
-	m := domain.MetaFor(code)
+	return NewProblemFromError(&domain.Error{
+		Code: code, HTTPStatus: status, Detail: detail,
+		SQLState:   domain.MetaFor(code).InternalCode,
+		RawMessage: rawMessageFor(code, detail),
+	}, instance, traceID)
+}
+
+// NewProblemFromError builds a ProblemDetails from a rich *domain.Error,
+// preserving the original SQLSTATE + full RAISE message when the error
+// originated from PG. Used by handler.renderError for the main fast path.
+//
+// Whitelist gate (§3.3): when IsClientSafeCode(de.Code) is false the body
+// collapses to {errorCode: "999999", errorMessage: "Internal Error", status: 500}
+// with every internal field stripped — so unknown SP errors, raw pg failures,
+// and panics never leak SQLSTATE / message text to the client.
+func NewProblemFromError(de *domain.Error, instance, traceID string) ProblemDetails {
+	if !domain.IsClientSafeCode(de.Code) {
+		return ProblemDetails{
+			Type:         ProblemTypeBase + "INTERNAL_ERROR",
+			Title:        FallbackErrorMessage,
+			Status:       http.StatusInternalServerError,
+			Instance:     instance,
+			ErrorCode:    FallbackErrorCode,
+			ErrorMessage: FallbackErrorMessage,
+			TraceID:      traceID,
+			Timestamp:    nowRFC3339(),
+		}
+	}
+	m := domain.MetaFor(de.Code)
 	title := m.Title
 	if title == "" {
-		title = code
+		title = de.Code
 	}
-	errorMessage := m.Message
-	if errorMessage == "" {
-		errorMessage = title
+	sqlState := de.SQLState
+	if sqlState == "" {
+		sqlState = m.InternalCode
+	}
+	rawMessage := de.RawMessage
+	if rawMessage == "" {
+		rawMessage = rawMessageFor(de.Code, de.Detail)
 	}
 	return ProblemDetails{
-		Type:              ProblemTypeBase + code,
+		Type:              ProblemTypeBase + de.Code,
 		Title:             title,
-		Status:            status,
-		Detail:            detail,
+		Status:            de.HTTPStatus,
+		Detail:            de.Detail,
 		Instance:          instance,
-		ErrorCode:         code,
-		ErrorMessage:      errorMessage,
+		ErrorCode:         sqlState,
+		ErrorMessage:      rawMessage,
 		InternalCode:      m.InternalCode,
 		ISO20022Reason:    m.ISOReason,
 		TransactionStatus: m.TxStatus,
 		TraceID:           traceID,
 		Timestamp:         nowRFC3339(),
 	}
+}
+
+func rawMessageFor(code, detail string) string {
+	if detail == "" {
+		return code
+	}
+	return code + ": " + detail
 }

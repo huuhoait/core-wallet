@@ -135,6 +135,35 @@ func MetaFor(code string) CodeMeta {
 // ReasonFor is a convenience accessor for the ISO 20022 reason code.
 func ReasonFor(code string) string { return MetaFor(code).ISOReason }
 
+// IsClientSafeCode is the whitelist gate that decides whether an error's
+// canonical code may surface to the API consumer. Codes outside this set are
+// considered internal/unexpected — the response collapses to a generic
+// "999999 / Internal Error" envelope (§3.3) so SQLSTATEs from unknown SP
+// errors, raw connection failures, panics, etc. never leak.
+//
+// True when the code is either:
+//   - directly registered in codeMeta (an intentionally documented error), OR
+//   - a family-suffix variant (FROM_ACCT_NOT_FOUND / TO_ACCT_NOT_ACTIVE / …)
+//     that MetaFor already routes to a concrete ISO reason.
+//
+// CodeInternal is explicitly excluded — by definition we do NOT know what
+// happened, so it must render as the generic fallback.
+func IsClientSafeCode(code string) bool {
+	if code == "" || code == CodeInternal {
+		return false
+	}
+	if _, ok := codeMeta[code]; ok {
+		return true
+	}
+	switch {
+	case strings.HasSuffix(code, "_NOT_FOUND"),
+		strings.HasSuffix(code, "_NOT_ACTIVE"),
+		strings.HasSuffix(code, "_RESTRAINT_ACTIVE"):
+		return true
+	}
+	return false
+}
+
 // TxStatusForMark maps a treasury withdraw state-machine status to the ISO 20022
 // transactionStatus reported on the success response (§13.3).
 func TxStatusForMark(status string) string {

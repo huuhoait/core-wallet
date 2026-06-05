@@ -56,27 +56,27 @@ func mapPgError(err error) error {
 		// re-run (fresh snapshot + idempotency gate), so surface it as a
 		// RETRYABLE 409 rather than a terminal 500. withTx also retries it
 		// server-side so most never reach the client.
-		return domain.NewError(domain.CodeVersionConflict, http.StatusConflict,
-			"version conflict: "+detail, err)
+		return pgDomainError(domain.CodeVersionConflict, http.StatusConflict,
+			"version conflict: "+detail, pgErr)
 	case "40P01": // deadlock_detected — PG aborted one TX to break a cycle.
 		// Also safe to retry the whole operation; treat as a retryable conflict.
-		return domain.NewError(domain.CodeVersionConflict, http.StatusConflict,
-			"deadlock detected: "+detail, err)
+		return pgDomainError(domain.CodeVersionConflict, http.StatusConflict,
+			"deadlock detected: "+detail, pgErr)
 	case "55P03": // lock_not_available — lock_timeout fired
-		return domain.NewError(domain.CodeTimeout, http.StatusServiceUnavailable,
-			"lock timeout: "+detail, err)
+		return pgDomainError(domain.CodeTimeout, http.StatusServiceUnavailable,
+			"lock timeout: "+detail, pgErr)
 	case "57014": // query_canceled — statement_timeout fired
-		return domain.NewError(domain.CodeTimeout, http.StatusGatewayTimeout,
-			"statement timeout: "+detail, err)
+		return pgDomainError(domain.CodeTimeout, http.StatusGatewayTimeout,
+			"statement timeout: "+detail, pgErr)
 	case "23505": // unique_violation — usually idempotency-key race
-		return domain.NewError(domain.CodeDuplicateReference, http.StatusConflict,
-			"duplicate reference: "+detail, err)
+		return pgDomainError(domain.CodeDuplicateReference, http.StatusConflict,
+			"duplicate reference: "+detail, pgErr)
 	case "23503": // foreign_key_violation
-		return domain.NewError(domain.CodeInvalidRequest, http.StatusBadRequest,
-			"foreign key violation: "+detail, err)
+		return pgDomainError(domain.CodeInvalidRequest, http.StatusBadRequest,
+			"foreign key violation: "+detail, pgErr)
 	case "23514": // check_violation
-		return domain.NewError(domain.CodeInvalidRequest, http.StatusBadRequest,
-			"check violation: "+detail, err)
+		return pgDomainError(domain.CodeInvalidRequest, http.StatusBadRequest,
+			"check violation: "+detail, pgErr)
 	}
 
 	// Only PL/pgSQL RAISE (custom 'P0' SQLSTATE class) carries a canonical code
@@ -85,7 +85,18 @@ func mapPgError(err error) error {
 	if code == "" || !strings.HasPrefix(pgErr.Code, "P0") {
 		return domain.Internal(err)
 	}
-	return domain.NewError(code, httpStatusFor(code), detail, err)
+	return pgDomainError(code, httpStatusFor(code), detail, pgErr)
+}
+
+// pgDomainError builds a domain.Error and overrides SQLState + RawMessage with
+// the real values from *pgconn.PgError so the response surfaces the SP's actual
+// SQLSTATE (P0060, 40001, ...) and full RAISE text. Cause stays the pg error
+// so logs keep the full pg context (severity, hint, position).
+func pgDomainError(canonical string, status int, detail string, pgErr *pgconn.PgError) *domain.Error {
+	e := domain.NewError(canonical, status, detail, pgErr)
+	e.SQLState = pgErr.Code
+	e.RawMessage = pgErr.Message
+	return e
 }
 
 // parseSPMessage extracts the token before the first ":" as the code.

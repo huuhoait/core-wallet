@@ -262,7 +262,12 @@ func TestJWT_NoChannelClaim_NoContext(t *testing.T) {
 	}
 }
 
-func assertProblem(t *testing.T, w *httptest.ResponseRecorder, wantStatus int, wantCode string) {
+// assertProblem checks that the response body is a Problem+JSON whose
+// errorCode is the SQLSTATE-like value the new contract emits for the given
+// canonical name (PR #39: `errorCode` = InternalCode E#### for Go-side codes,
+// real pg SQLSTATE for PG errors). The helper looks the InternalCode up from
+// codeMeta so call sites stay readable (`domain.CodeUnauthorized`).
+func assertProblem(t *testing.T, w *httptest.ResponseRecorder, wantStatus int, wantCanonical string) {
 	t.Helper()
 	if w.Code != wantStatus {
 		t.Fatalf("status = %d, want %d, body=%s", w.Code, wantStatus, w.Body.String())
@@ -274,7 +279,8 @@ func assertProblem(t *testing.T, w *httptest.ResponseRecorder, wantStatus int, w
 	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
 		t.Fatalf("body decode: %v\nbody=%s", err, w.Body.String())
 	}
-	if p.ErrorCode != wantCode {
-		t.Errorf("errorCode = %q, want %q", p.ErrorCode, wantCode)
+	wantErrorCode := domain.MetaFor(wantCanonical).InternalCode
+	if p.ErrorCode != wantErrorCode {
+		t.Errorf("errorCode = %q, want %q (InternalCode for %s)", p.ErrorCode, wantErrorCode, wantCanonical)
 	}
 }
