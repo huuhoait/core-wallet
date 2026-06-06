@@ -411,6 +411,74 @@
           ]
         },
         {
+          "name": "GET clients (masked list)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/clients?limit=100",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "100",
+                  "description": "page size (1..200, default 100)"
+                },
+                {
+                  "key": "after",
+                  "value": "{{client_after}}",
+                  "description": "keyset cursor: client_no from the previous page's next_cursor",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "A",
+                  "description": "filter by status (A|B|C)",
+                  "disabled": true
+                },
+                {
+                  "key": "client_type",
+                  "value": "IND",
+                  "description": "filter by client_type (IND|CORP|MER)",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Masked client list (v_client_masked), keyset-paginated by client_no ascending. Optional status / client_type filters. When a full page is returned, next_cursor is set — pass it as ?after= for the next page (captured to {{client_after}})."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', ()=>pm.expect(pm.response.code).to.eql(200));",
+                  "if(pm.response.code===200){ const b=pm.response.json(); pm.test('list shape', ()=>{ pm.expect(b).to.have.property('items'); pm.expect(b.items).to.be.an('array'); pm.expect(b).to.have.property('page_size'); pm.expect(b).to.have.property('count'); }); if(b.next_cursor){ pm.environment.set('client_after', b.next_cursor); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "POST submit KYC (tier-2)",
           "request": {
             "method": "POST",

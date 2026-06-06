@@ -104,6 +104,7 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 		clients := v1.Group("/clients")
 		{
 			clients.POST("", h.CreateClient)
+			clients.GET("", h.ListClients)                                            // MASKED list (?status=&client_type=&limit=&after=)
 			clients.GET("/:client_no", h.GetClient)                                   // MASKED profile (PII masked)
 			clients.PATCH("/:client_no", h.UpdateClient)
 			clients.POST("/:client_no/kyc", h.UpdateKYC)                              // submit/update eKYC + raise tier

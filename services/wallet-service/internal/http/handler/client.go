@@ -99,6 +99,42 @@ func (h *Wallet) UpdateKYC(c *gin.Context) {
 	writeOK(c, http.StatusOK, dto.KycRespFrom(res))
 }
 
+// GET /v1/clients?status=&client_type=&limit=&after= — MASKED client list
+// (wallet_app via v_client_masked). Optional status (A|B|C) / client_type
+// (IND|CORP|MER) filters; paged at 200 items/page (keyset via next_cursor → ?after=).
+func (h *Wallet) ListClients(c *gin.Context) {
+	limit := domain.DefaultClientPageSize
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			renderError(c, domain.InvalidRequest("invalid limit (positive integer)", nil))
+			return
+		}
+		limit = n
+	}
+	if limit > domain.MaxClientPageSize {
+		limit = domain.MaxClientPageSize
+	}
+
+	q := domain.ClientListQuery{Limit: limit}
+	if v := c.Query("after"); v != "" {
+		q.AfterNo = &v
+	}
+	if v := c.Query("status"); v != "" {
+		q.Status = &v
+	}
+	if v := c.Query("client_type"); v != "" {
+		q.ClientType = &v
+	}
+
+	res, err := h.svc.ListClients(c.Request.Context(), q)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.ClientListRespFrom(q, res))
+}
+
 // GET /v1/clients/:client_no — MASKED client profile (wallet_app via
 // v_client_masked). Name + CCCD/passport masked; unknown client_no → 404.
 func (h *Wallet) GetClient(c *gin.Context) {
