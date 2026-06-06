@@ -290,18 +290,20 @@ export default function () {
     // merchant_topup — a consumer pays a merchant: consumer → group SETTLEMENT (10%)  [merchant_topup.sql]
     classify(post('merchant_topup', `${BASE}/v1/finance/transfer`, {
       from_acct_no: acct(randomIntBetween(1, NW)), to_acct_no: stl(randomIntBetween(1, NG)),
-      amount: String(randomIntBetween(10000, 500000)), reference: ref('K6MTU'), tran_type: 'TRFOUT',
+      amount: String(randomIntBetween(50000, 500000)), reference: ref('K6MTU'), tran_type: 'TRFOUT',
     }));
 
   } else if (r < 82) {
     // merchant_withdraw — hot-shard sweep + settlement (10%). Amount range MUST
-    // match merchant_topup (10k..500k) above: both run at 10% weight against the
+    // match merchant_topup (50k..500k) above: both run at 10% weight against the
     // same settlement, so equal ranges keep the settlement flow-balanced (it only
-    // bleeds the withdraw fee). A wider withdraw range (the old 50k..2M, avg ~1M
-    // vs topup's ~255k) drained the 500M seed in ~7 min, then returned
-    // INSUFFICIENT_FUNDS for the rest of a 30-min peak run.
+    // bleeds the withdraw fee). Floor is 50k — MERCHWD.MIN_TRAN_AMT (WLT_TRAN_DEF):
+    // below it the SP raises AMOUNT_OUT_OF_RANGE (400), which is a business rejection,
+    // not a successful withdraw, so a lower floor only manufactures spurious 400s.
+    // A wider withdraw range (the old 50k..2M, avg ~1M vs topup's ~255k) drained the
+    // 500M seed in ~7 min, then returned INSUFFICIENT_FUNDS for the rest of a run.
     classify(post('merchant_withdraw', `${BASE}/v1/finance/merchant-withdraw`, {
-      group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(10000, 500000)), reference: ref('K6MW'),
+      group_id: grp(randomIntBetween(1, NG)), amount: String(randomIntBetween(50000, 500000)), reference: ref('K6MW'),
     }));
 
   } else if (r < 88) {
