@@ -52,7 +52,8 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 	const sql = `
 		SELECT h.seq_no, h.tran_internal_id, h.tran_type, h.cr_dr_maint_ind,
 		       h.tran_amt::text, h.ccy, h.actual_bal_amt::text,
-		       h.post_date, h.value_date, h.reference, COALESCE(h.narrative, '')
+		       h.post_date, h.value_date, h.reference,
+		       COALESCE(h.tran_desc, ''), COALESCE(h.narrative, '')
 		  FROM WLT_TRAN_HIST h
 		  JOIN WLT_ACCT a ON a.internal_key = h.internal_key
 		 WHERE a.acct_no = $1
@@ -74,7 +75,7 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 		if err := rows.Scan(
 			&e.SeqNo, &e.TranInternalID, &e.TranType, &e.DRCR,
 			&e.Amount, &e.Ccy, &e.BalanceAfter,
-			&e.PostDate, &e.ValueDate, &e.Reference, &e.Narrative,
+			&e.PostDate, &e.ValueDate, &e.Reference, &e.TranDesc, &e.Narrative,
 		); err != nil {
 			return nil, mapErrIfPg(err)
 		}
@@ -105,7 +106,8 @@ func (r *PgWalletRepo) GetTransaction(ctx context.Context, tranKey int64) ([]dom
 		SELECT h.tfr_seq_no, h.seq_no, h.internal_key, COALESCE(a.acct_no, ''),
 		       h.tran_type, h.cr_dr_maint_ind, h.tran_amt::text, h.ccy,
 		       h.actual_bal_amt::text, h.post_date, h.value_date,
-		       h.reference, COALESCE(h.narrative, '')
+		       h.reference, COALESCE(h.tran_desc, ''), COALESCE(h.narrative, ''),
+		       COALESCE(h.metadata, '{}'::jsonb)
 		  FROM WLT_TRAN_HIST h
 		  LEFT JOIN WLT_ACCT a ON a.internal_key = h.internal_key
 		 WHERE h.tran_internal_id = $1
@@ -123,7 +125,8 @@ func (r *PgWalletRepo) GetTransaction(ctx context.Context, tranKey int64) ([]dom
 		if err := rows.Scan(
 			&l.TFRSeqNo, &l.SeqNo, &l.InternalKey, &l.AcctNo,
 			&l.TranType, &l.DRCR, &l.Amount, &l.Ccy,
-			&l.BalanceAfter, &l.PostDate, &l.ValueDate, &l.Reference, &l.Narrative,
+			&l.BalanceAfter, &l.PostDate, &l.ValueDate, &l.Reference,
+			&l.TranDesc, &l.Narrative, &l.Metadata,
 		); err != nil {
 			return nil, mapErrIfPg(err)
 		}

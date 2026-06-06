@@ -4431,6 +4431,9 @@ const docTemplate = `{
                 "seq_no": {
                     "type": "integer"
                 },
+                "tran_desc": {
+                    "type": "string"
+                },
                 "tran_type": {
                     "type": "string"
                 },
@@ -4461,6 +4464,9 @@ const docTemplate = `{
                 "dr_cr": {
                     "type": "string"
                 },
+                "metadata": {
+                    "type": "object"
+                },
                 "narrative": {
                     "type": "string"
                 },
@@ -4475,6 +4481,9 @@ const docTemplate = `{
                 },
                 "tfr_seq_no": {
                     "type": "integer"
+                },
+                "tran_desc": {
+                    "type": "string"
                 },
                 "tran_type": {
                     "type": "string"

@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
@@ -53,6 +54,7 @@ type TxEntryResponse struct {
 	PostDate      string `json:"post_date"`
 	ValueDate     string `json:"value_date"`
 	Reference     string `json:"reference"`
+	TranDesc      string `json:"tran_desc,omitempty"`
 	Narrative     string `json:"narrative,omitempty"`
 }
 
@@ -73,7 +75,7 @@ func TxListRespFrom(q domain.TxListQuery, entries []domain.TxEntry) TxListRespon
 			SeqNo: e.SeqNo, TransactionID: e.TranInternalID, TranType: e.TranType,
 			DRCR: e.DRCR, Amount: e.Amount, Ccy: e.Ccy, BalanceAfter: e.BalanceAfter,
 			PostDate: e.PostDate.Format("2006-01-02"), ValueDate: e.ValueDate.Format("2006-01-02"),
-			Reference: e.Reference, Narrative: e.Narrative,
+			Reference: e.Reference, TranDesc: e.TranDesc, Narrative: e.Narrative,
 		})
 	}
 	out := TxListResponse{AcctNo: q.AcctNo, PageSize: q.Limit, Items: items, Count: len(items)}
@@ -102,10 +104,12 @@ type TxLegResponse struct {
 	Amount       string `json:"amount"`
 	Ccy          string `json:"ccy"`
 	BalanceAfter string `json:"balance_after"`
-	PostDate     string `json:"post_date"`
-	ValueDate    string `json:"value_date"`
-	Reference    string `json:"reference"`
-	Narrative    string `json:"narrative,omitempty"`
+	PostDate     string          `json:"post_date"`
+	ValueDate    string          `json:"value_date"`
+	Reference    string          `json:"reference"`
+	TranDesc     string          `json:"tran_desc,omitempty"`
+	Narrative    string          `json:"narrative,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty" swaggertype:"object"`
 }
 
 type TxDetailResponse struct {
@@ -128,7 +132,7 @@ func TxDetailRespFrom(tranKey int64, legs []domain.TxLeg) TxDetailResponse {
 			TFRSeqNo: l.TFRSeqNo, SeqNo: l.SeqNo, AcctNo: l.AcctNo, TranType: l.TranType,
 			DRCR: l.DRCR, Amount: l.Amount, Ccy: l.Ccy, BalanceAfter: l.BalanceAfter,
 			PostDate: l.PostDate.Format("2006-01-02"), ValueDate: l.ValueDate.Format("2006-01-02"),
-			Reference: l.Reference, Narrative: l.Narrative,
+			Reference: l.Reference, TranDesc: l.TranDesc, Narrative: l.Narrative, Metadata: l.Metadata,
 		})
 	}
 	return out

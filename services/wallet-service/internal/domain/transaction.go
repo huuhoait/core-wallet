@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // TxEntry is one ledger entry (a single leg) on an account — i.e. one line of
 // the account statement. Amounts are decimal strings (never float money).
@@ -15,6 +18,7 @@ type TxEntry struct {
 	PostDate       time.Time
 	ValueDate      time.Time
 	Reference      string
+	TranDesc       string // per-row transaction description (WLT_TRAN_HIST.tran_desc)
 	Narrative      string
 }
 
@@ -33,7 +37,9 @@ type TxLeg struct {
 	PostDate     time.Time
 	ValueDate    time.Time
 	Reference    string
+	TranDesc     string          // per-leg transaction description (WLT_TRAN_HIST.tran_desc)
 	Narrative    string
+	Metadata     json.RawMessage // raw jsonb metadata (WLT_TRAN_HIST.metadata)
 }
 
 // TxListQuery parameterises an account statement query: filter by account +

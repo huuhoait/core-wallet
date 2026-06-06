@@ -1174,6 +1174,8 @@ definitions:
         type: string
       seq_no:
         type: integer
+      tran_desc:
+        type: string
       tran_type:
         type: string
       transaction_id:
@@ -1194,6 +1196,8 @@ definitions:
         type: string
       dr_cr:
         type: string
+      metadata:
+        type: object
       narrative:
         type: string
       post_date:
@@ -1204,6 +1208,8 @@ definitions:
         type: integer
       tfr_seq_no:
         type: integer
+      tran_desc:
+        type: string
       tran_type:
         type: string
       value_date:
