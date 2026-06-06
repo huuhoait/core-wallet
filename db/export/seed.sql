@@ -226,6 +226,16 @@ TRFOUTF	Chuyển tiền nội bộ (miễn phí)	DR	RVTRF	Y	Y	MOBILE	\N	1000.00	
 
 ALTER TABLE public.wlt_tran_def ENABLE TRIGGER ALL;
 
+-- Reversal window: enforce 7 days (168 hours) for every forward tran type that
+-- has a reversal counterpart. NULL stays NULL on pure RV* rows (the column is
+-- only consulted from a reversal SP, keyed on the forward type) so the
+-- semantics remain "NULL = no restriction" for any future forward type that
+-- hasn't been seeded yet. Adjust per-type via UPDATE if a business line needs
+-- a tighter or looser SLA.
+UPDATE public.wlt_tran_def
+   SET reversal_window_hours = 168
+ WHERE reversal_tran_type IS NOT NULL;
+
 --
 -- PostgreSQL database dump complete
 --

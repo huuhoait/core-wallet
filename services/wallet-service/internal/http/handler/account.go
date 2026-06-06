@@ -18,7 +18,7 @@ import (
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.OpenAccountRequest	true	"Open account request"
-//	@Success		201		{object}	dto.AccountOpenResponse	"Created"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.AccountOpenResponse}	"Created"
 //	@Failure		400		{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		404		{object}	dto.ProblemDetails		"Client not found"
 //	@Failure		422		{object}	dto.ProblemDetails		"Business rule violation (e.g. account count limit)"
@@ -44,7 +44,7 @@ func (h *Wallet) OpenAccount(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.AccountOpenResponse{
+	writeOK(c, http.StatusCreated, dto.AccountOpenResponse{
 		AcctNo:     res.AcctNo,
 		ClientNo:   req.ClientNo,
 		AcctType:   req.AcctType,
@@ -62,7 +62,7 @@ func (h *Wallet) OpenAccount(c *gin.Context) {
 //	@Produce		json
 //	@Param			acct_no	path		string							true	"Account number"
 //	@Param			request	body		dto.UpdateAccountStatusRequest	true	"Status update request"
-//	@Success		200		{object}	dto.AccountStatusResponse		"OK"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.AccountStatusResponse}		"OK"
 //	@Failure		400		{object}	dto.ProblemDetails				"Validation error"
 //	@Failure		404		{object}	dto.ProblemDetails				"Account not found"
 //	@Failure		422		{object}	dto.ProblemDetails				"Business rule violation (e.g. illegal transition)"
@@ -83,5 +83,5 @@ func (h *Wallet) UpdateAccountStatus(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.AccountStatusRespFrom(res))
+	writeOK(c, http.StatusOK, dto.AccountStatusRespFrom(res))
 }

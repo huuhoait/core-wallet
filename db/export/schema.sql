@@ -1903,6 +1903,7 @@ DECLARE
   v_fee_gl   VARCHAR(32);
   v_rev_tran BIGINT;
   v_event    UUID;
+  v_window_hours INT;
 BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
@@ -1925,6 +1926,17 @@ BEGIN
   v_fee       := (v_orig.OBJECT_REQUEST_DATA::jsonb->>'amount')::numeric;
   v_fee_code  := COALESCE(v_orig.OBJECT_REQUEST_DATA::jsonb->>'fee_code', 'FEECHG');
   v_orig_tran := (v_orig.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint;
+
+  -- Reversal window: reject if orig older than the forward type's allowed window.
+  -- NULL = no restriction (fail-open). Placed after the idempotency return so
+  -- repeats of an already-reversed call still succeed regardless of age.
+  SELECT reversal_window_hours INTO v_window_hours FROM WLT_TRAN_DEF WHERE TRAN_TYPE = v_fee_code;
+  IF v_window_hours IS NOT NULL
+     AND clock_timestamp() - v_orig.PROCESSED_AT > make_interval(hours => v_window_hours) THEN
+    RAISE EXCEPTION 'REVERSAL_WINDOW_EXPIRED: % orig is % old, window is % hours',
+      v_fee_code, age(clock_timestamp(), v_orig.PROCESSED_AT), v_window_hours
+      USING ERRCODE = 'P0060';
+  END IF;
 
   SELECT * INTO v_acct FROM WLT_ACCT WHERE ACCT_NO = v_acct_no FOR UPDATE;
   IF v_acct.ACCT_STATUS = 'C' THEN
@@ -2348,6 +2360,7 @@ DECLARE
   v_def    WLT_TRAN_DEF%ROWTYPE;
   v_liab_gl VARCHAR(32);
   v_rev_tran BIGINT; v_event UUID; v_cinfo JSONB; v_seq_base BIGINT;
+  v_window_hours INT;
 BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
@@ -2366,6 +2379,16 @@ BEGIN
    WHERE OBJECT_REF_ID = p_orig_reference AND OBJECT_SUBJECT = 'MERCHANT_WITHDRAW' FOR UPDATE;
   IF NOT FOUND OR v_orig.PROCESS_STATUS <> 'SUCCESS' THEN
     RAISE EXCEPTION 'WD_NOT_FOUND: merchant withdraw % not posted', p_orig_reference USING ERRCODE = 'P0040';
+  END IF;
+
+  -- Reversal window: reject if orig older than MERCHWD's allowed window.
+  -- NULL = no restriction (fail-open). Comes AFTER the idempotency return.
+  SELECT reversal_window_hours INTO v_window_hours FROM WLT_TRAN_DEF WHERE TRAN_TYPE = 'MERCHWD';
+  IF v_window_hours IS NOT NULL
+     AND clock_timestamp() - v_orig.PROCESSED_AT > make_interval(hours => v_window_hours) THEN
+    RAISE EXCEPTION 'REVERSAL_WINDOW_EXPIRED: MERCHWD orig is % old, window is % hours',
+      age(clock_timestamp(), v_orig.PROCESSED_AT), v_window_hours
+      USING ERRCODE = 'P0060';
   END IF;
 
   v_grp      := v_orig.OBJECT_REQUEST_DATA::jsonb->>'group_id';
@@ -2694,6 +2717,7 @@ DECLARE
   v_orig_tran BIGINT; v_orig_seq BIGINT;
   v_acct WLT_ACCT%ROWTYPE; v_def WLT_TRAN_DEF%ROWTYPE;
   v_liab_gl VARCHAR(32); v_rev_tran BIGINT; v_event UUID; v_cinfo JSONB;
+  v_window_hours INT;
 BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
@@ -2710,6 +2734,16 @@ BEGIN
    WHERE OBJECT_REF_ID = p_orig_reference AND OBJECT_SUBJECT = 'TOPUP' FOR UPDATE;
   IF NOT FOUND OR v_orig.PROCESS_STATUS <> 'SUCCESS' THEN
     RAISE EXCEPTION 'TRAN_NOT_FOUND: topup % not posted', p_orig_reference USING ERRCODE = 'P0040';
+  END IF;
+
+  -- Reversal window: reject if orig older than TOPUP's allowed window.
+  -- NULL = no restriction (fail-open). Comes AFTER the idempotency return.
+  SELECT reversal_window_hours INTO v_window_hours FROM WLT_TRAN_DEF WHERE TRAN_TYPE = 'TOPUP';
+  IF v_window_hours IS NOT NULL
+     AND clock_timestamp() - v_orig.PROCESSED_AT > make_interval(hours => v_window_hours) THEN
+    RAISE EXCEPTION 'REVERSAL_WINDOW_EXPIRED: TOPUP orig is % old, window is % hours',
+      age(clock_timestamp(), v_orig.PROCESSED_AT), v_window_hours
+      USING ERRCODE = 'P0060';
   END IF;
 
   v_acct_no  := v_orig.OBJECT_REQUEST_DATA::jsonb->>'acct_no';
@@ -3107,6 +3141,7 @@ DECLARE
   v_a_gl VARCHAR(32); v_b_gl VARCHAR(32);
   v_rev_tran BIGINT; v_event UUID; v_ci_a JSONB; v_ci_b JSONB; v_seq_base BIGINT;
   v_lock BIGINT;
+  v_window_hours INT;
 BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
@@ -3126,6 +3161,17 @@ BEGIN
    WHERE OBJECT_REF_ID = p_orig_reference AND OBJECT_SUBJECT = 'TRANSFER' FOR UPDATE;
   IF NOT FOUND OR v_orig.PROCESS_STATUS <> 'SUCCESS' THEN
     RAISE EXCEPTION 'TRAN_NOT_FOUND: transfer % not posted', p_orig_reference USING ERRCODE = 'P0040';
+  END IF;
+
+  -- Reversal window: reject if orig older than TRFOUT's allowed window. TRFOUT
+  -- and TRFOUTF share the same window (seeded uniformly). NULL = no restriction
+  -- (fail-open). Comes AFTER the idempotency return.
+  SELECT reversal_window_hours INTO v_window_hours FROM WLT_TRAN_DEF WHERE TRAN_TYPE = 'TRFOUT';
+  IF v_window_hours IS NOT NULL
+     AND clock_timestamp() - v_orig.PROCESSED_AT > make_interval(hours => v_window_hours) THEN
+    RAISE EXCEPTION 'REVERSAL_WINDOW_EXPIRED: TRFOUT orig is % old, window is % hours',
+      age(clock_timestamp(), v_orig.PROCESSED_AT), v_window_hours
+      USING ERRCODE = 'P0060';
   END IF;
 
   v_from := v_orig.OBJECT_REQUEST_DATA::jsonb->>'from';
@@ -3517,6 +3563,7 @@ DECLARE
   v_rev_tran_key BIGINT;
   v_event_uuid  UUID;
   v_orig_legs   RECORD;
+  v_window_hours INT;
 BEGIN
   PERFORM set_config('audit.actor',   v_actor,   TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
@@ -3542,6 +3589,17 @@ BEGIN
   IF v_track.STATUS = 'COMPLETED' THEN
     RAISE EXCEPTION 'WD_ALREADY_COMPLETED: cannot reverse %', p_ext_payout_ref
       USING ERRCODE = 'P0041';
+  END IF;
+
+  -- Reversal window: reject if the original withdraw was submitted more than
+  -- WDRAW's allowed window ago. NULL = no restriction (fail-open). Comes after
+  -- the REVERSED idempotency return + the COMPLETED state guard.
+  SELECT reversal_window_hours INTO v_window_hours FROM WLT_TRAN_DEF WHERE TRAN_TYPE = 'WDRAW';
+  IF v_window_hours IS NOT NULL
+     AND clock_timestamp() - v_track.SUBMITTED_AT > make_interval(hours => v_window_hours) THEN
+    RAISE EXCEPTION 'REVERSAL_WINDOW_EXPIRED: WDRAW submitted % ago, window is % hours',
+      age(clock_timestamp(), v_track.SUBMITTED_AT), v_window_hours
+      USING ERRCODE = 'P0060';
   END IF;
 
   -- Fetch wallet
@@ -4990,6 +5048,12 @@ CREATE TABLE public.wlt_tran_def (
     tran_desc character varying(120),
     cr_dr_maint_ind character varying(4) NOT NULL,
     reversal_tran_type character varying(10),
+    -- Allowed window for reversing this tran type, in hours, measured from the
+    -- original's PROCESSED_AT (or WLT_WITHDRAW_TRACK.SUBMITTED_AT for treasury
+    -- withdraw). NULL = no time restriction (fail-open). Enforced by the 5
+    -- reversal SPs AFTER the idempotency check so already-reversed retries are
+    -- unaffected. Out-of-window reversals raise REVERSAL_WINDOW_EXPIRED (P0060).
+    reversal_window_hours integer,
     check_fund_ind character varying(1) DEFAULT 'Y'::character varying NOT NULL,
     check_restraint_ind character varying(1) DEFAULT 'Y'::character varying NOT NULL,
     source_type character varying(8),

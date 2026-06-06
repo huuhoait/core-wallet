@@ -26,11 +26,12 @@ import (
 // @version		1.0
 // @description	Double-entry e-wallet ledger. The Go service is a thin RPC client over PostgreSQL stored functions; all balance validation, double-entry posting, fee/VAT and reversal logic run atomically in plpgsql. Scope is internal synchronous posting (top-up, transfer, withdraw, merchant settlement, fee/VAT, reversal). External rails (NAPAS, card 3DS, MT940) are out of scope.
 // @description
-// @description	## Error model
-// @description	Every error is returned as `application/problem+json` (RFC 7807 / RFC 9457). The body carries a stable `errorCode` (business contract), `errorMessage` (user-safe), `internal_code` (E#### for ops/logs), `iso20022_reason_code` (pain.002 reason), `transaction_status` (pain.002 status), `trace_id` and a `retry` hint. `detail` adds dynamic context; field-level validation failures appear under `errors`.
+// @description	## Response envelope
+// @description	All responses use a uniform envelope. Success (2xx): `{ "errorCode": "00000", "errorMessage": "Success!", "data": <payload>, "trace_id": "...", "timestamp": "..." }` — the operation payload shown in each endpoint's 200/201 schema lives under `data`. Errors use `application/problem+json`: `errorCode` is a SQLSTATE-style code (real PostgreSQL SQLSTATE for SP-raised errors, an `E####` synthetic for Go-side errors, or `999999` when the code is not client-safe), and `errorMessage` is the full `BUSINESS_CODE: detail` string whose leading token is the business code listed below. Errors also carry `iso20022_reason_code`, `transaction_status` (pain.002), `detail`, `trace_id`, `timestamp`, and field-level `errors`.
 // @description
 // @description	### Business error code catalogue
-// @description	| errorCode | internal_code | HTTP | ISO 20022 | Description |
+// @description	`business code` = leading token of `errorMessage`; `errorCode` = the value returned in the body's `errorCode` field.
+// @description	| business code | errorCode | HTTP | ISO 20022 | Description |
 // @description	| --- | --- | --- | --- | --- |
 // @description	| INVALID_AMOUNT | E4024 | 400 | AM12 | The transaction amount is invalid or missing |
 // @description	| AMOUNT_OUT_OF_RANGE | E4024 | 400 | AM02 | The amount is outside the allowed range for this transaction type |
@@ -143,7 +144,9 @@ func run(logger *slog.Logger) error {
 	logger.Info("config loaded",
 		slog.String("env", cfg.Env),
 		slog.String("http.addr", cfg.HTTP.Addr),
-		slog.Bool("otel.enabled", cfg.Otel.Enabled))
+		slog.Bool("otel.enabled", cfg.Otel.Enabled),
+		slog.Bool("jwt.enabled", cfg.JWT.Enabled),
+		slog.String("jwt.algorithm", cfg.JWT.Algorithm))
 
 	// ---- OpenTelemetry -----------------------------------------------------
 	shutdownOtel, err := telemetry.Setup(rootCtx, cfg.Otel, cfg.HTTP.ServiceName, cfg.Env)
@@ -205,7 +208,7 @@ func run(logger *slog.Logger) error {
 	walletRepo := repo.NewPgWalletRepo(pool, readPool, piiPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries)
 	walletSvc := usecase.NewWalletService(walletRepo, logger)
 
-	server, err := netHTTP.New(cfg.HTTP, walletSvc, logger)
+	server, err := netHTTP.New(cfg.HTTP, cfg.JWT, walletSvc, logger)
 	if err != nil {
 		return fmt.Errorf("http server: %w", err)
 	}

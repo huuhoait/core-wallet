@@ -18,7 +18,7 @@ import (
 //	@Tags			accounts
 //	@Produce		json
 //	@Param			acct_no	path		string				true	"Account number"
-//	@Success		200		{object}	dto.AccountResponse	"OK"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.AccountResponse}	"OK"
 //	@Failure		404		{object}	dto.ProblemDetails	"Account not found"
 //	@Failure		500		{object}	dto.ProblemDetails	"Internal error"
 //	@Router			/v1/accounts/{acct_no} [get]
@@ -28,7 +28,7 @@ func (h *Wallet) GetAccount(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.AccountRespFrom(res))
+	writeOK(c, http.StatusOK, dto.AccountRespFrom(res))
 }
 
 // ListTransactions godoc
@@ -42,7 +42,7 @@ func (h *Wallet) GetAccount(c *gin.Context) {
 //	@Param			to			query		string				false	"post_date <= (YYYY-MM-DD)"
 //	@Param			limit		query		int					false	"Page size (1..200, default 200)"
 //	@Param			before_seq	query		int					false	"Keyset cursor: return rows with seq_no < before_seq"
-//	@Success		200			{object}	dto.TxListResponse	"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.TxListResponse}	"OK"
 //	@Failure		400			{object}	dto.ProblemDetails	"Validation error"
 //	@Failure		404			{object}	dto.ProblemDetails	"Account not found"
 //	@Failure		500			{object}	dto.ProblemDetails	"Internal error"
@@ -102,7 +102,7 @@ func (h *Wallet) ListTransactions(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.TxListRespFrom(q, entries))
+	writeOK(c, http.StatusOK, dto.TxListRespFrom(q, entries))
 }
 
 // GetTransaction godoc
@@ -112,7 +112,7 @@ func (h *Wallet) ListTransactions(c *gin.Context) {
 //	@Tags			finance
 //	@Produce		json
 //	@Param			tran_key	path		int						true	"Transaction internal key (tran_internal_key)"
-//	@Success		200			{object}	dto.TxDetailResponse	"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.TxDetailResponse}	"OK"
 //	@Failure		400			{object}	dto.ProblemDetails		"Invalid transaction id"
 //	@Failure		404			{object}	dto.ProblemDetails		"Transaction not found"
 //	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
@@ -128,5 +128,5 @@ func (h *Wallet) GetTransaction(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.TxDetailRespFrom(tranKey, legs))
+	writeOK(c, http.StatusOK, dto.TxDetailRespFrom(tranKey, legs))
 }

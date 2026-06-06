@@ -19,7 +19,7 @@ import (
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.CreateClientRequest	true	"Client create request"
-//	@Success		201		{object}	dto.ClientResponse		"Created"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.ClientResponse}		"Created"
 //	@Failure		400		{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		422		{object}	dto.ProblemDetails		"Business rule violation (e.g. invalid client type)"
 //	@Failure		500		{object}	dto.ProblemDetails		"Internal error"
@@ -47,7 +47,7 @@ func (h *Wallet) CreateClient(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.ClientRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.ClientRespFrom(res))
 }
 
 // Onboard godoc
@@ -58,7 +58,7 @@ func (h *Wallet) CreateClient(c *gin.Context) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.OnboardRequest	true	"Onboard request"
-//	@Success		201		{object}	dto.OnboardResponse	"Created"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.OnboardResponse}	"Created"
 //	@Failure		400		{object}	dto.ProblemDetails	"Validation error"
 //	@Failure		422		{object}	dto.ProblemDetails	"Business rule violation (e.g. ORG_FIELDS_REQUIRED)"
 //	@Failure		500		{object}	dto.ProblemDetails	"Internal error"
@@ -92,7 +92,7 @@ func (h *Wallet) Onboard(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.OnboardRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.OnboardRespFrom(res))
 }
 
 // UpdateKYC godoc
@@ -104,7 +104,7 @@ func (h *Wallet) Onboard(c *gin.Context) {
 //	@Produce		json
 //	@Param			client_no	path		string					true	"Client number"
 //	@Param			request		body		dto.KycUpdateRequest	true	"KYC update request"
-//	@Success		200			{object}	dto.KycResponse			"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.KycResponse}			"OK"
 //	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		404			{object}	dto.ProblemDetails		"Client not found"
 //	@Failure		422			{object}	dto.ProblemDetails		"Business rule violation"
@@ -132,7 +132,7 @@ func (h *Wallet) UpdateKYC(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.KycRespFrom(res))
+	writeOK(c, http.StatusOK, dto.KycRespFrom(res))
 }
 
 // ListClients godoc
@@ -145,7 +145,7 @@ func (h *Wallet) UpdateKYC(c *gin.Context) {
 //	@Param			client_type	query		string					false	"Filter by client_type (IND|CORP|MER)"
 //	@Param			limit		query		int						false	"Page size (1..200, default 100)"
 //	@Param			after		query		string					false	"Keyset cursor: return rows with client_no > after"
-//	@Success		200			{object}	dto.ClientListResponse	"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.ClientListResponse}	"OK"
 //	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
 //	@Router			/v1/clients [get]
@@ -189,7 +189,7 @@ func (h *Wallet) ListClients(c *gin.Context) {
 //	@Tags			clients
 //	@Produce		json
 //	@Param			client_no	path		string						true	"Client number"
-//	@Success		200			{object}	dto.ClientProfileResponse	"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.ClientProfileResponse}	"OK"
 //	@Failure		404			{object}	dto.ProblemDetails			"Client not found"
 //	@Failure		500			{object}	dto.ProblemDetails			"Internal error"
 //	@Router			/v1/clients/{client_no} [get]
@@ -199,7 +199,7 @@ func (h *Wallet) GetClient(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ClientProfileRespFrom(res))
+	writeOK(c, http.StatusOK, dto.ClientProfileRespFrom(res))
 }
 
 // GetClientFull godoc
@@ -209,7 +209,7 @@ func (h *Wallet) GetClient(c *gin.Context) {
 //	@Tags			ops
 //	@Produce		json
 //	@Param			client_no	path		string					true	"Client number"
-//	@Success		200			{object}	dto.ClientFullResponse	"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.ClientFullResponse}	"OK"
 //	@Failure		404			{object}	dto.ProblemDetails		"Client not found"
 //	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
 //	@Router			/v1/ops/clients/{client_no} [get]
@@ -219,7 +219,7 @@ func (h *Wallet) GetClientFull(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ClientFullRespFrom(res))
+	writeOK(c, http.StatusOK, dto.ClientFullRespFrom(res))
 }
 
 // UpdateClient godoc
@@ -231,7 +231,7 @@ func (h *Wallet) GetClientFull(c *gin.Context) {
 //	@Produce		json
 //	@Param			client_no	path		string					true	"Client number"
 //	@Param			request		body		dto.UpdateClientRequest	true	"Client update request"
-//	@Success		200			{object}	dto.ClientResponse		"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.ClientResponse}		"OK"
 //	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		404			{object}	dto.ProblemDetails		"Client not found"
 //	@Failure		422			{object}	dto.ProblemDetails		"Business rule violation"
@@ -259,7 +259,7 @@ func (h *Wallet) UpdateClient(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ClientRespFrom(res))
+	writeOK(c, http.StatusOK, dto.ClientRespFrom(res))
 }
 
 // LinkClientBank godoc
@@ -271,7 +271,7 @@ func (h *Wallet) UpdateClient(c *gin.Context) {
 //	@Produce		json
 //	@Param			client_no	path		string					true	"Client number"
 //	@Param			request		body		dto.LinkBankRequest		true	"Bank link request"
-//	@Success		201			{object}	dto.BankLinkResponse	"Created"
+//	@Success		201			{object}	dto.SuccessEnvelope{data=dto.BankLinkResponse}	"Created"
 //	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		404			{object}	dto.ProblemDetails		"Client not found"
 //	@Failure		422			{object}	dto.ProblemDetails		"Business rule violation"
@@ -296,7 +296,7 @@ func (h *Wallet) LinkClientBank(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.BankLinkRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.BankLinkRespFrom(res))
 }
 
 // SetDefaultClientBank godoc
@@ -307,7 +307,7 @@ func (h *Wallet) LinkClientBank(c *gin.Context) {
 //	@Produce		json
 //	@Param			client_no	path		string					true	"Client number"
 //	@Param			link_id		path		int						true	"Bank link id"
-//	@Success		200			{object}	dto.BankLinkResponse	"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.BankLinkResponse}	"OK"
 //	@Failure		400			{object}	dto.ProblemDetails		"Invalid link id"
 //	@Failure		404			{object}	dto.ProblemDetails		"Client or link not found"
 //	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
@@ -327,5 +327,5 @@ func (h *Wallet) SetDefaultClientBank(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.BankLinkRespFrom(res))
+	writeOK(c, http.StatusOK, dto.BankLinkRespFrom(res))
 }

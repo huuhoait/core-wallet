@@ -7,14 +7,26 @@ import (
 )
 
 // Error is the canonical domain error. It carries:
-//   - Code: stable identifier (mirrors SP ERRCODEs)
-//   - HTTPStatus: how the HTTP layer should respond
-//   - Detail: human-readable context (safe for client display)
-//   - Cause: wrapped underlying error for log/trace
+//   - Code: stable canonical name (REVERSAL_WINDOW_EXPIRED, ...) used for
+//     internal routing (httpStatusFor, codeMeta lookup, log grep).
+//   - SQLState: the SQLSTATE the response should expose as `errorCode`. For
+//     PG-raised errors this is the real pgErr.Code (P0060, 40001, 23505, ...);
+//     for Go-constructed errors it is synthesized from MetaFor(code).InternalCode
+//     (E####). Surfaced verbatim to the client when the code is in the
+//     client-safe whitelist; replaced with "999999" otherwise.
+//   - HTTPStatus: how the HTTP layer should respond.
+//   - Detail: dynamic context (safe for client display when whitelisted).
+//   - RawMessage: full original "CODE: detail" text. For PG errors this is
+//     pgErr.Message verbatim; for Go-constructed errors it is synthesized as
+//     "Code: Detail". Surfaced as `errorMessage` in the response (whitelisted
+//     codes only).
+//   - Cause: wrapped underlying error for log/trace.
 type Error struct {
 	Code       string
+	SQLState   string
 	HTTPStatus int
 	Detail     string
+	RawMessage string
 	Cause      error
 }
 
@@ -49,6 +61,7 @@ const (
 	CodeAmountOutOfRange     = "AMOUNT_OUT_OF_RANGE"
 	CodeDRRestraintActive    = "DR_RESTRAINT_ACTIVE"
 	CodeCRRestraintActive    = "CR_RESTRAINT_ACTIVE"
+	CodeGroupRestrained      = "GROUP_RESTRAINED" // merchant-withdraw blocked by group-level DR restraint (P0025)
 	CodeInsufficientFunds    = "INSUFFICIENT_FUNDS"
 	CodeTierLimitExceeded    = "TIER_LIMIT_EXCEEDED"
 	CodeVersionConflict      = "VERSION_CONFLICT"
@@ -57,6 +70,7 @@ const (
 	CodeWDAlreadyCompleted   = "WD_ALREADY_COMPLETED"
 	CodeWDInvalidState       = "WD_INVALID_STATE"
 	CodeWDAlreadyReversed    = "WD_ALREADY_REVERSED"
+	CodeReversalWindowExpired = "REVERSAL_WINDOW_EXPIRED" // orig posted outside the per-tran-type allowed window (P0060)
 	CodeInternal             = "INTERNAL_ERROR"
 	CodeTimeout              = "TIMEOUT"
 	CodeUnauthorized         = "UNAUTHORIZED"
@@ -105,9 +119,18 @@ const (
 	CodePeriodClosed = "PERIOD_CLOSED"
 )
 
-// Helpers for constructing errors at boundaries.
+// Helpers for constructing errors at boundaries. SQLState + RawMessage are
+// synthesized from the canonical code so Go-side errors carry the same shape
+// as PG-raised ones (mapPgError overrides both with the real pgErr values).
 func NewError(code string, status int, detail string, cause error) *Error {
-	return &Error{Code: code, HTTPStatus: status, Detail: detail, Cause: cause}
+	e := &Error{Code: code, HTTPStatus: status, Detail: detail, Cause: cause}
+	e.SQLState = MetaFor(code).InternalCode // E#### synthetic SQLSTATE; "" if code unknown
+	if detail == "" {
+		e.RawMessage = code
+	} else {
+		e.RawMessage = code + ": " + detail
+	}
+	return e
 }
 
 func NotFound(detail string, cause error) *Error {

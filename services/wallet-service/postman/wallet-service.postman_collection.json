@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "wallet-service-collection",
     "name": "Wallet Service",
-    "description": "Core wallet HTTP API.\n\n**Setup**:\n1. Import this collection + `wallet-service.postman_environment.json`.\n2. Start the docker stack (`docker compose up -d`) and seed wallets `9701000000000001` + `9701000000000002` (see `wallet_seed.sql`).\n3. Run `make run` in `wallet-service/` (binds to `http://localhost:8090` by default).\n4. Select the **Wallet Service — local** environment in Postman.\n5. Run requests in the order below to exercise the full flow.\n\n**Conventions**:\n- Every transactional request auto-generates a unique `reference` in pre-request script (idempotency key).\n- `X-Caller-Subject` ↔ `audit.actor` GUC → fills `created_by` / `updated_by` columns.\n- `X-Channel` ↔ `audit.channel` GUC → fills `channel` column.\n- `X-Request-Id` correlates one client request across services.\n- Test scripts capture `tran_internal_key`, `event_uuid`, `ext_payout_ref` to env vars for downstream requests.\n\n**Error envelope**:\n```json\n{ \"code\": \"<DOMAIN_CODE>\", \"message\": \"...\", \"request_id\": \"...\" }\n```\nCodes: `INVALID_REQUEST`, `ACCT_NOT_FOUND`, `INSUFFICIENT_FUNDS`, `DR_RESTRAINT_ACTIVE`, `TIER_INSUFFICIENT`, `TIMEOUT`, `WD_NOT_FOUND`, `WD_ALREADY_COMPLETED`, `WD_ALREADY_REVERSED`, ...",
+    "description": "Core Wallet HTTP API.\n\n**Setup**:\n1. Import this collection + `wallet-service.postman_environment.json`.\n2. Start the docker stack (`docker compose up -d`) and seed wallets (see `db/seeds/`).\n3. Run `make run` in `services/wallet-service/` (binds to `http://localhost:8090`).\n4. Select the **Wallet Service — local** environment in Postman.\n5. Run requests in the order below to exercise the full flow.\n\n**Conventions**:\n- Every transactional request auto-generates a unique `reference` (idempotency key).\n- `X-Caller-Subject` → `audit.actor` GUC → `created_by` / `updated_by`.\n- `X-Channel` → `audit.channel` GUC → `channel` column.\n- `X-Request-Id` correlates one client request across services.\n\n**Success envelope** (every 2xx except `GET /healthz`):\n```json\n{\n  \"errorCode\": \"00000\",\n  \"errorMessage\": \"Success!\",\n  \"data\": { /* business payload: tran_internal_key, event_uuid, new_balance, status, client_no, acct_no, restraint_id, etc. */ },\n  \"trace_id\": \"req-xxx\",\n  \"timestamp\": \"2026-06-05T10:23:45+07:00\"\n}\n```\nBusiness fields live under `data` — Postman tests read them as `body.data.<field>`.\n\n**Error envelope**:\n```json\n{\n  \"errorCode\": \"P0060\",\n  \"errorMessage\": \"INSUFFICIENT_FUNDS: balance 50000 < required 100000\",\n  \"detail\": \"balance 50000 < required 100000\",\n  \"iso20022_reason_code\": \"AM04\",\n  \"transaction_status\": \"RJCT\",\n  \"trace_id\": \"req-xxx\",\n  \"timestamp\": \"2026-06-05T10:23:45+07:00\"\n}\n```\nError-envelope fields (`errorCode`, `errorMessage`, `detail`, `iso20022_reason_code`, `trace_id`, `timestamp`) stay at the top level.\n\nSee full error catalog: `docs/specs/error_management.md`",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -144,8 +144,8 @@
                   "pm.test('201 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([201,409,422]));",
                   "if (pm.response.code===201){",
                   "  const b=pm.response.json();",
-                  "  pm.test('client_no returned', ()=>pm.expect(b.client_no).to.be.a('string'));",
-                  "  pm.environment.set('client_no', b.client_no);",
+                  "  pm.test('client_no returned', ()=>pm.expect(b.data.client_no).to.be.a('string'));",
+                  "  pm.environment.set('client_no', b.data.client_no);",
                   "}"
                 ]
               }
@@ -198,7 +198,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
-                  "if (pm.response.code===200){ pm.test('client_no echoed', ()=>pm.expect(pm.response.json().client_no).to.eql(pm.environment.get('client_no'))); }"
+                  "if (pm.response.code===200){ pm.test('client_no echoed', ()=>pm.expect(pm.response.json().data.client_no).to.eql(pm.environment.get('client_no'))); }"
                 ]
               }
             }
@@ -249,7 +249,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('422', () => pm.response.to.have.status(422));",
-                  "pm.test('code INVALID_CLIENT_TYPE', ()=>pm.expect(pm.response.json().code).to.equal('INVALID_CLIENT_TYPE'));"
+                  "pm.test('errorMessage mentions INVALID_CLIENT_TYPE', ()=>pm.expect(pm.response.json().errorMessage).to.match(/INVALID_CLIENT_TYPE/));"
                 ]
               }
             }
@@ -304,9 +304,9 @@
                   "pm.test('201 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([201,404,422]));",
                   "if (pm.response.code===201){",
                   "  const b=pm.response.json();",
-                  "  pm.test('link_id returned', ()=>pm.expect(b.link_id).to.be.a('number'));",
-                  "  pm.test('is_default true', ()=>pm.expect(b.is_default).to.eql(true));",
-                  "  pm.environment.set('bank_link_id', b.link_id);",
+                  "  pm.test('link_id returned', ()=>pm.expect(b.data.link_id).to.be.a('number'));",
+                  "  pm.test('is_default true', ()=>pm.expect(b.data.is_default).to.eql(true));",
+                  "  pm.environment.set('bank_link_id', b.data.link_id);",
                   "}"
                 ]
               }
@@ -359,7 +359,7 @@
                 "exec": [
                   "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
                   "if (pm.response.code===200){",
-                  "  pm.test('is_default true', ()=>pm.expect(pm.response.json().is_default).to.eql(true));",
+                  "  pm.test('is_default true', ()=>pm.expect(pm.response.json().data.is_default).to.eql(true));",
                   "}"
                 ]
               }
@@ -404,7 +404,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 or 404', ()=>pm.expect(pm.response.code).to.be.oneOf([200,404]));",
-                  "if(pm.response.code===200){ const b=pm.response.json(); pm.test('masked fields', ()=>{ pm.expect(b.client_no).to.be.a('string'); pm.expect(b).to.have.property('client_name_masked'); }); }"
+                  "if(pm.response.code===200){ const b=pm.response.json(); pm.test('masked fields', ()=>{ pm.expect(b.data.client_no).to.be.a('string'); pm.expect(b.data).to.have.property('client_name_masked'); }); }"
                 ]
               }
             }
@@ -525,7 +525,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 or 4xx', ()=>pm.expect(pm.response.code).to.be.oneOf([200,404,422]));",
-                  "if(pm.response.code===200){ const b=pm.response.json(); pm.test('tier 2', ()=>pm.expect(b.kyc_tier).to.equal('2')); }"
+                  "if(pm.response.code===200){ const b=pm.response.json(); pm.test('tier 2', ()=>pm.expect(b.data.kyc_tier).to.equal('2')); }"
                 ]
               }
             }
@@ -627,11 +627,11 @@
                 "exec": [
                   "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
                   "const body = pm.response.json();",
-                  "pm.test('status POSTED|DUPLICATE', () => pm.expect(body.status).to.be.oneOf(['SUCCESS','DUPLICATE']));",
-                  "pm.test('event_uuid is uuid', () => pm.expect(body.event_uuid).to.match(/^[0-9a-f-]{36}$/));",
-                  "pm.environment.set('last_topup_tran_key', body.tran_internal_key);",
-                  "pm.environment.set('last_topup_event_uuid', body.event_uuid);",
-                  "pm.test('transaction_status=ACSC', () => pm.expect(body.transaction_status).to.equal('ACSC'));",
+                  "pm.test('status POSTED|DUPLICATE', () => pm.expect(body.data.status).to.be.oneOf(['SUCCESS','DUPLICATE']));",
+                  "pm.test('event_uuid is uuid', () => pm.expect(body.data.event_uuid).to.match(/^[0-9a-f-]{36}$/));",
+                  "pm.environment.set('last_topup_tran_key', body.data.tran_internal_key);",
+                  "pm.environment.set('last_topup_event_uuid', body.data.event_uuid);",
+                  "pm.test('transaction_status=ACSC', () => pm.expect(body.data.transaction_status).to.equal('ACSC'));",
                   "pm.environment.set('last_topup_reference', pm.variables.get('reference'));"
                 ]
               }
@@ -686,11 +686,11 @@
                   "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
                   "const body = pm.response.json();",
                   "pm.test('fee + VAT correct', () => {",
-                  "  pm.expect(body.fee_gross).to.equal('5500.00');",
-                  "  pm.expect(body.vat_amount).to.equal('500.00');",
+                  "  pm.expect(body.data.fee_gross).to.equal('5500.00');",
+                  "  pm.expect(body.data.vat_amount).to.equal('500.00');",
                   "});",
-                  "pm.environment.set('last_transfer_tran_key', body.tran_internal_key);",
-                  "pm.test('transaction_status=ACSC', () => pm.expect(body.transaction_status).to.equal('ACSC'));",
+                  "pm.environment.set('last_transfer_tran_key', body.data.tran_internal_key);",
+                  "pm.test('transaction_status=ACSC', () => pm.expect(body.data.transaction_status).to.equal('ACSC'));",
                   "pm.environment.set('last_transfer_reference', pm.variables.get('reference'));"
                 ]
               }
@@ -745,11 +745,11 @@
                   "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
                   "const body = pm.response.json();",
                   "pm.test('no fee charged (TRFOUTF)', () => {",
-                  "  pm.expect(body.fee_gross).to.equal('0.00');",
-                  "  pm.expect(body.vat_amount).to.equal('0.00');",
+                  "  pm.expect(body.data.fee_gross).to.equal('0.00');",
+                  "  pm.expect(body.data.vat_amount).to.equal('0.00');",
                   "});",
-                  "pm.test('transaction_status=ACSC', () => pm.expect(body.transaction_status).to.equal('ACSC'));",
-                  "pm.environment.set('last_transfer_tran_key', body.tran_internal_key);"
+                  "pm.test('transaction_status=ACSC', () => pm.expect(body.data.transaction_status).to.equal('ACSC'));",
+                  "pm.environment.set('last_transfer_tran_key', body.data.tran_internal_key);"
                 ]
               }
             }
@@ -814,11 +814,11 @@
                   "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
                   "const body = pm.response.json();",
                   "pm.test('balance decreased by amount+fee', () => {",
-                  "  pm.expect(body.fee_gross).to.equal('11000.00');",
+                  "  pm.expect(body.data.fee_gross).to.equal('11000.00');",
                   "});",
-                  "pm.environment.set('last_withdraw_tran_key', body.tran_internal_key);",
+                  "pm.environment.set('last_withdraw_tran_key', body.data.tran_internal_key);",
                   "console.log('Captured ext_payout_ref =', pm.environment.get('last_ext_payout_ref'));",
-                  "pm.test('transaction_status=ACTC (disbursement pending)', () => pm.expect(body.transaction_status).to.equal('ACTC'));"
+                  "pm.test('transaction_status=ACTC (disbursement pending)', () => pm.expect(body.data.transaction_status).to.equal('ACTC'));"
                 ]
               }
             }
@@ -861,7 +861,7 @@
                 "merchant-withdraw"
               ]
             },
-            "description": "Merchant settlement withdraw (+ hot-shard sweep when auto_sweep). Requires a seeded merchant group — set {{group_id}} (e.g. run deploy/loadtest/setup.sql or db/tests/wallet_merchant_flow_test.sql). Tolerant of 404/400 when no group is seeded."
+            "description": "Merchant settlement withdraw (+ hot-shard sweep when auto_sweep). Requires a seeded merchant group — set {{group_id}} (e.g. run deploy/loadtest/setup.sql or db/tests/wallet_merchant_flow_test.sql). Tolerant of 404/400 when no group is seeded. Captures {{last_merchant_withdraw_reference}} for reversal."
           },
           "event": [
             {
@@ -872,8 +872,65 @@
                   "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,400,404,422]));",
                   "if ([200,201].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  pm.test('status known', () => pm.expect(body.status).to.be.oneOf(['SUCCESS','DUPLICATE','SETTLEMENT_SWEEP_REQUIRED']));",
-                  "  pm.test('transaction_status present (ACTC|PDNG)', () => pm.expect(body.transaction_status).to.be.oneOf(['ACTC','PDNG']));",
+                  "  pm.test('status known', () => pm.expect(body.data.status).to.be.oneOf(['SUCCESS','DUPLICATE','SETTLEMENT_SWEEP_REQUIRED']));",
+                  "  pm.test('transaction_status present (ACTC|PDNG)', () => pm.expect(body.data.transaction_status).to.be.oneOf(['ACTC','PDNG']));",
+                  "  pm.environment.set('last_merchant_withdraw_reference', pm.variables.get('reference'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/finance/merchant-deposit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "TREASURY"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/finance/merchant-deposit",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "merchant-deposit"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"group_id\": \"{{group_id}}\",\n  \"amount\": \"500000\",\n  \"reference\": \"{{reference}}\"\n}"
+            },
+            "description": "Route an inbound merchant deposit/payment into a group (US-1.11): settlement while cold, a reference-hashed shard once hot. Requires a seeded merchant group — set {{group_id}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,400,404,422]));",
+                  "if ([200,201].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  pm.test('target_acct_no present', () => pm.expect(body.data.target_acct_no).to.be.a('string'));",
+                  "  pm.test('new_balance present', () => pm.expect(body.data.new_balance).to.be.a('string'));",
                   "}"
                 ]
               }
@@ -956,11 +1013,11 @@
                   "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
                   "if (pm.response.code===200){",
                   "  const b=pm.response.json();",
-                  "  pm.test('items is array', ()=>pm.expect(b.items).to.be.an('array'));",
-                  "  pm.test('page_size is a number', ()=>pm.expect(b.page_size).to.be.a('number'));",
-                  "  pm.test('count matches items', ()=>pm.expect(b.count).to.equal(b.items.length));",
-                  "  pm.test('next_cursor only on a full page', ()=>{ if (b.count===b.page_size) { pm.expect(b.next_cursor).to.be.a('number'); } else { pm.expect(b.next_cursor==null).to.be.true; } });",
-                  "  if (b.items.length){ pm.environment.set('tran_key', b.items[0].transaction_id); }",
+                  "  pm.test('items is array', ()=>pm.expect(b.data.items).to.be.an('array'));",
+                  "  pm.test('page_size is a number', ()=>pm.expect(b.data.page_size).to.be.a('number'));",
+                  "  pm.test('count matches items', ()=>pm.expect(b.data.count).to.equal(b.data.items.length));",
+                  "  pm.test('next_cursor only on a full page', ()=>{ if (b.data.count===b.data.page_size) { pm.expect(b.data.next_cursor).to.be.a('number'); } else { pm.expect(b.data.next_cursor==null).to.be.true; } });",
+                  "  if (b.data.items.length){ pm.environment.set('tran_key', b.data.items[0].transaction_id); }",
                   "}"
                 ]
               }
@@ -1009,9 +1066,124 @@
                   "if (pm.response.code===200){",
                   "  const b=pm.response.json();",
                   "  pm.test('legs array + transaction_id', ()=>{",
-                  "    pm.expect(b.legs).to.be.an('array');",
-                  "    pm.expect(b.transaction_id).to.be.a('number');",
+                  "    pm.expect(b.data.legs).to.be.an('array');",
+                  "    pm.expect(b.data.transaction_id).to.be.a('number');",
                   "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/finance/fee-charge",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/finance/fee-charge",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "fee-charge"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"acct_no\": \"{{acct_no_a}}\",\n  \"amount\": \"10000\",\n  \"fee_code\": \"FEETRF\",\n  \"reference\": \"{{reference}}\",\n  \"narrative\": \"Service fee charge\"\n}"
+            },
+            "description": "Standalone fee + VAT charge (US-2.8). amount is the gross (VAT-inclusive) figure. Captures {{last_fee_charge_reference}} for the reversal request."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,404,422]));",
+                  "if ([200,201].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  pm.test('fee_gross + vat_amount present', () => {",
+                  "    pm.expect(body.data.fee_gross).to.be.a('string');",
+                  "    pm.expect(body.data.vat_amount).to.be.a('string');",
+                  "  });",
+                  "  pm.environment.set('last_fee_charge_reference', pm.variables.get('reference'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/finance/fee-charge/reverse",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/finance/fee-charge/reverse",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "fee-charge",
+                "reverse"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reference\": \"{{last_fee_charge_reference}}\",\n  \"reason\": \"Fee reversal - customer goodwill\",\n  \"initiator\": \"OPS_MANUAL\"\n}"
+            },
+            "description": "Reverse a standalone fee charge by its original reference (US-2.8). Run fee-charge first to populate {{last_fee_charge_reference}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
+                  "if ([200,201].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.data.reversal_tran_key).to.be.a('number'));",
                   "}"
                 ]
               }
@@ -1071,8 +1243,8 @@
                   "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
                   "if ([200,201].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.reversal_tran_key).to.be.a('number'));",
-                  "  pm.environment.set('last_reversal_tran_key', body.reversal_tran_key);",
+                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.data.reversal_tran_key).to.be.a('number'));",
+                  "  pm.environment.set('last_reversal_tran_key', body.data.reversal_tran_key);",
                   "}"
                 ]
               }
@@ -1128,7 +1300,64 @@
                   "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
                   "if ([200,201].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.reversal_tran_key).to.be.a('number'));",
+                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.data.reversal_tran_key).to.be.a('number'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/finance/merchant-withdraw/reverse",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reference\":   \"{{last_merchant_withdraw_reference}}\",\n  \"fail_code\":   \"NAPAS_TIMEOUT\",\n  \"fail_reason\": \"Disbursement timed out at NAPAS gateway\",\n  \"initiator\":   \"OPS_MANUAL\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/finance/merchant-withdraw/reverse",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "finance",
+                "merchant-withdraw",
+                "reverse"
+              ]
+            },
+            "description": "Reverse a merchant-settlement withdraw by its original reference. Credits principal + fee/VAT back to the settlement account and emits wallet.merchant_withdraw.reversed.v1. Run merchant-withdraw first to populate {{last_merchant_withdraw_reference}}. Requires wallet.finance.reverse RBAC role (US-9.10)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('2xx or expected 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
+                  "if ([200,201].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.data.reversal_tran_key).to.be.a('number'));",
+                  "  pm.test('settlement_balance_after present', () => pm.expect(body.data.settlement_balance_after).to.be.a('string'));",
                   "}"
                 ]
               }
@@ -1189,10 +1418,10 @@
                   "if (pm.response.code===201){",
                   "  const b=pm.response.json();",
                   "  pm.test('restraint_id + available_bal_after', ()=>{",
-                  "    pm.expect(b.restraint_id).to.be.a('number');",
-                  "    pm.expect(b.available_bal_after).to.be.a('string');",
+                  "    pm.expect(b.data.restraint_id).to.be.a('number');",
+                  "    pm.expect(b.data.available_bal_after).to.be.a('string');",
                   "  });",
-                  "  pm.environment.set('restraint_id', b.restraint_id);",
+                  "  pm.environment.set('restraint_id', b.data.restraint_id);",
                   "}"
                 ]
               }
@@ -1256,11 +1485,11 @@
                   "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
                   "if (pm.response.code===200){",
                   "  const b=pm.response.json();",
-                  "  pm.test('items is array', ()=>pm.expect(b.items).to.be.an('array'));",
-                  "  pm.test('page_size is a number', ()=>pm.expect(b.page_size).to.be.a('number'));",
-                  "  pm.test('count matches items', ()=>pm.expect(b.count).to.equal(b.items.length));",
-                  "  pm.test('next_cursor only on a full page', ()=>{ if (b.count===b.page_size) { pm.expect(b.next_cursor).to.be.a('number'); } else { pm.expect(b.next_cursor==null).to.be.true; } });",
-                  "  if (b.items.length){ pm.environment.set('restraint_id', b.items[0].restraint_id); }",
+                  "  pm.test('items is array', ()=>pm.expect(b.data.items).to.be.an('array'));",
+                  "  pm.test('page_size is a number', ()=>pm.expect(b.data.page_size).to.be.a('number'));",
+                  "  pm.test('count matches items', ()=>pm.expect(b.data.count).to.equal(b.data.items.length));",
+                  "  pm.test('next_cursor only on a full page', ()=>{ if (b.data.count===b.data.page_size) { pm.expect(b.data.next_cursor).to.be.a('number'); } else { pm.expect(b.data.next_cursor==null).to.be.true; } });",
+                  "  if (b.data.items.length){ pm.environment.set('restraint_id', b.data.items[0].restraint_id); }",
                   "}"
                 ]
               }
@@ -1308,8 +1537,8 @@
                   "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
                   "if (pm.response.code===200){",
                   "  const b=pm.response.json();",
-                  "  pm.test('restraint_id is a number', ()=>pm.expect(b.restraint_id).to.be.a('number'));",
-                  "  pm.test('status is a string', ()=>pm.expect(b.status).to.be.a('string'));",
+                  "  pm.test('restraint_id is a number', ()=>pm.expect(b.data.restraint_id).to.be.a('number'));",
+                  "  pm.test('status is a string', ()=>pm.expect(b.data.status).to.be.a('string'));",
                   "}"
                 ]
               }
@@ -1366,7 +1595,7 @@
                   "pm.test('200 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,404,409,422]));",
                   "if (pm.response.code===200){",
                   "  const b=pm.response.json();",
-                  "  pm.test('status R', ()=>pm.expect(b.status).to.equal('R'));",
+                  "  pm.test('status R', ()=>pm.expect(b.data.status).to.equal('R'));",
                   "}"
                 ]
               }
@@ -1419,7 +1648,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('422', () => pm.response.to.have.status(422));",
-                  "pm.test('code RESTRAINT_TYPE_PURPOSE_CONFLICT', ()=>pm.expect(pm.response.json().code).to.equal('RESTRAINT_TYPE_PURPOSE_CONFLICT'));"
+                  "pm.test('errorMessage mentions TYPE_PURPOSE_CONFLICT', ()=>pm.expect(pm.response.json().errorMessage).to.match(/TYPE_PURPOSE_CONFLICT/));"
                 ]
               }
             }
@@ -1477,8 +1706,8 @@
                   "pm.test('201 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([201,404,409,422]));",
                   "if (pm.response.code===201){",
                   "  const b=pm.response.json();",
-                  "  pm.test('acct_no + status A', ()=>{ pm.expect(b.acct_no).to.be.a('string'); pm.expect(b.acct_status).to.equal('A'); });",
-                  "  pm.environment.set('opened_acct_no', b.acct_no);",
+                  "  pm.test('acct_no + status A', ()=>{ pm.expect(b.data.acct_no).to.be.a('string'); pm.expect(b.data.acct_status).to.equal('A'); });",
+                  "  pm.environment.set('opened_acct_no', b.data.acct_no);",
                   "}"
                 ]
               }
@@ -1531,7 +1760,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200,404]));",
-                  "if (pm.response.code===200) pm.test('status B', ()=>pm.expect(pm.response.json().acct_status).to.equal('B'));"
+                  "if (pm.response.code===200) pm.test('status B', ()=>pm.expect(pm.response.json().data.acct_status).to.equal('B'));"
                 ]
               }
             }
@@ -1583,7 +1812,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 or 4xx', () => pm.expect(pm.response.code).to.be.oneOf([200,404,422]));",
-                  "if (pm.response.code===200) pm.test('status C', ()=>pm.expect(pm.response.json().acct_status).to.equal('C'));"
+                  "if (pm.response.code===200) pm.test('status C', ()=>pm.expect(pm.response.json().data.acct_status).to.equal('C'));"
                 ]
               }
             }
@@ -1630,8 +1859,8 @@
                   "if (pm.response.code===200){",
                   "  const b=pm.response.json();",
                   "  pm.test('acct_no + available_bal present', ()=>{",
-                  "    pm.expect(b.acct_no).to.be.a('string');",
-                  "    pm.expect(b.available_bal).to.be.a('string');",
+                  "    pm.expect(b.data.acct_no).to.be.a('string');",
+                  "    pm.expect(b.data.available_bal).to.be.a('string');",
                   "  });",
                   "}"
                 ]
@@ -1884,8 +2113,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('status=ACKED', () => pm.expect(pm.response.json().status).to.equal('ACKED'));",
-                  "pm.test('transaction_status=ACTC', () => pm.expect(pm.response.json().transaction_status).to.equal('ACTC'));"
+                  "pm.test('status=ACKED', () => pm.expect(pm.response.json().data.status).to.equal('ACKED'));",
+                  "pm.test('transaction_status=ACTC', () => pm.expect(pm.response.json().data.transaction_status).to.equal('ACTC'));"
                 ]
               }
             }
@@ -1934,8 +2163,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('status=DISBURSING', () => pm.expect(pm.response.json().status).to.equal('DISBURSING'));",
-                  "pm.test('transaction_status=ACSP', () => pm.expect(pm.response.json().transaction_status).to.equal('ACSP'));"
+                  "pm.test('status=DISBURSING', () => pm.expect(pm.response.json().data.status).to.equal('DISBURSING'));",
+                  "pm.test('transaction_status=ACSP', () => pm.expect(pm.response.json().data.transaction_status).to.equal('ACSP'));"
                 ]
               }
             }
@@ -1989,8 +2218,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('status=COMPLETED', () => pm.expect(pm.response.json().status).to.equal('COMPLETED'));",
-                  "pm.test('transaction_status=ACSC', () => pm.expect(pm.response.json().transaction_status).to.equal('ACSC'));"
+                  "pm.test('status=COMPLETED', () => pm.expect(pm.response.json().data.status).to.equal('COMPLETED'));",
+                  "pm.test('transaction_status=ACSC', () => pm.expect(pm.response.json().data.transaction_status).to.equal('ACSC'));"
                 ]
               }
             }
@@ -2046,12 +2275,12 @@
                   "pm.test('200 or 409', () => pm.expect(pm.response.code).to.be.oneOf([200, 409]));",
                   "if (pm.response.code === 200) {",
                   "  const body = pm.response.json();",
-                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.reversal_tran_key).to.be.a('number'));",
-                  "  pm.environment.set('last_reversal_tran_key', body.reversal_tran_key);",
+                  "  pm.test('reversal_tran_key returned', () => pm.expect(body.data.reversal_tran_key).to.be.a('number'));",
+                  "  pm.environment.set('last_reversal_tran_key', body.data.reversal_tran_key);",
                   "} else {",
                   "  const body = pm.response.json();",
-                  "  pm.test('code=WD_ALREADY_COMPLETED (expected if completed ran first)',",
-                  "    () => pm.expect(body.code).to.equal('WD_ALREADY_COMPLETED'));",
+                  "  pm.test('errorMessage mentions WD_ALREADY_COMPLETED (expected if completed ran first)',",
+                  "    () => pm.expect(body.errorMessage).to.match(/WD_ALREADY_COMPLETED/));",
                   "}"
                 ]
               }
@@ -2105,7 +2334,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('400', () => pm.response.to.have.status(400));",
-                  "pm.test('code=INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.equal('INVALID_REQUEST'));",
+                  "pm.test('errorCode present', () => pm.expect(pm.response.json().errorCode).to.be.a('string'));",
                   "pm.test('Content-Type is application/problem+json',",
                   "  () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));"
                 ]
@@ -2154,7 +2383,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('404', () => pm.response.to.have.status(404));",
-                  "pm.test('code ends with _NOT_FOUND', () => pm.expect(pm.response.json().code).to.match(/_NOT_FOUND$/));",
+                  "pm.test('errorMessage mentions NOT_FOUND', () => pm.expect(pm.response.json().errorMessage).to.match(/NOT_FOUND/));",
                   "pm.test('Content-Type is application/problem+json',",
                   "  () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));"
                 ]
@@ -2206,13 +2435,9 @@
                   "pm.test('Content-Type is application/problem+json',",
                   "  () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
                   "const body = pm.response.json();",
-                  "pm.test('code is INSUFFICIENT_FUNDS or AMOUNT_OUT_OF_RANGE',",
-                  "  () => pm.expect(body.code).to.be.oneOf(['INSUFFICIENT_FUNDS','AMOUNT_OUT_OF_RANGE']));",
-                  "pm.test('RFC7807 fields present (title, status, code)', () => {",
-                  "  pm.expect(body.title).to.be.a('string');",
-                  "  pm.expect(body.status).to.equal(pm.response.code);",
-                  "});",
-                  "if (body.code === 'INSUFFICIENT_FUNDS')",
+                  "pm.test('errorCode is a SQLSTATE or synthetic code', () => pm.expect(body.errorCode).to.be.a('string'));",
+                  "pm.test('errorMessage present', () => pm.expect(body.errorMessage).to.be.a('string'));",
+                  "if (body.iso20022_reason_code)",
                   "  pm.test('iso20022_reason_code=AM04', () => pm.expect(body.iso20022_reason_code).to.equal('AM04'));"
                 ]
               }
@@ -2273,8 +2498,8 @@
                   "pm.test('2xx', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
                   "const body = pm.response.json();",
                   "pm.test('POSTED on first run, DUPLICATE on retry',",
-                  "  () => pm.expect(body.status).to.be.oneOf(['SUCCESS','DUPLICATE']));",
-                  "if (body.status === 'DUPLICATE') {",
+                  "  () => pm.expect(body.data.status).to.be.oneOf(['SUCCESS','DUPLICATE']));",
+                  "if (body.data.status === 'DUPLICATE') {",
                   "  console.log('Idempotency verified — same tran_key + event_uuid returned');",
                   "}"
                 ]
@@ -2341,7 +2566,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('201 or 4xx', ()=>pm.expect(pm.response.code).to.be.oneOf([201,409,422]));",
-                  "if(pm.response.code===201){ const b=pm.response.json(); pm.environment.set('client_no',b.client_no); pm.environment.set('acct_no_a',b.acct_no); pm.test('client+acct',()=>{ pm.expect(b.client_no).to.be.a('string'); pm.expect(b.acct_no).to.be.a('string'); }); }"
+                  "if(pm.response.code===201){ const b=pm.response.json(); pm.environment.set('client_no',b.data.client_no); pm.environment.set('acct_no_a',b.data.acct_no); pm.test('client+acct',()=>{ pm.expect(b.data.client_no).to.be.a('string'); pm.expect(b.data.acct_no).to.be.a('string'); }); }"
                 ]
               }
             }
@@ -2401,7 +2626,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('201 or 4xx', ()=>pm.expect(pm.response.code).to.be.oneOf([201,409,422]));",
-                  "if(pm.response.code===201){ const b=pm.response.json(); pm.environment.set('merchant_client_no',b.client_no); pm.environment.set('acct_no_merchant',b.acct_no); }"
+                  "if(pm.response.code===201){ const b=pm.response.json(); pm.environment.set('merchant_client_no',b.data.client_no); pm.environment.set('acct_no_merchant',b.data.acct_no); }"
                 ]
               }
             }
@@ -2412,6 +2637,57 @@
     {
       "name": "Merchant Groups",
       "item": [
+        {
+          "name": "POST provision group (cold)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/merchant-groups",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "merchant-groups"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"group_id\": \"MG-TEST-001\",\n  \"client_no\": \"{{client_no}}\",\n  \"group_type\": \"MERCHANT\",\n  \"acct_type\": \"MERCHANT\"\n}"
+            },
+            "description": "Provision a NEW cold merchant group (US-1.10): group row + settlement account in one TX. Defaults: MERCHANT group, MERCHANT-type VND settlement wallet. Captures {{group_id}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ok or handled', ()=>pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
+                  "if(pm.response.code===201){ const b=pm.response.json(); pm.test('group_id + settlement_acct_no',()=>{ pm.expect(b.data.group_id).to.be.a('string'); pm.expect(b.data.settlement_acct_no).to.be.a('string'); }); pm.environment.set('group_id', b.data.group_id); }"
+                ]
+              }
+            }
+          ]
+        },
         {
           "name": "POST activate hot wallet",
           "request": {
@@ -2459,7 +2735,60 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('ok or handled', ()=>pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
-                  "if([200,201].includes(pm.response.code)){ const b=pm.response.json(); pm.test('shards created',()=>pm.expect(b.shard_acct_nos).to.be.an('array')); }"
+                  "if([200,201].includes(pm.response.code)){ const b=pm.response.json(); pm.test('shards created',()=>pm.expect(b.data.shard_acct_nos).to.be.an('array')); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST rescale hot wallet (4->8)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/merchant-groups/{{group_id}}/rescale",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "merchant-groups",
+                "{{group_id}}",
+                "rescale"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"new_shard_count\": 8\n}"
+            },
+            "description": "Grow an already-hot group up a tier (4→8→16) and rebalance existing shards back to settlement (US-1.12). new_shard_count must be a larger hot tier than the group's current count."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ok or handled', ()=>pm.expect(pm.response.code).to.be.oneOf([200,201,404,409,422]));",
+                  "if([200].includes(pm.response.code)){ const b=pm.response.json(); pm.test('new_shard_count returned',()=>pm.expect(b.data.new_shard_count).to.be.a('number')); pm.test('added_acct_nos is array',()=>pm.expect(b.data.added_acct_nos).to.be.an('array')); }"
                 ]
               }
             }

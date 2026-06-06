@@ -32,8 +32,8 @@ func New(svc *usecase.WalletService) *Wallet { return &Wallet{svc: svc} }
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.TopupRequest	true	"Top-up request"
-//	@Success		201		{object}	dto.TopupResponse	"Posted"
-//	@Success		200		{object}	dto.TopupResponse	"Duplicate idempotent replay"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.TopupResponse}	"Posted"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.TopupResponse}	"Duplicate idempotent replay"
 //	@Failure		400		{object}	dto.ProblemDetails	"Validation error"
 //	@Failure		422		{object}	dto.ProblemDetails	"Business rule violation"
 //	@Failure		500		{object}	dto.ProblemDetails	"Internal error"
@@ -56,7 +56,7 @@ func (h *Wallet) Topup(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusForTopup(res), dto.TopupRespFrom(res))
+	writeOK(c, statusForTopup(res), dto.TopupRespFrom(res))
 }
 
 // Transfer godoc
@@ -67,8 +67,8 @@ func (h *Wallet) Topup(c *gin.Context) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.TransferRequest		true	"Transfer request"
-//	@Success		201		{object}	dto.TransferResponse	"Posted"
-//	@Success		200		{object}	dto.TransferResponse	"Duplicate idempotent replay"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.TransferResponse}	"Posted"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.TransferResponse}	"Duplicate idempotent replay"
 //	@Failure		400		{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		409		{object}	dto.ProblemDetails		"Concurrency conflict (retryable)"
 //	@Failure		422		{object}	dto.ProblemDetails		"Business rule violation (e.g. insufficient funds)"
@@ -94,7 +94,7 @@ func (h *Wallet) Transfer(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.TransferRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.TransferRespFrom(res))
 }
 
 // Withdraw godoc
@@ -105,8 +105,8 @@ func (h *Wallet) Transfer(c *gin.Context) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.WithdrawRequest		true	"Withdraw request"
-//	@Success		201		{object}	dto.WithdrawResponse	"Posted"
-//	@Success		200		{object}	dto.WithdrawResponse	"Duplicate idempotent replay"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.WithdrawResponse}	"Posted"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.WithdrawResponse}	"Duplicate idempotent replay"
 //	@Failure		400		{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		409		{object}	dto.ProblemDetails		"Concurrency conflict (retryable)"
 //	@Failure		422		{object}	dto.ProblemDetails		"Business rule violation (e.g. insufficient funds)"
@@ -133,7 +133,7 @@ func (h *Wallet) Withdraw(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.WithdrawRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.WithdrawRespFrom(res))
 }
 
 // MerchantWithdraw godoc
@@ -144,8 +144,8 @@ func (h *Wallet) Withdraw(c *gin.Context) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.MerchantWithdrawRequest		true	"Merchant withdraw request"
-//	@Success		201		{object}	dto.MerchantWithdrawResponse	"Posted"
-//	@Success		200		{object}	dto.MerchantWithdrawResponse	"Duplicate idempotent replay"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.MerchantWithdrawResponse}	"Posted"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.MerchantWithdrawResponse}	"Duplicate idempotent replay"
 //	@Failure		400		{object}	dto.ProblemDetails				"Validation error"
 //	@Failure		409		{object}	dto.ProblemDetails				"Concurrency conflict (retryable)"
 //	@Failure		422		{object}	dto.ProblemDetails				"Business rule violation"
@@ -173,7 +173,7 @@ func (h *Wallet) MerchantWithdraw(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.MerchantWithdrawRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.MerchantWithdrawRespFrom(res))
 }
 
 // MarkAcked godoc
@@ -185,7 +185,7 @@ func (h *Wallet) MerchantWithdraw(c *gin.Context) {
 //	@Produce		json
 //	@Param			ext_payout_ref	path		string				true	"External payout reference"
 //	@Param			request			body		dto.AckRequest		true	"Ack payload"
-//	@Success		200				{object}	dto.MarkResponse	"OK"
+//	@Success		200				{object}	dto.SuccessEnvelope{data=dto.MarkResponse}	"OK"
 //	@Failure		400				{object}	dto.ProblemDetails	"Validation error"
 //	@Failure		404				{object}	dto.ProblemDetails	"Unknown payout reference"
 //	@Failure		422				{object}	dto.ProblemDetails	"Illegal state transition"
@@ -207,7 +207,7 @@ func (h *Wallet) MarkAcked(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MarkRespFrom(res))
+	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
 // MarkDisbursing godoc
@@ -217,7 +217,7 @@ func (h *Wallet) MarkAcked(c *gin.Context) {
 //	@Tags			treasury
 //	@Produce		json
 //	@Param			ext_payout_ref	path		string				true	"External payout reference"
-//	@Success		200				{object}	dto.MarkResponse	"OK"
+//	@Success		200				{object}	dto.SuccessEnvelope{data=dto.MarkResponse}	"OK"
 //	@Failure		404				{object}	dto.ProblemDetails	"Unknown payout reference"
 //	@Failure		422				{object}	dto.ProblemDetails	"Illegal state transition"
 //	@Failure		500				{object}	dto.ProblemDetails	"Internal error"
@@ -231,7 +231,7 @@ func (h *Wallet) MarkDisbursing(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MarkRespFrom(res))
+	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
 // MarkCompleted godoc
@@ -243,7 +243,7 @@ func (h *Wallet) MarkDisbursing(c *gin.Context) {
 //	@Produce		json
 //	@Param			ext_payout_ref	path		string					true	"External payout reference"
 //	@Param			request			body		dto.CompletedRequest	true	"Completion payload"
-//	@Success		200				{object}	dto.MarkResponse		"OK"
+//	@Success		200				{object}	dto.SuccessEnvelope{data=dto.MarkResponse}		"OK"
 //	@Failure		400				{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		404				{object}	dto.ProblemDetails		"Unknown payout reference"
 //	@Failure		422				{object}	dto.ProblemDetails		"Illegal state transition"
@@ -265,7 +265,7 @@ func (h *Wallet) MarkCompleted(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MarkRespFrom(res))
+	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
 // Reverse godoc
@@ -277,7 +277,7 @@ func (h *Wallet) MarkCompleted(c *gin.Context) {
 //	@Produce		json
 //	@Param			ext_payout_ref	path		string					true	"External payout reference"
 //	@Param			request			body		dto.ReversalRequest		true	"Reversal payload"
-//	@Success		200				{object}	dto.ReversalResponse	"OK"
+//	@Success		200				{object}	dto.SuccessEnvelope{data=dto.ReversalResponse}	"OK"
 //	@Failure		400				{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		404				{object}	dto.ProblemDetails		"Unknown payout reference"
 //	@Failure		422				{object}	dto.ProblemDetails		"Illegal state transition"
@@ -301,7 +301,7 @@ func (h *Wallet) Reverse(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ReversalRespFrom(res))
+	writeOK(c, http.StatusOK, dto.ReversalRespFrom(res))
 }
 
 // Healthz godoc
@@ -333,15 +333,27 @@ func renderValidationError(c *gin.Context, err error) {
 
 // renderError maps any error to the canonical problem+json envelope. Non-domain
 // errors collapse to INTERNAL_ERROR so internals (stack/SQL) never leak (§3.3).
+//
+// Uses NewProblemFromError to preserve the original SQLSTATE + full RAISE text
+// for PG-originated errors (errorCode = pgErr.Code, errorMessage = pgErr.Message).
+// The whitelist gate inside NewProblemFromError replaces unknown canonical
+// codes with the generic "999999 / Internal Error" envelope.
 func renderError(c *gin.Context, err error) {
 	var de *domain.Error
 	if !errors.As(err, &de) {
 		de = domain.Internal(err)
 	}
-	p := dto.NewProblem(de.Code, de.HTTPStatus, de.Detail, c.Request.URL.Path,
+	p := dto.NewProblemFromError(de, c.Request.URL.Path,
 		c.GetString(middleware.CtxKeyRequestID))
-	p.Retry = &dto.RetryInfo{Retryable: de.IsRetriable()}
 	abortProblem(c, p)
+}
+
+// writeOK wraps the business response in the standard success envelope and
+// emits it as application/json. All 2xx handlers (except /healthz) go through
+// this helper so every response shares the {errorCode, errorMessage, data}
+// shape regardless of outcome.
+func writeOK(c *gin.Context, status int, data any) {
+	c.JSON(status, dto.Ok(data, c.GetString(middleware.CtxKeyRequestID)))
 }
 
 // abortProblem writes p as application/problem+json and stops the chain.

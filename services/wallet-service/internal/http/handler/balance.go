@@ -17,7 +17,7 @@ import (
 //	@Produce		json
 //	@Param			acct_no		path		string				true	"Account number"
 //	@Param			as_of_date	query		string				false	"Historical EOD snapshot date (YYYY-MM-DD)"
-//	@Success		200			{object}	dto.BalanceResponse	"Realtime balance (or BalanceAsOfResponse when as_of_date is set)"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.BalanceResponse}	"Realtime balance (or BalanceAsOfResponse when as_of_date is set)"
 //	@Failure		400			{object}	dto.ProblemDetails	"Validation error"
 //	@Failure		404			{object}	dto.ProblemDetails	"Account not found"
 //	@Failure		500			{object}	dto.ProblemDetails	"Internal error"
@@ -36,7 +36,7 @@ func (h *Wallet) GetBalance(c *gin.Context) {
 			renderError(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, dto.BalanceAsOfRespFrom(res))
+		writeOK(c, http.StatusOK, dto.BalanceAsOfRespFrom(res))
 		return
 	}
 
@@ -45,7 +45,7 @@ func (h *Wallet) GetBalance(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.BalanceRespFrom(res))
+	writeOK(c, http.StatusOK, dto.BalanceRespFrom(res))
 }
 
 // GetBalanceOps godoc
@@ -55,7 +55,7 @@ func (h *Wallet) GetBalance(c *gin.Context) {
 //	@Tags			ops
 //	@Produce		json
 //	@Param			acct_no	path		string					true	"Account number"
-//	@Success		200		{object}	dto.BalanceOpsResponse	"OK"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.BalanceOpsResponse}	"OK"
 //	@Failure		404		{object}	dto.ProblemDetails		"Account not found"
 //	@Failure		500		{object}	dto.ProblemDetails		"Internal error"
 //	@Router			/v1/ops/accounts/{acct_no}/balance [get]
@@ -65,7 +65,7 @@ func (h *Wallet) GetBalanceOps(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.BalanceOpsRespFrom(res))
+	writeOK(c, http.StatusOK, dto.BalanceOpsRespFrom(res))
 }
 
 // GetBalanceBatch godoc
@@ -76,7 +76,7 @@ func (h *Wallet) GetBalanceOps(c *gin.Context) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.BalanceBatchRequest		true	"Batch balance request (max 100 accounts)"
-//	@Success		200		{object}	dto.BalanceBatchResponse	"OK"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.BalanceBatchResponse}	"OK"
 //	@Failure		400		{object}	dto.ProblemDetails			"Validation error"
 //	@Failure		500		{object}	dto.ProblemDetails			"Internal error"
 //	@Router			/v1/ops/accounts/balance/batch [post]
@@ -91,5 +91,5 @@ func (h *Wallet) GetBalanceBatch(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.BalanceBatchRespFrom(req.AcctNos, found, time.Now()))
+	writeOK(c, http.StatusOK, dto.BalanceBatchRespFrom(req.AcctNos, found, time.Now()))
 }

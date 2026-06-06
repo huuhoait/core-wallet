@@ -11,7 +11,7 @@
     ],
     "swagger": "2.0",
     "info": {
-        "description": "Double-entry e-wallet ledger. The Go service is a thin RPC client over PostgreSQL stored functions; all balance validation, double-entry posting, fee/VAT and reversal logic run atomically in plpgsql. Scope is internal synchronous posting (top-up, transfer, withdraw, merchant settlement, fee/VAT, reversal). External rails (NAPAS, card 3DS, MT940) are out of scope.\n\n## Error model\nEvery error is returned as `application/problem+json` (RFC 7807 / RFC 9457). The body carries a stable `errorCode` (business contract), `errorMessage` (user-safe), `internal_code` (E#### for ops/logs), `iso20022_reason_code` (pain.002 reason), `transaction_status` (pain.002 status), `trace_id` and a `retry` hint. `detail` adds dynamic context; field-level validation failures appear under `errors`.\n\n### Business error code catalogue\n| errorCode | internal_code | HTTP | ISO 20022 | Description |\n| --- | --- | --- | --- | --- |\n| INVALID_AMOUNT | E4024 | 400 | AM12 | The transaction amount is invalid or missing |\n| AMOUNT_OUT_OF_RANGE | E4024 | 400 | AM02 | The amount is outside the allowed range for this transaction type |\n| METADATA_TOO_LARGE | E4007 | 400 | - | The metadata payload exceeds the maximum allowed size (1 KB) |\n| METADATA_HAS_P1 | E4008 | 400 | - | The metadata contains forbidden PII keys (phone, email, cccd, passport, full_name, bank_acct_no) |\n| SAME_ACCOUNT | E4002 | 400 | BE01 | Source and destination accounts must be different |\n| TRAN_TYPE_INACTIVE | E4003 | 400 | AG02 | The requested transaction type is inactive or does not exist |\n| INVALID_REQUEST | E4001 | 400 | - | The request body is malformed or missing required fields |\n| INVALID_PHONE_FORMAT | E2001 | 400 | - | Phone number must match Vietnam format 0XXXXXXXXX (10 digits) |\n| INSUFFICIENT_FUNDS | E4022 | 422 | AM04 | The account balance is not sufficient to cover this transaction |\n| TIER_LIMIT_EXCEEDED | E4023 | 422 | AM02 | The transaction exceeds the daily or monthly limit for this account tier |\n| ACCT_ROLE_INVALID | E3008 | 422 | - | Operation only allowed on standalone wallets, not SHARD/SETTLEMENT accounts |\n| INVALID_CLIENT_TYPE | E2010 | 422 | - | Client type must be one of IND, CORP, MER |\n| INVALID_ACCT_TYPE | E3007 | 422 | - | The specified account type does not exist |\n| ACCT_CLOSE_NONZERO_BAL | E3003 | 422 | - | Account closure requires a zero balance |\n| ORG_FIELDS_REQUIRED | E2013 | 422 | - | Corporate/merchant clients must provide business_reg_no and legal_rep in extra_data |\n| INVALID_SHARD_COUNT | E3030 | 422 | - | Shard count must be 4, 8, or 16 |\n| INVALID_GROUP_TYPE | E3032 | 422 | - | Group type must be one of MERCHANT, AGENT, NOSTRO_HOT |\n| INVALID_DATE | E8003 | 422 | DT01 | The as_of_date parameter is invalid or refers to a future date |\n| BATCH_SIZE_EXCEEDED | E8004 | 422 | - | The batch request exceeds the maximum number of items (100) |\n| RESTRAINT_TYPE_INVALID | E3022 | 422 | - | Restraint type must be one of DEBIT, CREDIT, ALL, INFO |\n| RESTRAINT_PURPOSE_INVALID | E3023 | 422 | - | Restraint purpose is not a recognized value |\n| RESTRAINT_TYPE_PURPOSE_CONFLICT | E3024 | 422 | - | The restraint type/purpose combination is not allowed |\n| RESTRAINT_AMT_EXCEEDS_BALANCE | E3025 | 422 | AM04 | The pledged amount cannot exceed the current account balance |\n| RESTRAINT_DATE_INVALID | E3026 | 422 | DT01 | The end_date must be on or after the start_date |\n| COURT_ORDER_REMOVE_REQUIRES_DOC | E3027 | 422 | RR04 | Removing a COURT_ORDER/TAX_LIEN restraint requires a reference_doc |\n| TIER_INSUFFICIENT | E2007 | 403 | RR04 | Your KYC tier does not permit this operation |\n| FORBIDDEN | E1006 | 403 | AG01 | You do not have permission to perform this operation |\n| UNAUTHORIZED | E1001 | 401 | - | Authentication is required or the provided credentials are invalid |\n| DR_RESTRAINT_ACTIVE | E3005 | 423 | AC06 | The account has an active debit restraint (hold/lien) |\n| CR_RESTRAINT_ACTIVE | E3006 | 423 | AC06 | The account has an active credit restraint |\n| ACCT_NOT_FOUND | E3001 | 404 | AC01 | The specified account does not exist |\n| CLIENT_NOT_FOUND | E2011 | 404 | - | No client record found for the specified client number |\n| KYC_NOT_FOUND | E2012 | 404 | - | No KYC record exists for this client |\n| BANK_LINK_NOT_FOUND | E2014 | 404 | - | No linked bank account found with the specified ID |\n| RESTRAINT_NOT_FOUND | E3020 | 404 | - | No restraint exists with the specified ID |\n| WD_NOT_FOUND | E6101 | 404 | - | No withdrawal record found for the given payout reference |\n| ACCT_NOT_ACTIVE | E3004 | 403 | AC04 | The account is blocked or closed and cannot process transactions |\n| VERSION_CONFLICT | E4025 | 409 | - | Another transaction updated this account simultaneously; retryable |\n| DUPLICATE_REFERENCE | E4011 | 409 | AM05 | A transaction with this reference has already been processed |\n| CLIENT_ALREADY_EXISTS | E2009 | 409 | AM05 | A client with this identity document already exists |\n| PHONE_ALREADY_REGISTERED | E2002 | 409 | AM05 | This phone number is already associated with an existing account |\n| MAX_WALLET_PER_CLIENT_EXCEEDED | E3002 | 409 | - | Maximum number of wallets reached (CONSUMER 3 per currency, MERCHANT 10) |\n| GROUP_ALREADY_ACTIVATED | E3031 | 409 | - | This merchant group has already been activated with shards |\n| GROUP_ALREADY_EXISTS | E3033 | 409 | AM05 | A group with this ID already exists |\n| GROUP_NOT_ACTIVATED | E3034 | 409 | - | This group is still cold (0 shards); activate it before rescaling |\n| RESTRAINT_ALREADY_REMOVED | E3021 | 409 | - | This restraint has already been released or expired |\n| WD_ALREADY_COMPLETED | E6102 | 409 | - | This withdrawal has already reached COMPLETED status |\n| WD_INVALID_STATE | E6103 | 409 | - | The withdrawal is in a state that does not permit this transition |\n| WD_ALREADY_REVERSED | E6104 | 409 | - | This withdrawal has already been reversed |\n| PERIOD_CLOSED | E8005 | 409 | DT01 | The target accounting date is sealed; post against the current open period |\n| GONE_ONLINE | E8001 | 410 | - | Historical data beyond the online retention period; request an archive extract |\n| TIMEOUT | E9004 | 504 | - | The request exceeded the allowed processing time; you may retry (503 on lock timeout) |\n| PII_DEK_NOT_SET | E5005 | 500 | - | The server PII data-encryption key (DEK) is not set |\n| BATCH_UNBALANCED | E5003 | 500 | - | Internal double-entry invariant violated (sum of debits != sum of credits) |\n| INTERNAL_ERROR | E9001 | 500 | - | An unexpected error occurred; please retry or contact support |\n\nFamily fallbacks: any `*_NOT_FOUND` -\u003e 404, `*_NOT_ACTIVE` -\u003e 403, `*_CONFLICT` -\u003e 409 (e.g. GROUP_NOT_FOUND, SETTLEMENT_NOT_FOUND, GROUP_NOT_ACTIVE).",
+        "description": "Double-entry e-wallet ledger. The Go service is a thin RPC client over PostgreSQL stored functions; all balance validation, double-entry posting, fee/VAT and reversal logic run atomically in plpgsql. Scope is internal synchronous posting (top-up, transfer, withdraw, merchant settlement, fee/VAT, reversal). External rails (NAPAS, card 3DS, MT940) are out of scope.\n\n## Response envelope\nAll responses use a uniform envelope. Success (2xx): `{ \"errorCode\": \"00000\", \"errorMessage\": \"Success!\", \"data\": \u003cpayload\u003e, \"trace_id\": \"...\", \"timestamp\": \"...\" }` — the operation payload shown in each endpoint's 200/201 schema lives under `data`. Errors use `application/problem+json`: `errorCode` is a SQLSTATE-style code (real PostgreSQL SQLSTATE for SP-raised errors, an `E####` synthetic for Go-side errors, or `999999` when the code is not client-safe), and `errorMessage` is the full `BUSINESS_CODE: detail` string whose leading token is the business code listed below. Errors also carry `iso20022_reason_code`, `transaction_status` (pain.002), `detail`, `trace_id`, `timestamp`, and field-level `errors`.\n\n### Business error code catalogue\n`business code` = leading token of `errorMessage`; `errorCode` = the value returned in the body's `errorCode` field.\n| business code | errorCode | HTTP | ISO 20022 | Description |\n| --- | --- | --- | --- | --- |\n| INVALID_AMOUNT | E4024 | 400 | AM12 | The transaction amount is invalid or missing |\n| AMOUNT_OUT_OF_RANGE | E4024 | 400 | AM02 | The amount is outside the allowed range for this transaction type |\n| METADATA_TOO_LARGE | E4007 | 400 | - | The metadata payload exceeds the maximum allowed size (1 KB) |\n| METADATA_HAS_P1 | E4008 | 400 | - | The metadata contains forbidden PII keys (phone, email, cccd, passport, full_name, bank_acct_no) |\n| SAME_ACCOUNT | E4002 | 400 | BE01 | Source and destination accounts must be different |\n| TRAN_TYPE_INACTIVE | E4003 | 400 | AG02 | The requested transaction type is inactive or does not exist |\n| INVALID_REQUEST | E4001 | 400 | - | The request body is malformed or missing required fields |\n| INVALID_PHONE_FORMAT | E2001 | 400 | - | Phone number must match Vietnam format 0XXXXXXXXX (10 digits) |\n| INSUFFICIENT_FUNDS | E4022 | 422 | AM04 | The account balance is not sufficient to cover this transaction |\n| TIER_LIMIT_EXCEEDED | E4023 | 422 | AM02 | The transaction exceeds the daily or monthly limit for this account tier |\n| ACCT_ROLE_INVALID | E3008 | 422 | - | Operation only allowed on standalone wallets, not SHARD/SETTLEMENT accounts |\n| INVALID_CLIENT_TYPE | E2010 | 422 | - | Client type must be one of IND, CORP, MER |\n| INVALID_ACCT_TYPE | E3007 | 422 | - | The specified account type does not exist |\n| ACCT_CLOSE_NONZERO_BAL | E3003 | 422 | - | Account closure requires a zero balance |\n| ORG_FIELDS_REQUIRED | E2013 | 422 | - | Corporate/merchant clients must provide business_reg_no and legal_rep in extra_data |\n| INVALID_SHARD_COUNT | E3030 | 422 | - | Shard count must be 4, 8, or 16 |\n| INVALID_GROUP_TYPE | E3032 | 422 | - | Group type must be one of MERCHANT, AGENT, NOSTRO_HOT |\n| INVALID_DATE | E8003 | 422 | DT01 | The as_of_date parameter is invalid or refers to a future date |\n| BATCH_SIZE_EXCEEDED | E8004 | 422 | - | The batch request exceeds the maximum number of items (100) |\n| RESTRAINT_TYPE_INVALID | E3022 | 422 | - | Restraint type must be one of DEBIT, CREDIT, ALL, INFO |\n| RESTRAINT_PURPOSE_INVALID | E3023 | 422 | - | Restraint purpose is not a recognized value |\n| RESTRAINT_TYPE_PURPOSE_CONFLICT | E3024 | 422 | - | The restraint type/purpose combination is not allowed |\n| RESTRAINT_AMT_EXCEEDS_BALANCE | E3025 | 422 | AM04 | The pledged amount cannot exceed the current account balance |\n| RESTRAINT_DATE_INVALID | E3026 | 422 | DT01 | The end_date must be on or after the start_date |\n| COURT_ORDER_REMOVE_REQUIRES_DOC | E3027 | 422 | RR04 | Removing a COURT_ORDER/TAX_LIEN restraint requires a reference_doc |\n| TIER_INSUFFICIENT | E2007 | 403 | RR04 | Your KYC tier does not permit this operation |\n| FORBIDDEN | E1006 | 403 | AG01 | You do not have permission to perform this operation |\n| UNAUTHORIZED | E1001 | 401 | - | Authentication is required or the provided credentials are invalid |\n| DR_RESTRAINT_ACTIVE | E3005 | 423 | AC06 | The account has an active debit restraint (hold/lien) |\n| CR_RESTRAINT_ACTIVE | E3006 | 423 | AC06 | The account has an active credit restraint |\n| ACCT_NOT_FOUND | E3001 | 404 | AC01 | The specified account does not exist |\n| CLIENT_NOT_FOUND | E2011 | 404 | - | No client record found for the specified client number |\n| KYC_NOT_FOUND | E2012 | 404 | - | No KYC record exists for this client |\n| BANK_LINK_NOT_FOUND | E2014 | 404 | - | No linked bank account found with the specified ID |\n| RESTRAINT_NOT_FOUND | E3020 | 404 | - | No restraint exists with the specified ID |\n| WD_NOT_FOUND | E6101 | 404 | - | No withdrawal record found for the given payout reference |\n| ACCT_NOT_ACTIVE | E3004 | 403 | AC04 | The account is blocked or closed and cannot process transactions |\n| VERSION_CONFLICT | E4025 | 409 | - | Another transaction updated this account simultaneously; retryable |\n| DUPLICATE_REFERENCE | E4011 | 409 | AM05 | A transaction with this reference has already been processed |\n| CLIENT_ALREADY_EXISTS | E2009 | 409 | AM05 | A client with this identity document already exists |\n| PHONE_ALREADY_REGISTERED | E2002 | 409 | AM05 | This phone number is already associated with an existing account |\n| MAX_WALLET_PER_CLIENT_EXCEEDED | E3002 | 409 | - | Maximum number of wallets reached (CONSUMER 3 per currency, MERCHANT 10) |\n| GROUP_ALREADY_ACTIVATED | E3031 | 409 | - | This merchant group has already been activated with shards |\n| GROUP_ALREADY_EXISTS | E3033 | 409 | AM05 | A group with this ID already exists |\n| GROUP_NOT_ACTIVATED | E3034 | 409 | - | This group is still cold (0 shards); activate it before rescaling |\n| RESTRAINT_ALREADY_REMOVED | E3021 | 409 | - | This restraint has already been released or expired |\n| WD_ALREADY_COMPLETED | E6102 | 409 | - | This withdrawal has already reached COMPLETED status |\n| WD_INVALID_STATE | E6103 | 409 | - | The withdrawal is in a state that does not permit this transition |\n| WD_ALREADY_REVERSED | E6104 | 409 | - | This withdrawal has already been reversed |\n| PERIOD_CLOSED | E8005 | 409 | DT01 | The target accounting date is sealed; post against the current open period |\n| GONE_ONLINE | E8001 | 410 | - | Historical data beyond the online retention period; request an archive extract |\n| TIMEOUT | E9004 | 504 | - | The request exceeded the allowed processing time; you may retry (503 on lock timeout) |\n| PII_DEK_NOT_SET | E5005 | 500 | - | The server PII data-encryption key (DEK) is not set |\n| BATCH_UNBALANCED | E5003 | 500 | - | Internal double-entry invariant violated (sum of debits != sum of credits) |\n| INTERNAL_ERROR | E9001 | 500 | - | An unexpected error occurred; please retry or contact support |\n\nFamily fallbacks: any `*_NOT_FOUND` -\u003e 404, `*_NOT_ACTIVE` -\u003e 403, `*_CONFLICT` -\u003e 409 (e.g. GROUP_NOT_FOUND, SETTLEMENT_NOT_FOUND, GROUP_NOT_ACTIVE).",
         "title": "Core Wallet API",
         "termsOfService": "https://docs.wallet.example/terms",
         "contact": {
@@ -77,7 +77,19 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/dto.AccountOpenResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountOpenResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -130,7 +142,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.AccountResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "404": {
@@ -181,7 +205,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.AccountStatusResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountStatusResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -240,7 +276,19 @@
                     "200": {
                         "description": "Realtime balance (or BalanceAsOfResponse when as_of_date is set)",
                         "schema": {
-                            "$ref": "#/definitions/dto.BalanceResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BalanceResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -304,7 +352,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.ClientListResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientListResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -348,7 +408,19 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/dto.ClientResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -395,7 +467,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.ClientProfileResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientProfileResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "404": {
@@ -446,7 +530,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.ClientResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -511,7 +607,19 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/dto.BankLinkResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BankLinkResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -571,7 +679,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.BankLinkResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BankLinkResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -630,7 +750,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.KycResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.KycResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -688,13 +820,37 @@
                     "200": {
                         "description": "Duplicate idempotent replay",
                         "schema": {
-                            "$ref": "#/definitions/dto.FeeChargeResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.FeeChargeResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "201": {
                         "description": "Posted",
                         "schema": {
-                            "$ref": "#/definitions/dto.FeeChargeResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.FeeChargeResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -746,7 +902,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.FeeChargeReversalResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.FeeChargeReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -804,13 +972,37 @@
                     "200": {
                         "description": "Duplicate idempotent replay",
                         "schema": {
-                            "$ref": "#/definitions/dto.MerchantDepositResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantDepositResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "201": {
                         "description": "Posted",
                         "schema": {
-                            "$ref": "#/definitions/dto.MerchantDepositResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantDepositResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -868,13 +1060,37 @@
                     "200": {
                         "description": "Duplicate idempotent replay",
                         "schema": {
-                            "$ref": "#/definitions/dto.MerchantWithdrawResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantWithdrawResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "201": {
                         "description": "Posted",
                         "schema": {
-                            "$ref": "#/definitions/dto.MerchantWithdrawResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantWithdrawResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -885,6 +1101,82 @@
                     },
                     "409": {
                         "description": "Concurrency conflict (retryable)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/merchant-withdraw/reverse": {
+            "post": {
+                "description": "Reverse a merchant-settlement withdraw by its original reference, crediting principal + fee/VAT back to the settlement account. Idempotent. Ops-only — requires role wallet.finance.reverse.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Reverse a merchant-settlement withdraw",
+                "parameters": [
+                    {
+                        "description": "Merchant withdraw reversal request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.MerchantWithdrawReversalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantWithdrawReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "403": {
+                        "description": "Missing wallet.finance.reverse role",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Original withdraw not found",
                         "schema": {
                             "$ref": "#/definitions/dto.ProblemDetails"
                         }
@@ -939,7 +1231,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.RestraintListResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RestraintListResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -983,7 +1287,19 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/dto.RestraintResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RestraintResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1035,7 +1351,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.RestraintViewResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RestraintViewResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1093,7 +1421,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.RestraintResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RestraintResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1151,7 +1491,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.TransferReversalResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TransferReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1209,13 +1561,37 @@
                     "200": {
                         "description": "Duplicate idempotent replay",
                         "schema": {
-                            "$ref": "#/definitions/dto.TopupResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TopupResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "201": {
                         "description": "Posted",
                         "schema": {
-                            "$ref": "#/definitions/dto.TopupResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TopupResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1267,7 +1643,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.TopupReversalResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TopupReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1344,7 +1732,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.TxListResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TxListResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1391,7 +1791,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.TxDetailResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TxDetailResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1443,13 +1855,37 @@
                     "200": {
                         "description": "Duplicate idempotent replay",
                         "schema": {
-                            "$ref": "#/definitions/dto.TransferResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TransferResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "201": {
                         "description": "Posted",
                         "schema": {
-                            "$ref": "#/definitions/dto.TransferResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TransferResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1507,13 +1943,37 @@
                     "200": {
                         "description": "Duplicate idempotent replay",
                         "schema": {
-                            "$ref": "#/definitions/dto.WithdrawResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.WithdrawResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "201": {
                         "description": "Posted",
                         "schema": {
-                            "$ref": "#/definitions/dto.WithdrawResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.WithdrawResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1571,7 +2031,19 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/dto.ProvisionGroupResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ProvisionGroupResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1629,7 +2101,19 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/dto.ActivateHotWalletResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ActivateHotWalletResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1694,7 +2178,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.RescaleHotWalletResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RescaleHotWalletResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1752,7 +2248,19 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/dto.OnboardResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.OnboardResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1804,7 +2312,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.BalanceBatchResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BalanceBatchResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -1845,7 +2365,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.BalanceOpsResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BalanceOpsResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "404": {
@@ -1886,7 +2418,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.ClientFullResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientFullResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "404": {
@@ -1939,7 +2483,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.MarkResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MarkResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -2004,7 +2560,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.MarkResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MarkResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -2057,7 +2625,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.MarkResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MarkResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "404": {
@@ -2116,7 +2696,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/dto.ReversalResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -3063,6 +3655,57 @@
                 }
             }
         },
+        "dto.MerchantWithdrawReversalRequest": {
+            "type": "object",
+            "required": [
+                "fail_code",
+                "fail_reason",
+                "reference"
+            ],
+            "properties": {
+                "fail_code": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 3
+                },
+                "fail_reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 3
+                },
+                "initiator": {
+                    "type": "string",
+                    "enum": [
+                        "OPS_MANUAL",
+                        "FRAUD",
+                        "DISPUTE",
+                        "SYSTEM"
+                    ]
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.MerchantWithdrawReversalResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "reversal_tran_key": {
+                    "type": "integer"
+                },
+                "settlement_balance_after": {
+                    "type": "string"
+                },
+                "was_already_reversed": {
+                    "type": "boolean"
+                }
+            }
+        },
         "dto.OnboardRequest": {
             "type": "object",
             "required": [
@@ -3197,7 +3840,7 @@
             "type": "object",
             "properties": {
                 "detail": {
-                    "description": "RFC7807: human-readable detail (dynamic context)",
+                    "description": "human-readable detail (dynamic context)",
                     "type": "string",
                     "example": "available 50000 \u003c required 100000"
                 },
@@ -3206,14 +3849,14 @@
                     "additionalProperties": {}
                 },
                 "errorCode": {
-                    "description": "stable business error code (canonical contract)",
+                    "description": "SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for PG-raised, E#### synthetic for Go-side, \"999999\" when the canonical name is not whitelisted (§3.3)",
                     "type": "string",
-                    "example": "INSUFFICIENT_FUNDS"
+                    "example": "E4022"
                 },
                 "errorMessage": {
-                    "description": "stable human message for this code (i18n source, safe for end-user)",
+                    "description": "full raw \"CODE: detail\" message (pg.Message verbatim for PG errors, synthesized for Go); \"Internal Error\" when not whitelisted",
                     "type": "string",
-                    "example": "The account balance is not sufficient to cover this transaction"
+                    "example": "INSUFFICIENT_FUNDS: available 50000 \u003c required 100000"
                 },
                 "errors": {
                     "description": "field-level (Berlin Group / OBIE style)",
@@ -3222,38 +3865,15 @@
                         "$ref": "#/definitions/dto.FieldError"
                     }
                 },
-                "instance": {
-                    "description": "RFC7807: request path",
-                    "type": "string",
-                    "example": "/v1/finance/transfer"
-                },
-                "internal_code": {
-                    "description": "E#### for log/alert (§5)",
-                    "type": "string",
-                    "example": "E4022"
-                },
                 "iso20022_reason_code": {
                     "description": "ISO 20022 External Status Reason (§13.2)",
                     "type": "string",
                     "example": "AM04"
                 },
-                "retry": {
-                    "$ref": "#/definitions/dto.RetryInfo"
-                },
-                "status": {
-                    "description": "RFC7807: HTTP status code",
-                    "type": "integer",
-                    "example": 422
-                },
                 "timestamp": {
                     "description": "RFC 3339",
                     "type": "string",
                     "example": "2026-06-06T07:30:00Z"
-                },
-                "title": {
-                    "description": "RFC7807: short human title",
-                    "type": "string",
-                    "example": "Insufficient funds"
                 },
                 "trace_id": {
                     "description": "= X-Request-Id",
@@ -3264,11 +3884,6 @@
                     "description": "pain.002 status (§13.3)",
                     "type": "string",
                     "example": "RJCT"
-                },
-                "type": {
-                    "description": "RFC7807: URI to error doc",
-                    "type": "string",
-                    "example": "https://docs.wallet.example/errors/INSUFFICIENT_FUNDS"
                 }
             }
         },
@@ -3484,17 +4099,6 @@
                 }
             }
         },
-        "dto.RetryInfo": {
-            "type": "object",
-            "properties": {
-                "after_ms": {
-                    "type": "integer"
-                },
-                "retryable": {
-                    "type": "boolean"
-                }
-            }
-        },
         "dto.ReversalRequest": {
             "type": "object",
             "required": [
@@ -3540,6 +4144,24 @@
                 },
                 "was_already_reversed": {
                     "type": "boolean"
+                }
+            }
+        },
+        "dto.SuccessEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {},
+                "errorCode": {
+                    "type": "string"
+                },
+                "errorMessage": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "trace_id": {
+                    "type": "string"
                 }
             }
         },

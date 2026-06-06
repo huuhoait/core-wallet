@@ -18,8 +18,8 @@ import (
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.FeeChargeRequest	true	"Fee charge request"
-//	@Success		201		{object}	dto.FeeChargeResponse	"Posted"
-//	@Success		200		{object}	dto.FeeChargeResponse	"Duplicate idempotent replay"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.FeeChargeResponse}	"Posted"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.FeeChargeResponse}	"Duplicate idempotent replay"
 //	@Failure		400		{object}	dto.ProblemDetails		"Validation error"
 //	@Failure		422		{object}	dto.ProblemDetails		"Business rule violation (e.g. insufficient funds)"
 //	@Failure		500		{object}	dto.ProblemDetails		"Internal error"
@@ -43,7 +43,7 @@ func (h *Wallet) FeeCharge(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.FeeChargeRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.FeeChargeRespFrom(res))
 }
 
 // ReverseFeeCharge godoc
@@ -54,7 +54,7 @@ func (h *Wallet) FeeCharge(c *gin.Context) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.FeeChargeReversalRequest	true	"Fee reversal request"
-//	@Success		200		{object}	dto.FeeChargeReversalResponse	"OK"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.FeeChargeReversalResponse}	"OK"
 //	@Failure		400		{object}	dto.ProblemDetails				"Validation error"
 //	@Failure		404		{object}	dto.ProblemDetails				"Original charge not found"
 //	@Failure		422		{object}	dto.ProblemDetails				"Business rule violation"
@@ -80,5 +80,5 @@ func (h *Wallet) ReverseFeeCharge(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.FeeChargeReversalRespFrom(res))
+	writeOK(c, http.StatusOK, dto.FeeChargeReversalRespFrom(res))
 }

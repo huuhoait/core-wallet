@@ -25,7 +25,7 @@ const defaultHotShardCount int16 = 4
 //	@Produce		json
 //	@Param			group_id	path		string							true	"Merchant group id"
 //	@Param			request		body		dto.ActivateHotWalletRequest	false	"Activation payload (optional; default 4 shards)"
-//	@Success		201			{object}	dto.ActivateHotWalletResponse	"Created"
+//	@Success		201			{object}	dto.SuccessEnvelope{data=dto.ActivateHotWalletResponse}	"Created"
 //	@Failure		400			{object}	dto.ProblemDetails				"Validation error"
 //	@Failure		404			{object}	dto.ProblemDetails				"Group not found"
 //	@Failure		422			{object}	dto.ProblemDetails				"Business rule violation (e.g. already hot)"
@@ -52,7 +52,7 @@ func (h *Wallet) ActivateHotWallet(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.ActivateHotWalletRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.ActivateHotWalletRespFrom(res))
 }
 
 // ProvisionAcctGroup godoc
@@ -63,7 +63,7 @@ func (h *Wallet) ActivateHotWallet(c *gin.Context) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.ProvisionGroupRequest	true	"Provision group request"
-//	@Success		201		{object}	dto.ProvisionGroupResponse	"Created"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.ProvisionGroupResponse}	"Created"
 //	@Failure		400		{object}	dto.ProblemDetails			"Validation error"
 //	@Failure		422		{object}	dto.ProblemDetails			"Business rule violation"
 //	@Failure		500		{object}	dto.ProblemDetails			"Internal error"
@@ -101,7 +101,7 @@ func (h *Wallet) ProvisionAcctGroup(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.ProvisionGroupRespFrom(res))
+	writeOK(c, http.StatusCreated, dto.ProvisionGroupRespFrom(res))
 }
 
 // RescaleHotWallet godoc
@@ -113,7 +113,7 @@ func (h *Wallet) ProvisionAcctGroup(c *gin.Context) {
 //	@Produce		json
 //	@Param			group_id	path		string							true	"Merchant group id"
 //	@Param			request		body		dto.RescaleHotWalletRequest		true	"Rescale request"
-//	@Success		200			{object}	dto.RescaleHotWalletResponse	"OK"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.RescaleHotWalletResponse}	"OK"
 //	@Failure		400			{object}	dto.ProblemDetails				"Validation error"
 //	@Failure		404			{object}	dto.ProblemDetails				"Group not found"
 //	@Failure		422			{object}	dto.ProblemDetails				"Business rule violation"
@@ -134,7 +134,7 @@ func (h *Wallet) RescaleHotWallet(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.RescaleHotWalletRespFrom(res))
+	writeOK(c, http.StatusOK, dto.RescaleHotWalletRespFrom(res))
 }
 
 // MerchantDeposit godoc
@@ -145,8 +145,8 @@ func (h *Wallet) RescaleHotWallet(c *gin.Context) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body		dto.MerchantDepositRequest	true	"Merchant deposit request"
-//	@Success		201		{object}	dto.MerchantDepositResponse	"Posted"
-//	@Success		200		{object}	dto.MerchantDepositResponse	"Duplicate idempotent replay"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.MerchantDepositResponse}	"Posted"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.MerchantDepositResponse}	"Duplicate idempotent replay"
 //	@Failure		400		{object}	dto.ProblemDetails			"Validation error"
 //	@Failure		404		{object}	dto.ProblemDetails			"Group not found"
 //	@Failure		422		{object}	dto.ProblemDetails			"Business rule violation"
@@ -169,5 +169,5 @@ func (h *Wallet) MerchantDeposit(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	c.JSON(statusFor(res.Status), dto.MerchantDepositRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.MerchantDepositRespFrom(res))
 }

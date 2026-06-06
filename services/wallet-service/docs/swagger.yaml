@@ -628,6 +628,43 @@ definitions:
       vat_amount:
         type: string
     type: object
+  dto.MerchantWithdrawReversalRequest:
+    properties:
+      fail_code:
+        maxLength: 64
+        minLength: 3
+        type: string
+      fail_reason:
+        maxLength: 500
+        minLength: 3
+        type: string
+      initiator:
+        enum:
+        - OPS_MANUAL
+        - FRAUD
+        - DISPUTE
+        - SYSTEM
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - fail_code
+    - fail_reason
+    - reference
+    type: object
+  dto.MerchantWithdrawReversalResponse:
+    properties:
+      event_uuid:
+        type: string
+      reversal_tran_key:
+        type: integer
+      settlement_balance_after:
+        type: string
+      was_already_reversed:
+        type: boolean
+    type: object
   dto.OnboardRequest:
     properties:
       acct_type:
@@ -723,50 +760,35 @@ definitions:
   dto.ProblemDetails:
     properties:
       detail:
-        description: 'RFC7807: human-readable detail (dynamic context)'
+        description: human-readable detail (dynamic context)
         example: available 50000 < required 100000
         type: string
       details:
         additionalProperties: {}
         type: object
       errorCode:
-        description: stable business error code (canonical contract)
-        example: INSUFFICIENT_FUNDS
+        description: 'SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for
+          PG-raised, E#### synthetic for Go-side, "999999" when the canonical name
+          is not whitelisted (§3.3)'
+        example: E4022
         type: string
       errorMessage:
-        description: stable human message for this code (i18n source, safe for end-user)
-        example: The account balance is not sufficient to cover this transaction
+        description: 'full raw "CODE: detail" message (pg.Message verbatim for PG
+          errors, synthesized for Go); "Internal Error" when not whitelisted'
+        example: 'INSUFFICIENT_FUNDS: available 50000 < required 100000'
         type: string
       errors:
         description: field-level (Berlin Group / OBIE style)
         items:
           $ref: '#/definitions/dto.FieldError'
         type: array
-      instance:
-        description: 'RFC7807: request path'
-        example: /v1/finance/transfer
-        type: string
-      internal_code:
-        description: E#### for log/alert (§5)
-        example: E4022
-        type: string
       iso20022_reason_code:
         description: ISO 20022 External Status Reason (§13.2)
         example: AM04
         type: string
-      retry:
-        $ref: '#/definitions/dto.RetryInfo'
-      status:
-        description: 'RFC7807: HTTP status code'
-        example: 422
-        type: integer
       timestamp:
         description: RFC 3339
         example: "2026-06-06T07:30:00Z"
-        type: string
-      title:
-        description: 'RFC7807: short human title'
-        example: Insufficient funds
         type: string
       trace_id:
         description: = X-Request-Id
@@ -775,10 +797,6 @@ definitions:
       transaction_status:
         description: pain.002 status (§13.3)
         example: RJCT
-        type: string
-      type:
-        description: 'RFC7807: URI to error doc'
-        example: https://docs.wallet.example/errors/INSUFFICIENT_FUNDS
         type: string
     type: object
   dto.ProvisionGroupRequest:
@@ -925,13 +943,6 @@ definitions:
         description: A active | R released | E expired
         type: string
     type: object
-  dto.RetryInfo:
-    properties:
-      after_ms:
-        type: integer
-      retryable:
-        type: boolean
-    type: object
   dto.ReversalRequest:
     properties:
       fail_code:
@@ -966,6 +977,18 @@ definitions:
         type: integer
       was_already_reversed:
         type: boolean
+    type: object
+  dto.SuccessEnvelope:
+    properties:
+      data: {}
+      errorCode:
+        type: string
+      errorMessage:
+        type: string
+      timestamp:
+        type: string
+      trace_id:
+        type: string
     type: object
   dto.TopupRequest:
     properties:
@@ -1308,11 +1331,12 @@ info:
   description: |-
     Double-entry e-wallet ledger. The Go service is a thin RPC client over PostgreSQL stored functions; all balance validation, double-entry posting, fee/VAT and reversal logic run atomically in plpgsql. Scope is internal synchronous posting (top-up, transfer, withdraw, merchant settlement, fee/VAT, reversal). External rails (NAPAS, card 3DS, MT940) are out of scope.
 
-    ## Error model
-    Every error is returned as `application/problem+json` (RFC 7807 / RFC 9457). The body carries a stable `errorCode` (business contract), `errorMessage` (user-safe), `internal_code` (E#### for ops/logs), `iso20022_reason_code` (pain.002 reason), `transaction_status` (pain.002 status), `trace_id` and a `retry` hint. `detail` adds dynamic context; field-level validation failures appear under `errors`.
+    ## Response envelope
+    All responses use a uniform envelope. Success (2xx): `{ "errorCode": "00000", "errorMessage": "Success!", "data": <payload>, "trace_id": "...", "timestamp": "..." }` — the operation payload shown in each endpoint's 200/201 schema lives under `data`. Errors use `application/problem+json`: `errorCode` is a SQLSTATE-style code (real PostgreSQL SQLSTATE for SP-raised errors, an `E####` synthetic for Go-side errors, or `999999` when the code is not client-safe), and `errorMessage` is the full `BUSINESS_CODE: detail` string whose leading token is the business code listed below. Errors also carry `iso20022_reason_code`, `transaction_status` (pain.002), `detail`, `trace_id`, `timestamp`, and field-level `errors`.
 
     ### Business error code catalogue
-    | errorCode | internal_code | HTTP | ISO 20022 | Description |
+    `business code` = leading token of `errorMessage`; `errorCode` = the value returned in the body's `errorCode` field.
+    | business code | errorCode | HTTP | ISO 20022 | Description |
     | --- | --- | --- | --- | --- |
     | INVALID_AMOUNT | E4024 | 400 | AM12 | The transaction amount is invalid or missing |
     | AMOUNT_OUT_OF_RANGE | E4024 | 400 | AM02 | The amount is outside the allowed range for this transaction type |
@@ -1410,7 +1434,12 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/dto.AccountOpenResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountOpenResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1445,7 +1474,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.AccountResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountResponse'
+              type: object
         "404":
           description: Account not found
           schema:
@@ -1479,7 +1513,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.AccountStatusResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountStatusResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1520,7 +1559,12 @@ paths:
           description: Realtime balance (or BalanceAsOfResponse when as_of_date is
             set)
           schema:
-            $ref: '#/definitions/dto.BalanceResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BalanceResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1564,7 +1608,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.ClientListResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientListResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1594,7 +1643,12 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/dto.ClientResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1626,7 +1680,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.ClientProfileResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientProfileResponse'
+              type: object
         "404":
           description: Client not found
           schema:
@@ -1661,7 +1720,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.ClientResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1705,7 +1769,12 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/dto.BankLinkResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BankLinkResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1745,7 +1814,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.BankLinkResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BankLinkResponse'
+              type: object
         "400":
           description: Invalid link id
           schema:
@@ -1785,7 +1859,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.KycResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.KycResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1824,11 +1903,21 @@ paths:
         "200":
           description: Duplicate idempotent replay
           schema:
-            $ref: '#/definitions/dto.FeeChargeResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.FeeChargeResponse'
+              type: object
         "201":
           description: Posted
           schema:
-            $ref: '#/definitions/dto.FeeChargeResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.FeeChargeResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1862,7 +1951,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.FeeChargeReversalResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.FeeChargeReversalResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1901,11 +1995,21 @@ paths:
         "200":
           description: Duplicate idempotent replay
           schema:
-            $ref: '#/definitions/dto.MerchantDepositResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantDepositResponse'
+              type: object
         "201":
           description: Posted
           schema:
-            $ref: '#/definitions/dto.MerchantDepositResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantDepositResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1944,11 +2048,21 @@ paths:
         "200":
           description: Duplicate idempotent replay
           schema:
-            $ref: '#/definitions/dto.MerchantWithdrawResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantWithdrawResponse'
+              type: object
         "201":
           description: Posted
           schema:
-            $ref: '#/definitions/dto.MerchantWithdrawResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantWithdrawResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -1966,6 +2080,55 @@ paths:
           schema:
             $ref: '#/definitions/dto.ProblemDetails'
       summary: Merchant settlement withdraw
+      tags:
+      - finance
+  /v1/finance/merchant-withdraw/reverse:
+    post:
+      consumes:
+      - application/json
+      description: Reverse a merchant-settlement withdraw by its original reference,
+        crediting principal + fee/VAT back to the settlement account. Idempotent.
+        Ops-only — requires role wallet.finance.reverse.
+      parameters:
+      - description: Merchant withdraw reversal request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.MerchantWithdrawReversalRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantWithdrawReversalResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "403":
+          description: Missing wallet.finance.reverse role
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Original withdraw not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Reverse a merchant-settlement withdraw
       tags:
       - finance
   /v1/finance/restraints:
@@ -1992,7 +2155,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.RestraintListResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RestraintListResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2021,7 +2189,12 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/dto.RestraintResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RestraintResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2055,7 +2228,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.RestraintViewResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RestraintViewResponse'
+              type: object
         "400":
           description: Invalid id
           schema:
@@ -2094,7 +2272,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.RestraintResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RestraintResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2133,7 +2316,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.TransferReversalResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TransferReversalResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2172,11 +2360,21 @@ paths:
         "200":
           description: Duplicate idempotent replay
           schema:
-            $ref: '#/definitions/dto.TopupResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TopupResponse'
+              type: object
         "201":
           description: Posted
           schema:
-            $ref: '#/definitions/dto.TopupResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TopupResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2210,7 +2408,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.TopupReversalResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TopupReversalResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2262,7 +2465,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.TxListResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TxListResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2293,7 +2501,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.TxDetailResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TxDetailResponse'
+              type: object
         "400":
           description: Invalid transaction id
           schema:
@@ -2328,11 +2541,21 @@ paths:
         "200":
           description: Duplicate idempotent replay
           schema:
-            $ref: '#/definitions/dto.TransferResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TransferResponse'
+              type: object
         "201":
           description: Posted
           schema:
-            $ref: '#/definitions/dto.TransferResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TransferResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2371,11 +2594,21 @@ paths:
         "200":
           description: Duplicate idempotent replay
           schema:
-            $ref: '#/definitions/dto.WithdrawResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.WithdrawResponse'
+              type: object
         "201":
           description: Posted
           schema:
-            $ref: '#/definitions/dto.WithdrawResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.WithdrawResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2415,7 +2648,12 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/dto.ProvisionGroupResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ProvisionGroupResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2454,7 +2692,12 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/dto.ActivateHotWalletResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ActivateHotWalletResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2498,7 +2741,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.RescaleHotWalletResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RescaleHotWalletResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2537,7 +2785,12 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/dto.OnboardResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.OnboardResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2569,7 +2822,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.BalanceOpsResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BalanceOpsResponse'
+              type: object
         "404":
           description: Account not found
           schema:
@@ -2600,7 +2858,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.BalanceBatchResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BalanceBatchResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2628,7 +2891,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.ClientFullResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientFullResponse'
+              type: object
         "404":
           description: Client not found
           schema:
@@ -2663,7 +2931,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.MarkResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MarkResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2706,7 +2979,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.MarkResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MarkResponse'
+              type: object
         "400":
           description: Validation error
           schema:
@@ -2741,7 +3019,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.MarkResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MarkResponse'
+              type: object
         "404":
           description: Unknown payout reference
           schema:
@@ -2781,7 +3064,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/dto.ReversalResponse'
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ReversalResponse'
+              type: object
         "400":
           description: Validation error
           schema:
