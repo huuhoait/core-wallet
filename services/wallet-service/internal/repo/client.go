@@ -180,6 +180,47 @@ func (r *PgWalletRepo) GetClient(ctx context.Context, clientNo string) (*domain.
 	return &c, nil
 }
 
+// ListClients returns a page of MASKED client profiles from v_client_masked
+// (wallet_app path, readPool), keyset-paginated by client_no ascending with
+// optional status / client_type filters. READ-ONLY: no TX, no audit GUCs.
+func (r *PgWalletRepo) ListClients(ctx context.Context, q domain.ClientListQuery) ([]domain.ClientView, error) {
+	const sql = `
+		SELECT client_no, client_name_masked, client_type, global_id_type, global_id_masked,
+		       country_loc, country_citizen, client_grp, acct_exec, status,
+		       birth_date, sex, resident_status,
+		       kyc_tier, kyc_status, risk_level, phone_masked, verified_at
+		  FROM v_client_masked
+		 WHERE ($2::varchar IS NULL OR client_no > $2)
+		   AND ($3::varchar IS NULL OR status = $3)
+		   AND ($4::varchar IS NULL OR client_type = $4)
+		 ORDER BY client_no ASC
+		 LIMIT $1
+	`
+	rows, err := r.readPool.Query(ctx, sql, q.Limit, q.AfterNo, q.Status, q.ClientType)
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.ClientView, 0, q.Limit)
+	for rows.Next() {
+		var c domain.ClientView
+		if err := rows.Scan(
+			&c.ClientNo, &c.ClientNameMasked, &c.ClientType, &c.GlobalIDType, &c.GlobalIDMasked,
+			&c.CountryLoc, &c.CountryCitizen, &c.ClientGrp, &c.AcctExec, &c.Status,
+			&c.BirthDate, &c.Sex, &c.ResidentStatus,
+			&c.KycTier, &c.KycStatus, &c.RiskLevel, &c.PhoneMasked, &c.VerifiedAt,
+		); err != nil {
+			return nil, mapErrIfPg(err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return out, nil
+}
+
 // GetClientFull returns the UNMASKED client profile via the wallet_pii_ro pool
 // (piiPool). Privileged P1/PII read — exposed only under /v1/ops. Phone/email
 // stay encrypted at rest and are not decrypted here. Unknown client_no → 404.

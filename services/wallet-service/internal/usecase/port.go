@@ -69,6 +69,9 @@ type WalletRepository interface {
 	// wallet_app); GetClientFull → unmasked PII (wallet_pii_ro, /v1/ops only).
 	GetClient(ctx context.Context, clientNo string) (*domain.ClientView, error)
 	GetClientFull(ctx context.Context, clientNo string) (*domain.ClientFullView, error)
+	// ListClients returns masked client profiles (v_client_masked, wallet_app),
+	// keyset-paginated by client_no.
+	ListClients(ctx context.Context, q domain.ClientListQuery) ([]domain.ClientView, error)
 
 	// Client linked-bank management (link_client_bank / set_default_client_bank).
 	LinkClientBank(ctx context.Context, in domain.BankLinkInput) (*domain.BankLinkResult, error)

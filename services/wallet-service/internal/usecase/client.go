@@ -56,6 +56,18 @@ func (s *WalletService) GetClientFull(ctx context.Context, clientNo string) (*do
 	return s.repo.GetClientFull(ctx, clientNo)
 }
 
+// ListClients returns a keyset-paginated page of masked client profiles
+// (wallet_app path). Page size is clamped to [1, MaxClientPageSize].
+func (s *WalletService) ListClients(ctx context.Context, q domain.ClientListQuery) ([]domain.ClientView, error) {
+	if q.Limit <= 0 {
+		q.Limit = domain.DefaultClientPageSize
+	}
+	if q.Limit > domain.MaxClientPageSize {
+		q.Limit = domain.MaxClientPageSize
+	}
+	return s.repo.ListClients(ctx, q)
+}
+
 // LinkClientBank links a bank account to a client (optionally as default).
 func (s *WalletService) LinkClientBank(ctx context.Context, in domain.BankLinkInput) (*domain.BankLinkResult, error) {
 	res, err := s.repo.LinkClientBank(ctx, in)

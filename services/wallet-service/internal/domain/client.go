@@ -156,6 +156,21 @@ type ClientView struct {
 	VerifiedAt       *time.Time
 }
 
+// ClientListQuery parameterises a masked client list (GET /v1/clients): optional
+// status / client_type filters, keyset-paginated by client_no ascending.
+type ClientListQuery struct {
+	Limit      int     // 1..MaxClientPageSize (clamped in usecase)
+	AfterNo    *string // cursor: return rows with client_no > AfterNo
+	Status     *string // optional: filter by status (A|B|C)
+	ClientType *string // optional: filter by client_type (IND|CORP|MER)
+}
+
+// Client list page sizing — a page returns up to 200 clients (default 100).
+const (
+	DefaultClientPageSize = 100
+	MaxClientPageSize     = 200
+)
+
 // ClientFullView is the UNMASKED client profile (GET /v1/ops/clients/:client_no),
 // read from the raw tables via the wallet_pii_ro role. Every read of this view is
 // a P1 (PII) access and SHOULD be appended to WLT_PII_ACCESS_LOG (not yet built —

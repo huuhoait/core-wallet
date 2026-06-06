@@ -190,6 +190,29 @@ func ClientProfileRespFrom(c *domain.ClientView) ClientProfileResponse {
 	}
 }
 
+// ClientListResponse — GET /v1/clients (MASKED list). Keyset-paginated by
+// client_no; pass next_cursor as ?after= for the next page.
+type ClientListResponse struct {
+	PageSize   int                     `json:"page_size"`
+	Items      []ClientProfileResponse `json:"items"`
+	Count      int                     `json:"count"`
+	NextCursor *string                 `json:"next_cursor,omitempty"` // pass as ?after= for the next page
+}
+
+func ClientListRespFrom(q domain.ClientListQuery, views []domain.ClientView) ClientListResponse {
+	items := make([]ClientProfileResponse, 0, len(views))
+	for i := range views {
+		items = append(items, ClientProfileRespFrom(&views[i]))
+	}
+	out := ClientListResponse{PageSize: q.Limit, Items: items, Count: len(items)}
+	// A full page implies more rows may exist → expose the keyset cursor.
+	if q.Limit > 0 && len(views) == q.Limit {
+		last := views[len(views)-1].ClientNo
+		out.NextCursor = &last
+	}
+	return out
+}
+
 // ClientFullResponse — GET /v1/ops/clients/:client_no (UNMASKED, wallet_pii_ro).
 // Raw name + CCCD/passport. Phone/email stay encrypted at rest (not returned).
 type ClientFullResponse struct {
