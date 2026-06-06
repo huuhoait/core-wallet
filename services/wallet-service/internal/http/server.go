@@ -94,11 +94,11 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 			reverse := finance.Group("", middleware.RequireAnyRole(middleware.RoleFinanceReverse))
 			{
 				reverse.POST("/merchant-withdraw/reverse", h.ReverseMerchantWithdraw) // credit-back principal + fee/VAT to settlement
-				reverse.POST("/reverse", h.ReverseTransfer)                            // in-book transfer reversal (reference in body)
-				reverse.POST("/topup/reverse", h.ReverseTopup)                         // topup reversal (reference in body)
-				reverse.POST("/fee-charge/reverse", h.ReverseFeeCharge)                // reverse a standalone fee charge
+				reverse.POST("/reverse", h.ReverseTransfer)                           // in-book transfer reversal (reference in body)
+				reverse.POST("/topup/reverse", h.ReverseTopup)                        // topup reversal (reference in body)
+				reverse.POST("/fee-charge/reverse", h.ReverseFeeCharge)               // reverse a standalone fee charge
 			}
-			finance.GET("/transactions", h.ListTransactions)       // account statement: ?acct_no=&limit=&before_seq=
+			finance.GET("/transactions", h.ListTransactions)         // account statement: ?acct_no=&limit=&before_seq=
 			finance.GET("/transactions/:tran_key", h.GetTransaction) // all legs of one transaction
 			finance.GET("/restraints", h.ListRestraints)             // list holds/liens: ?acct_no=&limit=&before_seq=
 			finance.GET("/restraints/:id", h.GetRestraint)           // one restraint by id
@@ -113,8 +113,9 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 		clients := v1.Group("/clients")
 		{
 			clients.POST("", h.CreateClient)
-			clients.GET("", h.ListClients)          // MASKED list (?status=&client_type=&limit=&after=)
-			clients.GET("/:client_no", h.GetClient) // MASKED profile (PII masked)
+			clients.GET("", h.ListClients)                              // MASKED list (?status=&client_type=&limit=&after=)
+			clients.GET("/:client_no", h.GetClient)                     // MASKED profile (PII masked)
+			clients.GET("/:client_no/accounts", h.ListAccountsByClient) // all wallets owned by the client
 			clients.PATCH("/:client_no", h.UpdateClient)
 			clients.POST("/:client_no/kyc", h.UpdateKYC)                              // submit/update eKYC + raise tier
 			clients.POST("/:client_no/banks", h.LinkClientBank)                       // link a bank account

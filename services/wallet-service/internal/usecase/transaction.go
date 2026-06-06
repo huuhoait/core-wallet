@@ -11,6 +11,11 @@ func (s *WalletService) GetAccount(ctx context.Context, acctNo string) (*domain.
 	return s.repo.GetAccount(ctx, acctNo)
 }
 
+// ListAccountsByClient returns all wallets owned by a client. Unknown client → 404.
+func (s *WalletService) ListAccountsByClient(ctx context.Context, clientNo string) ([]domain.AccountView, error) {
+	return s.repo.ListAccountsByClient(ctx, clientNo)
+}
+
 // ListTransactions returns an account statement page. Limit is clamped to
 // [1, MaxTxPageSize] with a default of DefaultTxPageSize (200).
 func (s *WalletService) ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error) {

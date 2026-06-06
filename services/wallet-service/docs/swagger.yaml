@@ -2,6 +2,17 @@ basePath: /
 consumes:
 - application/json
 definitions:
+  dto.AccountListResponse:
+    properties:
+      client_no:
+        type: string
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/dto.AccountResponse'
+        type: array
+    type: object
   dto.AccountOpenResponse:
     properties:
       acct_no:
@@ -1751,6 +1762,40 @@ paths:
       summary: Update a client
       tags:
       - clients
+  /v1/clients/{client_no}/accounts:
+    get:
+      description: List every wallet owned by a client (full account profiles, no
+        client PII), oldest-first. A client with no wallets returns an empty list;
+        unknown client → 404.
+      parameters:
+      - description: Client number
+        in: path
+        name: client_no
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountListResponse'
+              type: object
+        "404":
+          description: Client not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: List a client's accounts
+      tags:
+      - accounts
   /v1/clients/{client_no}/banks:
     post:
       consumes:

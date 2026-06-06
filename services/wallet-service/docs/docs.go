@@ -574,6 +574,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/clients/{client_no}/accounts": {
+            "get": {
+                "description": "List every wallet owned by a client (full account profiles, no client PII), oldest-first. A client with no wallets returns an empty list; unknown client → 404.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "accounts"
+                ],
+                "summary": "List a client's accounts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/clients/{client_no}/banks": {
             "post": {
                 "description": "Link a bank account (optionally as default). acct_no is plaintext in; the SP encrypts it at rest and never echoes it in clear.",
@@ -2742,6 +2795,23 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "dto.AccountListResponse": {
+            "type": "object",
+            "properties": {
+                "client_no": {
+                    "type": "string"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.AccountResponse"
+                    }
+                }
+            }
+        },
         "dto.AccountOpenResponse": {
             "type": "object",
             "properties": {

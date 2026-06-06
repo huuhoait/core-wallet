@@ -44,6 +44,56 @@ func (r *PgWalletRepo) GetAccount(ctx context.Context, acctNo string) (*domain.A
 	return &a, nil
 }
 
+// ListAccountsByClient returns every wallet owned by a client (account profiles,
+// no client PII), oldest-first. READ-ONLY: no TX, no audit GUCs. An existing
+// client with no wallets returns an empty slice; an unknown client → 404.
+func (r *PgWalletRepo) ListAccountsByClient(ctx context.Context, clientNo string) ([]domain.AccountView, error) {
+	const q = `
+		SELECT acct_no, client_no, acct_type, ccy, acct_status, acct_role,
+		       actual_bal::text, total_restrained_amt::text, calc_bal::text,
+		       prev_day_actual_bal::text, acct_open_date, last_tran_date,
+		       restraint_present, cr_blocked, version, group_id, shard_index
+		  FROM WLT_ACCT
+		 WHERE client_no = $1
+		 ORDER BY acct_open_date, acct_no
+	`
+	rows, err := r.readPool.Query(ctx, q, clientNo) // replica (lag-tolerant profile)
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.AccountView, 0, 8)
+	for rows.Next() {
+		var a domain.AccountView
+		if err := rows.Scan(
+			&a.AcctNo, &a.ClientNo, &a.AcctType, &a.Ccy, &a.AcctStatus, &a.AcctRole,
+			&a.ActualBal, &a.RestrainedAmt, &a.CalcBal, &a.PrevDayBal,
+			&a.AcctOpenDate, &a.LastTranDate, &a.RestraintPresent, &a.CrBlocked,
+			&a.Version, &a.GroupID, &a.ShardIndex,
+		); err != nil {
+			return nil, mapErrIfPg(err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	// Empty result: distinguish "no wallets" from "unknown client".
+	if len(out) == 0 {
+		var exists bool
+		if err := r.readPool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM FM_CLIENT WHERE client_no = $1)`, clientNo,
+		).Scan(&exists); err != nil {
+			return nil, mapErrIfPg(err)
+		}
+		if !exists {
+			return nil, domain.NotFound("client not found: "+clientNo, nil)
+		}
+	}
+	return out, nil
+}
+
 // ListTransactions returns an account statement (one row per ledger leg that
 // touched the account), newest-first, keyset-paginated by seq_no. An existing
 // account with no entries returns an empty slice; an unknown account → 404.

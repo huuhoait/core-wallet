@@ -10,6 +10,27 @@ import (
 	"github.com/ewallet-pg/wallet-service/internal/http/middleware"
 )
 
+// ListAccountsByClient godoc
+//
+//	@Summary		List a client's accounts
+//	@Description	List every wallet owned by a client (full account profiles, no client PII), oldest-first. A client with no wallets returns an empty list; unknown client → 404.
+//	@Tags			accounts
+//	@Produce		json
+//	@Param			client_no	path		string	true	"Client number"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.AccountListResponse}	"OK"
+//	@Failure		404			{object}	dto.ProblemDetails	"Client not found"
+//	@Failure		500			{object}	dto.ProblemDetails	"Internal error"
+//	@Router			/v1/clients/{client_no}/accounts [get]
+func (h *Wallet) ListAccountsByClient(c *gin.Context) {
+	clientNo := c.Param("client_no")
+	res, err := h.svc.ListAccountsByClient(c.Request.Context(), clientNo)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	writeOK(c, http.StatusOK, dto.AccountListRespFrom(clientNo, res))
+}
+
 // OpenAccount godoc
 //
 //	@Summary		Open a wallet

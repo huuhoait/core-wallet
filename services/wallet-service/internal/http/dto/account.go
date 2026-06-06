@@ -31,3 +31,19 @@ type AccountStatusResponse struct {
 func AccountStatusRespFrom(r *domain.AccountStatusResult) AccountStatusResponse {
 	return AccountStatusResponse{AcctNo: r.AcctNo, AcctStatus: r.AcctStatus, Version: r.Version}
 }
+
+// AccountListResponse — GET /v1/clients/:client_no/accounts. All wallets owned
+// by a client (full account profiles, no PII). Items reuse AccountResponse.
+type AccountListResponse struct {
+	ClientNo string            `json:"client_no"`
+	Items    []AccountResponse `json:"items"`
+	Count    int               `json:"count"`
+}
+
+func AccountListRespFrom(clientNo string, views []domain.AccountView) AccountListResponse {
+	items := make([]AccountResponse, 0, len(views))
+	for i := range views {
+		items = append(items, AccountRespFrom(&views[i]))
+	}
+	return AccountListResponse{ClientNo: clientNo, Items: items, Count: len(items)}
+}
