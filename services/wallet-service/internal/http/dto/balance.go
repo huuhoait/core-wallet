@@ -51,7 +51,7 @@ type BalanceOpsResponse struct {
 	RestrainedAmt    string          `json:"restrained_amt"`
 	RestraintPresent string          `json:"restraint_present"`
 	CrBlocked        string          `json:"cr_blocked"`
-	ActiveRestraints json.RawMessage `json:"active_restraints"`
+	ActiveRestraints json.RawMessage `json:"active_restraints" swaggertype:"array,object"`
 	Version          int64           `json:"version"`
 	PreviousDayBal   string          `json:"previous_day_bal"`
 	LastTranDate     *time.Time      `json:"last_tran_date,omitempty"`

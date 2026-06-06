@@ -10,7 +10,20 @@ import (
 	"github.com/ewallet-pg/wallet-service/internal/http/middleware"
 )
 
-// POST /v1/accounts — open a wallet (zero balance) for a client.
+// OpenAccount godoc
+//
+//	@Summary		Open a wallet
+//	@Description	Open a zero-balance wallet for a client (count-limited per currency).
+//	@Tags			accounts
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.OpenAccountRequest	true	"Open account request"
+//	@Success		201		{object}	dto.AccountOpenResponse	"Created"
+//	@Failure		400		{object}	dto.ProblemDetails		"Validation error"
+//	@Failure		404		{object}	dto.ProblemDetails		"Client not found"
+//	@Failure		422		{object}	dto.ProblemDetails		"Business rule violation (e.g. account count limit)"
+//	@Failure		500		{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/accounts [post]
 func (h *Wallet) OpenAccount(c *gin.Context) {
 	var req dto.OpenAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -40,7 +53,21 @@ func (h *Wallet) OpenAccount(c *gin.Context) {
 	})
 }
 
-// PATCH /v1/accounts/:acct_no — block / close / re-activate an account.
+// UpdateAccountStatus godoc
+//
+//	@Summary		Update account status
+//	@Description	Block / close / re-activate an account (status A | B | C).
+//	@Tags			accounts
+//	@Accept			json
+//	@Produce		json
+//	@Param			acct_no	path		string							true	"Account number"
+//	@Param			request	body		dto.UpdateAccountStatusRequest	true	"Status update request"
+//	@Success		200		{object}	dto.AccountStatusResponse		"OK"
+//	@Failure		400		{object}	dto.ProblemDetails				"Validation error"
+//	@Failure		404		{object}	dto.ProblemDetails				"Account not found"
+//	@Failure		422		{object}	dto.ProblemDetails				"Business rule violation (e.g. illegal transition)"
+//	@Failure		500		{object}	dto.ProblemDetails				"Internal error"
+//	@Router			/v1/accounts/{acct_no} [patch]
 func (h *Wallet) UpdateAccountStatus(c *gin.Context) {
 	var req dto.UpdateAccountStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

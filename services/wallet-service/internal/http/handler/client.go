@@ -11,7 +11,19 @@ import (
 	"github.com/ewallet-pg/wallet-service/internal/http/middleware"
 )
 
-// POST /v1/clients — create a client master record (identity only).
+// CreateClient godoc
+//
+//	@Summary		Create a client
+//	@Description	Create a client master record (identity only; no KYC flow). client_type is IND | CORP | MER.
+//	@Tags			clients
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.CreateClientRequest	true	"Client create request"
+//	@Success		201		{object}	dto.ClientResponse		"Created"
+//	@Failure		400		{object}	dto.ProblemDetails		"Validation error"
+//	@Failure		422		{object}	dto.ProblemDetails		"Business rule violation (e.g. invalid client type)"
+//	@Failure		500		{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/clients [post]
 func (h *Wallet) CreateClient(c *gin.Context) {
 	var req dto.CreateClientRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -38,9 +50,19 @@ func (h *Wallet) CreateClient(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.ClientRespFrom(res))
 }
 
-// POST /v1/onboard — OTP-free step 1 (US-1.1/1.7): create client + KYC + first
-// zero-balance wallet in one TX. CORP/MER require extra_data.business_reg_no +
-// legal_rep (BR-09 → 422 ORG_FIELDS_REQUIRED).
+// Onboard godoc
+//
+//	@Summary		Onboard a client (OTP-free)
+//	@Description	US-1.1/1.7 — create client + KYC + first zero-balance wallet in one TX. CORP/MER require extra_data.business_reg_no + legal_rep (BR-09).
+//	@Tags			clients
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.OnboardRequest	true	"Onboard request"
+//	@Success		201		{object}	dto.OnboardResponse	"Created"
+//	@Failure		400		{object}	dto.ProblemDetails	"Validation error"
+//	@Failure		422		{object}	dto.ProblemDetails	"Business rule violation (e.g. ORG_FIELDS_REQUIRED)"
+//	@Failure		500		{object}	dto.ProblemDetails	"Internal error"
+//	@Router			/v1/onboard [post]
 func (h *Wallet) Onboard(c *gin.Context) {
 	var req dto.OnboardRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -73,7 +95,21 @@ func (h *Wallet) Onboard(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.OnboardRespFrom(res))
 }
 
-// POST /v1/clients/:client_no/kyc — update KYC info / eKYC + raise tier (US-1.2).
+// UpdateKYC godoc
+//
+//	@Summary		Update client KYC
+//	@Description	Submit/update eKYC info and raise the KYC tier (US-1.2). Reaching tier >= 2 stamps verified_at.
+//	@Tags			clients
+//	@Accept			json
+//	@Produce		json
+//	@Param			client_no	path		string					true	"Client number"
+//	@Param			request		body		dto.KycUpdateRequest	true	"KYC update request"
+//	@Success		200			{object}	dto.KycResponse			"OK"
+//	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
+//	@Failure		404			{object}	dto.ProblemDetails		"Client not found"
+//	@Failure		422			{object}	dto.ProblemDetails		"Business rule violation"
+//	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/clients/{client_no}/kyc [post]
 func (h *Wallet) UpdateKYC(c *gin.Context) {
 	var req dto.KycUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -99,9 +135,20 @@ func (h *Wallet) UpdateKYC(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.KycRespFrom(res))
 }
 
-// GET /v1/clients?status=&client_type=&limit=&after= — MASKED client list
-// (wallet_app via v_client_masked). Optional status (A|B|C) / client_type
-// (IND|CORP|MER) filters; paged at 200 items/page (keyset via next_cursor → ?after=).
+// ListClients godoc
+//
+//	@Summary		List clients (masked)
+//	@Description	Masked client list (PII masked), keyset-paginated by client_no ascending. Optional status / client_type filters. Pass next_cursor as ?after= for the next page.
+//	@Tags			clients
+//	@Produce		json
+//	@Param			status		query		string					false	"Filter by status (A|B|C)"
+//	@Param			client_type	query		string					false	"Filter by client_type (IND|CORP|MER)"
+//	@Param			limit		query		int						false	"Page size (1..200, default 100)"
+//	@Param			after		query		string					false	"Keyset cursor: return rows with client_no > after"
+//	@Success		200			{object}	dto.ClientListResponse	"OK"
+//	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
+//	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/clients [get]
 func (h *Wallet) ListClients(c *gin.Context) {
 	limit := domain.DefaultClientPageSize
 	if v := c.Query("limit"); v != "" {
@@ -135,8 +182,17 @@ func (h *Wallet) ListClients(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ClientListRespFrom(q, res))
 }
 
-// GET /v1/clients/:client_no — MASKED client profile (wallet_app via
-// v_client_masked). Name + CCCD/passport masked; unknown client_no → 404.
+// GetClient godoc
+//
+//	@Summary		Get a client (masked)
+//	@Description	Masked client profile (name + CCCD/passport masked); raw PII never exposed on this path.
+//	@Tags			clients
+//	@Produce		json
+//	@Param			client_no	path		string						true	"Client number"
+//	@Success		200			{object}	dto.ClientProfileResponse	"OK"
+//	@Failure		404			{object}	dto.ProblemDetails			"Client not found"
+//	@Failure		500			{object}	dto.ProblemDetails			"Internal error"
+//	@Router			/v1/clients/{client_no} [get]
 func (h *Wallet) GetClient(c *gin.Context) {
 	res, err := h.svc.GetClient(c.Request.Context(), c.Param("client_no"))
 	if err != nil {
@@ -146,8 +202,17 @@ func (h *Wallet) GetClient(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ClientProfileRespFrom(res))
 }
 
-// GET /v1/ops/clients/:client_no — UNMASKED client profile (privileged,
-// wallet_pii_ro pool). Returns raw name + CCCD/passport; unknown client_no → 404.
+// GetClientFull godoc
+//
+//	@Summary		Get a client (unmasked, ops)
+//	@Description	Privileged P1/PII read — raw name + CCCD/passport (wallet_pii_ro pool). Phone/email stay encrypted at rest.
+//	@Tags			ops
+//	@Produce		json
+//	@Param			client_no	path		string					true	"Client number"
+//	@Success		200			{object}	dto.ClientFullResponse	"OK"
+//	@Failure		404			{object}	dto.ProblemDetails		"Client not found"
+//	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/ops/clients/{client_no} [get]
 func (h *Wallet) GetClientFull(c *gin.Context) {
 	res, err := h.svc.GetClientFull(c.Request.Context(), c.Param("client_no"))
 	if err != nil {
@@ -157,7 +222,21 @@ func (h *Wallet) GetClientFull(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ClientFullRespFrom(res))
 }
 
-// PATCH /v1/clients/:client_no — update mutable client fields.
+// UpdateClient godoc
+//
+//	@Summary		Update a client
+//	@Description	Patch mutable identity fields of an existing client (all fields optional).
+//	@Tags			clients
+//	@Accept			json
+//	@Produce		json
+//	@Param			client_no	path		string					true	"Client number"
+//	@Param			request		body		dto.UpdateClientRequest	true	"Client update request"
+//	@Success		200			{object}	dto.ClientResponse		"OK"
+//	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
+//	@Failure		404			{object}	dto.ProblemDetails		"Client not found"
+//	@Failure		422			{object}	dto.ProblemDetails		"Business rule violation"
+//	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/clients/{client_no} [patch]
 func (h *Wallet) UpdateClient(c *gin.Context) {
 	var req dto.UpdateClientRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -183,7 +262,21 @@ func (h *Wallet) UpdateClient(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ClientRespFrom(res))
 }
 
-// POST /v1/clients/:client_no/banks — link a bank account (optionally default).
+// LinkClientBank godoc
+//
+//	@Summary		Link a bank account to a client
+//	@Description	Link a bank account (optionally as default). acct_no is plaintext in; the SP encrypts it at rest and never echoes it in clear.
+//	@Tags			clients
+//	@Accept			json
+//	@Produce		json
+//	@Param			client_no	path		string					true	"Client number"
+//	@Param			request		body		dto.LinkBankRequest		true	"Bank link request"
+//	@Success		201			{object}	dto.BankLinkResponse	"Created"
+//	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
+//	@Failure		404			{object}	dto.ProblemDetails		"Client not found"
+//	@Failure		422			{object}	dto.ProblemDetails		"Business rule violation"
+//	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/clients/{client_no}/banks [post]
 func (h *Wallet) LinkClientBank(c *gin.Context) {
 	var req dto.LinkBankRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -206,7 +299,19 @@ func (h *Wallet) LinkClientBank(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.BankLinkRespFrom(res))
 }
 
-// PUT /v1/clients/:client_no/banks/:link_id/default — set the default bank.
+// SetDefaultClientBank godoc
+//
+//	@Summary		Set default linked bank
+//	@Description	Make an existing linked bank the client's default.
+//	@Tags			clients
+//	@Produce		json
+//	@Param			client_no	path		string					true	"Client number"
+//	@Param			link_id		path		int						true	"Bank link id"
+//	@Success		200			{object}	dto.BankLinkResponse	"OK"
+//	@Failure		400			{object}	dto.ProblemDetails		"Invalid link id"
+//	@Failure		404			{object}	dto.ProblemDetails		"Client or link not found"
+//	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/clients/{client_no}/banks/{link_id}/default [put]
 func (h *Wallet) SetDefaultClientBank(c *gin.Context) {
 	linkID, err := strconv.ParseInt(c.Param("link_id"), 10, 64)
 	if err != nil {

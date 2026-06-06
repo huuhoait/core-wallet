@@ -22,6 +22,102 @@ import (
 	"github.com/ewallet-pg/wallet-service/internal/usecase"
 )
 
+// @title			Core Wallet API
+// @version		1.0
+// @description	Double-entry e-wallet ledger. The Go service is a thin RPC client over PostgreSQL stored functions; all balance validation, double-entry posting, fee/VAT and reversal logic run atomically in plpgsql. Scope is internal synchronous posting (top-up, transfer, withdraw, merchant settlement, fee/VAT, reversal). External rails (NAPAS, card 3DS, MT940) are out of scope.
+// @description
+// @description	## Error model
+// @description	Every error is returned as `application/problem+json` (RFC 7807 / RFC 9457). The body carries a stable `errorCode` (business contract), `errorMessage` (user-safe), `internal_code` (E#### for ops/logs), `iso20022_reason_code` (pain.002 reason), `transaction_status` (pain.002 status), `trace_id` and a `retry` hint. `detail` adds dynamic context; field-level validation failures appear under `errors`.
+// @description
+// @description	### Business error code catalogue
+// @description	| errorCode | internal_code | HTTP | ISO 20022 | Description |
+// @description	| --- | --- | --- | --- | --- |
+// @description	| INVALID_AMOUNT | E4024 | 400 | AM12 | The transaction amount is invalid or missing |
+// @description	| AMOUNT_OUT_OF_RANGE | E4024 | 400 | AM02 | The amount is outside the allowed range for this transaction type |
+// @description	| METADATA_TOO_LARGE | E4007 | 400 | - | The metadata payload exceeds the maximum allowed size (1 KB) |
+// @description	| METADATA_HAS_P1 | E4008 | 400 | - | The metadata contains forbidden PII keys (phone, email, cccd, passport, full_name, bank_acct_no) |
+// @description	| SAME_ACCOUNT | E4002 | 400 | BE01 | Source and destination accounts must be different |
+// @description	| TRAN_TYPE_INACTIVE | E4003 | 400 | AG02 | The requested transaction type is inactive or does not exist |
+// @description	| INVALID_REQUEST | E4001 | 400 | - | The request body is malformed or missing required fields |
+// @description	| INVALID_PHONE_FORMAT | E2001 | 400 | - | Phone number must match Vietnam format 0XXXXXXXXX (10 digits) |
+// @description	| INSUFFICIENT_FUNDS | E4022 | 422 | AM04 | The account balance is not sufficient to cover this transaction |
+// @description	| TIER_LIMIT_EXCEEDED | E4023 | 422 | AM02 | The transaction exceeds the daily or monthly limit for this account tier |
+// @description	| ACCT_ROLE_INVALID | E3008 | 422 | - | Operation only allowed on standalone wallets, not SHARD/SETTLEMENT accounts |
+// @description	| INVALID_CLIENT_TYPE | E2010 | 422 | - | Client type must be one of IND, CORP, MER |
+// @description	| INVALID_ACCT_TYPE | E3007 | 422 | - | The specified account type does not exist |
+// @description	| ACCT_CLOSE_NONZERO_BAL | E3003 | 422 | - | Account closure requires a zero balance |
+// @description	| ORG_FIELDS_REQUIRED | E2013 | 422 | - | Corporate/merchant clients must provide business_reg_no and legal_rep in extra_data |
+// @description	| INVALID_SHARD_COUNT | E3030 | 422 | - | Shard count must be 4, 8, or 16 |
+// @description	| INVALID_GROUP_TYPE | E3032 | 422 | - | Group type must be one of MERCHANT, AGENT, NOSTRO_HOT |
+// @description	| INVALID_DATE | E8003 | 422 | DT01 | The as_of_date parameter is invalid or refers to a future date |
+// @description	| BATCH_SIZE_EXCEEDED | E8004 | 422 | - | The batch request exceeds the maximum number of items (100) |
+// @description	| RESTRAINT_TYPE_INVALID | E3022 | 422 | - | Restraint type must be one of DEBIT, CREDIT, ALL, INFO |
+// @description	| RESTRAINT_PURPOSE_INVALID | E3023 | 422 | - | Restraint purpose is not a recognized value |
+// @description	| RESTRAINT_TYPE_PURPOSE_CONFLICT | E3024 | 422 | - | The restraint type/purpose combination is not allowed |
+// @description	| RESTRAINT_AMT_EXCEEDS_BALANCE | E3025 | 422 | AM04 | The pledged amount cannot exceed the current account balance |
+// @description	| RESTRAINT_DATE_INVALID | E3026 | 422 | DT01 | The end_date must be on or after the start_date |
+// @description	| COURT_ORDER_REMOVE_REQUIRES_DOC | E3027 | 422 | RR04 | Removing a COURT_ORDER/TAX_LIEN restraint requires a reference_doc |
+// @description	| TIER_INSUFFICIENT | E2007 | 403 | RR04 | Your KYC tier does not permit this operation |
+// @description	| FORBIDDEN | E1006 | 403 | AG01 | You do not have permission to perform this operation |
+// @description	| UNAUTHORIZED | E1001 | 401 | - | Authentication is required or the provided credentials are invalid |
+// @description	| DR_RESTRAINT_ACTIVE | E3005 | 423 | AC06 | The account has an active debit restraint (hold/lien) |
+// @description	| CR_RESTRAINT_ACTIVE | E3006 | 423 | AC06 | The account has an active credit restraint |
+// @description	| ACCT_NOT_FOUND | E3001 | 404 | AC01 | The specified account does not exist |
+// @description	| CLIENT_NOT_FOUND | E2011 | 404 | - | No client record found for the specified client number |
+// @description	| KYC_NOT_FOUND | E2012 | 404 | - | No KYC record exists for this client |
+// @description	| BANK_LINK_NOT_FOUND | E2014 | 404 | - | No linked bank account found with the specified ID |
+// @description	| RESTRAINT_NOT_FOUND | E3020 | 404 | - | No restraint exists with the specified ID |
+// @description	| WD_NOT_FOUND | E6101 | 404 | - | No withdrawal record found for the given payout reference |
+// @description	| ACCT_NOT_ACTIVE | E3004 | 403 | AC04 | The account is blocked or closed and cannot process transactions |
+// @description	| VERSION_CONFLICT | E4025 | 409 | - | Another transaction updated this account simultaneously; retryable |
+// @description	| DUPLICATE_REFERENCE | E4011 | 409 | AM05 | A transaction with this reference has already been processed |
+// @description	| CLIENT_ALREADY_EXISTS | E2009 | 409 | AM05 | A client with this identity document already exists |
+// @description	| PHONE_ALREADY_REGISTERED | E2002 | 409 | AM05 | This phone number is already associated with an existing account |
+// @description	| MAX_WALLET_PER_CLIENT_EXCEEDED | E3002 | 409 | - | Maximum number of wallets reached (CONSUMER 3 per currency, MERCHANT 10) |
+// @description	| GROUP_ALREADY_ACTIVATED | E3031 | 409 | - | This merchant group has already been activated with shards |
+// @description	| GROUP_ALREADY_EXISTS | E3033 | 409 | AM05 | A group with this ID already exists |
+// @description	| GROUP_NOT_ACTIVATED | E3034 | 409 | - | This group is still cold (0 shards); activate it before rescaling |
+// @description	| RESTRAINT_ALREADY_REMOVED | E3021 | 409 | - | This restraint has already been released or expired |
+// @description	| WD_ALREADY_COMPLETED | E6102 | 409 | - | This withdrawal has already reached COMPLETED status |
+// @description	| WD_INVALID_STATE | E6103 | 409 | - | The withdrawal is in a state that does not permit this transition |
+// @description	| WD_ALREADY_REVERSED | E6104 | 409 | - | This withdrawal has already been reversed |
+// @description	| PERIOD_CLOSED | E8005 | 409 | DT01 | The target accounting date is sealed; post against the current open period |
+// @description	| GONE_ONLINE | E8001 | 410 | - | Historical data beyond the online retention period; request an archive extract |
+// @description	| TIMEOUT | E9004 | 504 | - | The request exceeded the allowed processing time; you may retry (503 on lock timeout) |
+// @description	| PII_DEK_NOT_SET | E5005 | 500 | - | The server PII data-encryption key (DEK) is not set |
+// @description	| BATCH_UNBALANCED | E5003 | 500 | - | Internal double-entry invariant violated (sum of debits != sum of credits) |
+// @description	| INTERNAL_ERROR | E9001 | 500 | - | An unexpected error occurred; please retry or contact support |
+// @description
+// @description		Family fallbacks: any `*_NOT_FOUND` -> 404, `*_NOT_ACTIVE` -> 403, `*_CONFLICT` -> 409 (e.g. GROUP_NOT_FOUND, SETTLEMENT_NOT_FOUND, GROUP_NOT_ACTIVE).
+// @termsOfService		https://docs.wallet.example/terms
+//
+// @contact.name		Core Wallet Team
+// @contact.email		hoalh2@hdbank.com.vn
+//
+// @license.name		Proprietary
+//
+// @host				localhost:8080
+// @BasePath			/
+//
+// @accept				json
+// @produce			json
+//
+// @tag.name			health
+// @tag.description	Liveness/readiness probe
+// @tag.name			finance
+// @tag.description	Money movement + ledger reads (topup, transfer, withdraw, merchant, reversals, fee/VAT, statement, restraints)
+// @tag.name			clients
+// @tag.description	Client master CRUD, onboarding, KYC, linked banks
+// @tag.name			accounts
+// @tag.description	Wallet lifecycle + profile + balance reads
+// @tag.name			merchant-groups
+// @tag.description	Merchant hot-wallet group lifecycle (provision -> activate -> rescale)
+// @tag.name			ops
+// @tag.description	Privileged/internal reads (full balance, batch balance, unmasked client PII)
+// @tag.name			treasury
+// @tag.description	Withdrawal disbursement state machine (S2S callbacks)
+//
+// @schemes			http https
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,

@@ -10,8 +10,20 @@ import (
 	"github.com/ewallet-pg/wallet-service/internal/http/middleware"
 )
 
-// POST /v1/finance/fee-charge — charge a standalone fee + VAT against a wallet
-// (annual / penalty / service fee), not tied to any money movement (US-2.8).
+// FeeCharge godoc
+//
+//	@Summary		Charge a standalone fee + VAT
+//	@Description	Charge an annual/penalty/service fee (with VAT) against a wallet, not tied to any money movement (US-2.8). Idempotent on `reference`.
+//	@Tags			finance
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.FeeChargeRequest	true	"Fee charge request"
+//	@Success		201		{object}	dto.FeeChargeResponse	"Posted"
+//	@Success		200		{object}	dto.FeeChargeResponse	"Duplicate idempotent replay"
+//	@Failure		400		{object}	dto.ProblemDetails		"Validation error"
+//	@Failure		422		{object}	dto.ProblemDetails		"Business rule violation (e.g. insufficient funds)"
+//	@Failure		500		{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/finance/fee-charge [post]
 func (h *Wallet) FeeCharge(c *gin.Context) {
 	var req dto.FeeChargeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -34,8 +46,20 @@ func (h *Wallet) FeeCharge(c *gin.Context) {
 	c.JSON(statusFor(res.Status), dto.FeeChargeRespFrom(res))
 }
 
-// POST /v1/finance/fee-charge/reverse — reverse a standalone fee charge by its
-// original reference (US-2.8).
+// ReverseFeeCharge godoc
+//
+//	@Summary		Reverse a standalone fee charge
+//	@Description	Reverse a fee charge by its original `reference` (US-2.8). Idempotent.
+//	@Tags			finance
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.FeeChargeReversalRequest	true	"Fee reversal request"
+//	@Success		200		{object}	dto.FeeChargeReversalResponse	"OK"
+//	@Failure		400		{object}	dto.ProblemDetails				"Validation error"
+//	@Failure		404		{object}	dto.ProblemDetails				"Original charge not found"
+//	@Failure		422		{object}	dto.ProblemDetails				"Business rule violation"
+//	@Failure		500		{object}	dto.ProblemDetails				"Internal error"
+//	@Router			/v1/finance/fee-charge/reverse [post]
 func (h *Wallet) ReverseFeeCharge(c *gin.Context) {
 	var req dto.FeeChargeReversalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

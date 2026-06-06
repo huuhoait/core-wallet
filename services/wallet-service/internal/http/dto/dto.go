@@ -76,14 +76,14 @@ func TransferRespFrom(r *domain.TransferResult) TransferResponse {
 // ----- withdraw -------------------------------------------------------------
 
 type WithdrawRequest struct {
-	AcctNo           string         `json:"acct_no"            binding:"required,acct_no"`
-	Amount           string         `json:"amount"             binding:"required,money"`
-	Reference        string         `json:"reference"          binding:"required,min=8,max=64"`
-	ExtPayoutRef     string         `json:"ext_payout_ref"     binding:"required,min=8,max=64"`
-	BeneficiaryBank  string         `json:"beneficiary_bank"   binding:"required,min=3,max=20"`
-	BeneficiaryAcct  string         `json:"beneficiary_acct"   binding:"required,min=6,max=40"`
-	Narrative        string         `json:"narrative,omitempty" binding:"omitempty,max=250"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
+	AcctNo          string         `json:"acct_no"            binding:"required,acct_no"`
+	Amount          string         `json:"amount"             binding:"required,money"`
+	Reference       string         `json:"reference"          binding:"required,min=8,max=64"`
+	ExtPayoutRef    string         `json:"ext_payout_ref"     binding:"required,min=8,max=64"`
+	BeneficiaryBank string         `json:"beneficiary_bank"   binding:"required,min=3,max=20"`
+	BeneficiaryAcct string         `json:"beneficiary_acct"   binding:"required,min=6,max=40"`
+	Narrative       string         `json:"narrative,omitempty" binding:"omitempty,max=250"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
 }
 
 type WithdrawResponse struct {
@@ -189,14 +189,14 @@ func MarkRespFrom(r *domain.MarkResult) MarkResponse {
 }
 
 type ReversalResponse struct {
-	ReversalTranKey     int64  `json:"reversal_tran_key"`
+	ReversalTranKey    int64  `json:"reversal_tran_key"`
 	WasAlreadyReversed bool   `json:"was_already_reversed"`
 	EventUUID          string `json:"event_uuid,omitempty"`
 }
 
 func ReversalRespFrom(r *domain.ReversalResult) ReversalResponse {
 	out := ReversalResponse{
-		ReversalTranKey:     r.ReversalTranKey,
+		ReversalTranKey:    r.ReversalTranKey,
 		WasAlreadyReversed: r.WasAlreadyReversed,
 	}
 	if r.EventUUID.String() != "00000000-0000-0000-0000-000000000000" {
@@ -215,19 +215,19 @@ const ProblemTypeBase = "https://docs.wallet.example/errors/"
 // `application/problem+json`. The first five fields are RFC 7807; the rest are
 // bank extensions documented in error_management.md §3 / §13.
 type ProblemDetails struct {
-	Type     string `json:"type,omitempty"`     // RFC7807: URI to error doc
-	Title    string `json:"title"`              // RFC7807: short human title
-	Status   int    `json:"status"`             // RFC7807: HTTP status code
-	Detail   string `json:"detail,omitempty"`   // RFC7807: human-readable detail (dynamic context)
-	Instance string `json:"instance,omitempty"` // RFC7807: request path
+	Type     string `json:"type,omitempty" example:"https://docs.wallet.example/errors/INSUFFICIENT_FUNDS"` // RFC7807: URI to error doc
+	Title    string `json:"title" example:"Insufficient funds"`                                             // RFC7807: short human title
+	Status   int    `json:"status" example:"422"`                                                           // RFC7807: HTTP status code
+	Detail   string `json:"detail,omitempty" example:"available 50000 < required 100000"`                   // RFC7807: human-readable detail (dynamic context)
+	Instance string `json:"instance,omitempty" example:"/v1/finance/transfer"`                              // RFC7807: request path
 
-	ErrorCode         string         `json:"errorCode"`                      // stable business error code (canonical contract)
-	ErrorMessage      string         `json:"errorMessage"`                   // stable human message for this code (i18n source, safe for end-user)
-	InternalCode      string         `json:"internal_code,omitempty"`        // E#### for log/alert (§5)
-	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty"` // ISO 20022 External Status Reason (§13.2)
-	TransactionStatus string         `json:"transaction_status,omitempty"`   // pain.002 status (§13.3)
-	TraceID           string         `json:"trace_id,omitempty"`             // = X-Request-Id
-	Timestamp         string         `json:"timestamp,omitempty"`            // RFC 3339
+	ErrorCode         string         `json:"errorCode" example:"INSUFFICIENT_FUNDS"`                                                 // stable business error code (canonical contract)
+	ErrorMessage      string         `json:"errorMessage" example:"The account balance is not sufficient to cover this transaction"` // stable human message for this code (i18n source, safe for end-user)
+	InternalCode      string         `json:"internal_code,omitempty" example:"E4022"`                                                // E#### for log/alert (§5)
+	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty" example:"AM04"`                                          // ISO 20022 External Status Reason (§13.2)
+	TransactionStatus string         `json:"transaction_status,omitempty" example:"RJCT"`                                            // pain.002 status (§13.3)
+	TraceID           string         `json:"trace_id,omitempty" example:"5f3b2c8e-1a2b-4c3d-9e8f-0a1b2c3d4e5f"`                      // = X-Request-Id
+	Timestamp         string         `json:"timestamp,omitempty" example:"2026-06-06T07:30:00Z"`                                     // RFC 3339
 	Retry             *RetryInfo     `json:"retry,omitempty"`
 	Details           map[string]any `json:"details,omitempty"`
 	Errors            []FieldError   `json:"errors,omitempty"` // field-level (Berlin Group / OBIE style)

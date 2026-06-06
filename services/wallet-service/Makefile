@@ -17,6 +17,10 @@ help: ## Show available targets
 tidy: ## go mod tidy
 	go mod tidy
 
+.PHONY: swagger
+swagger: ## regenerate OpenAPI/Swagger docs into docs/ (requires `go install github.com/swaggo/swag/cmd/swag@latest`)
+	swag init -g cmd/server/main.go -o docs --parseInternal
+
 .PHONY: build
 build: ## build the binary
 	CGO_ENABLED=0 go build $(GOFLAGS) -ldflags='$(LDFLAGS)' -o bin/$(BIN) ./cmd/server
