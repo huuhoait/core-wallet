@@ -116,6 +116,7 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 			clients.GET("", h.ListClients)                              // MASKED list (?status=&client_type=&limit=&after=)
 			clients.GET("/:client_no", h.GetClient)                     // MASKED profile (PII masked)
 			clients.GET("/:client_no/accounts", h.ListAccountsByClient) // all wallets owned by the client
+			clients.GET("/:client_no/360", h.GetClient360)              // MASKED 360 (profile + wallets + banks + restraints)
 			clients.PATCH("/:client_no", h.UpdateClient)
 			clients.POST("/:client_no/kyc", h.UpdateKYC)                              // submit/update eKYC + raise tier
 			clients.POST("/:client_no/banks", h.LinkClientBank)                       // link a bank account
@@ -145,7 +146,9 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 		}
 		opsClients := v1.Group("/ops/clients", middleware.RequireAnyRole(middleware.RoleOpsRead))
 		{
-			opsClients.GET("/:client_no", h.GetClientFull) // UNMASKED profile (privileged, wallet_pii_ro)
+			opsClients.GET("", h.ListClientsFull)                 // UNMASKED list (raw + decrypted phone/email)
+			opsClients.GET("/:client_no", h.GetClientFull)        // UNMASKED profile (privileged, wallet_pii_ro)
+			opsClients.GET("/:client_no/360", h.GetClientFull360) // UNMASKED 360 (raw + decrypted PII)
 		}
 
 		// ── Treasury: withdrawal disbursement state machine (S2S callbacks) ──

@@ -199,4 +199,9 @@ type ClientFullView struct {
 	KycStatus      *string
 	RiskLevel      *string
 	VerifiedAt     *time.Time
+	// Phone/Email are the DECRYPTED contact values, populated only on the
+	// privileged 360 / unmasked-list paths (wallet_pii_ro + DEK). The legacy
+	// single-profile GetClientFull leaves them nil (PII stays encrypted there).
+	Phone *string
+	Email *string
 }

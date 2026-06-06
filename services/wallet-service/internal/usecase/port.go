@@ -77,6 +77,12 @@ type WalletRepository interface {
 	// ListClients returns masked client profiles (v_client_masked, wallet_app),
 	// keyset-paginated by client_no.
 	ListClients(ctx context.Context, q domain.ClientListQuery) ([]domain.ClientView, error)
+	// ListClientsFull returns UNMASKED client profiles (raw + decrypted phone/email,
+	// wallet_pii_ro), keyset-paginated by client_no.
+	ListClientsFull(ctx context.Context, q domain.ClientListQuery) ([]domain.ClientFullView, error)
+	// GetClient360 aggregates profile + wallets + banks + restraints. unmask=false
+	// → masked (wallet_app); unmask=true → raw + decrypted PII (wallet_pii_ro).
+	GetClient360(ctx context.Context, clientNo string, unmask bool) (*domain.Client360, error)
 
 	// Client linked-bank management (link_client_bank / set_default_client_bank).
 	LinkClientBank(ctx context.Context, in domain.BankLinkInput) (*domain.BankLinkResult, error)

@@ -574,6 +574,211 @@
               }
             }
           ]
+        },
+        {
+          "name": "GET client accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/clients/{{client_no}}/accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients",
+                "{{client_no}}",
+                "accounts"
+              ]
+            },
+            "description": "All wallets owned by the client (account profiles, no PII). Run create-client/onboard + open-account first to set {{client_no}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404',()=>pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if(pm.response.code===200){const b=pm.response.json().data;pm.test('items[]',()=>pm.expect(b.items).to.be.an('array'));}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET client 360 (masked)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/clients/{{client_no}}/360",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "clients",
+                "{{client_no}}",
+                "360"
+              ]
+            },
+            "description": "Client 360 (MASKED): profile + wallets + linked banks (acct_no masked '****'+last4) + restraints. PII masked (wallet_app)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404',()=>pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if(pm.response.code===200){const d=pm.response.json().data;pm.test('shape',()=>{pm.expect(d).to.have.property('profile');pm.expect(d).to.have.property('accounts');pm.expect(d).to.have.property('banks');pm.expect(d).to.have.property('restraints');});}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET client 360 UNMASKED (ops)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/ops/clients/{{client_no}}/360",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "ops",
+                "clients",
+                "{{client_no}}",
+                "360"
+              ]
+            },
+            "description": "Client 360 (UNMASKED, ops/wallet_pii_ro): raw profile + DECRYPTED phone/email + banks (acct_no decrypted) + restraints. Requires the PII read pool (DB_PII_DSN -> wallet_pii_ro) and role wallet.ops.read when JWT is enabled."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 404',()=>pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+                  "if(pm.response.code===200){const p=pm.response.json().data.profile;pm.test('raw profile',()=>pm.expect(p).to.have.property('client_name'));}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET clients UNMASKED list (ops)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/ops/clients?limit=50&after={{client_after}}&status=A&client_type=IND",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "ops",
+                "clients"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "page size (1..200, default 100)"
+                },
+                {
+                  "key": "after",
+                  "value": "{{client_after}}",
+                  "description": "keyset cursor: client_no from previous next_cursor",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "A",
+                  "description": "filter status A|B|C",
+                  "disabled": true
+                },
+                {
+                  "key": "client_type",
+                  "value": "IND",
+                  "description": "filter IND|CORP|MER",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "UNMASKED client list (ops/wallet_pii_ro): raw name + CCCD + decrypted phone/email, keyset-paginated. Pair of the masked GET /v1/clients."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200',()=>pm.expect(pm.response.code).to.eql(200));",
+                  "if(pm.response.code===200){const d=pm.response.json().data;pm.test('items[]',()=>pm.expect(d.items).to.be.an('array'));if(d.next_cursor)pm.environment.set('client_after',d.next_cursor);}"
+                ]
+              }
+            }
+          ]
         }
       ]
     },

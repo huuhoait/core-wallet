@@ -221,6 +221,8 @@ type ClientFullResponse struct {
 	ClientType     *string    `json:"client_type,omitempty"`
 	GlobalID       *string    `json:"global_id,omitempty"`
 	GlobalIDType   *string    `json:"global_id_type,omitempty"`
+	Phone          *string    `json:"phone,omitempty"` // decrypted; only on 360/list paths
+	Email          *string    `json:"email,omitempty"` // decrypted; only on 360/list paths
 	CountryLoc     *string    `json:"country_loc,omitempty"`
 	CountryCitizen *string    `json:"country_citizen,omitempty"`
 	ClientGrp      *string    `json:"client_grp,omitempty"`
@@ -244,7 +246,7 @@ type ClientFullResponse struct {
 func ClientFullRespFrom(c *domain.ClientFullView) ClientFullResponse {
 	return ClientFullResponse{
 		ClientNo: c.ClientNo, ClientName: c.ClientName, ClientType: c.ClientType,
-		GlobalID: c.GlobalID, GlobalIDType: c.GlobalIDType,
+		GlobalID: c.GlobalID, GlobalIDType: c.GlobalIDType, Phone: c.Phone, Email: c.Email,
 		CountryLoc: c.CountryLoc, CountryCitizen: c.CountryCitizen, ClientGrp: c.ClientGrp, AcctExec: c.AcctExec,
 		Status: c.Status, RegisteredDate: datePtr(c.RegisteredDate), CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 		Surname: c.Surname, GivenName: c.GivenName, BirthDate: datePtr(c.BirthDate), Sex: c.Sex,

@@ -4489,6 +4489,32 @@ CREATE VIEW public.v_kyc_masked AS
 
 
 --
+-- Name: v_client_banks_masked; Type: VIEW; Schema: public; Owner: -
+--
+-- A client's linked banks with the account number MASKED ('****' + last 4). The
+-- raw acct_no is stored encrypted (ACCT_NO_ENC); the view decrypts with the
+-- DB-level DEK and re-masks so wallet_app (which lacks SELECT on FM_CLIENT_BANKS)
+-- can show bank metadata + a masked acct_no without ever seeing the cleartext.
+-- Runs with the view owner's rights; the unmasked path reads FM_CLIENT_BANKS
+-- directly via wallet_pii_ro.
+
+CREATE VIEW public.v_client_banks_masked AS
+ SELECT b.link_id,
+    b.client_no,
+    b.bank_code,
+    b.bank_name,
+        CASE
+            WHEN (b.acct_no_enc IS NULL) THEN NULL::text
+            ELSE ('****'::text || "right"(public.pgp_sym_decrypt(b.acct_no_enc, current_setting('app.pii_dek'::text), 'cipher-algo=aes256'::text), 4))
+        END AS acct_no_masked,
+    b.acct_holder_name,
+    b.is_default,
+    b.status,
+    b.created_at
+   FROM public.fm_client_banks b;
+
+
+--
 -- Name: wlt_acct; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6611,6 +6637,14 @@ GRANT SELECT ON TABLE public.v_client_masked TO wallet_pii_ro;
 
 GRANT SELECT ON TABLE public.v_kyc_masked TO wallet_app;
 GRANT SELECT ON TABLE public.v_kyc_masked TO wallet_pii_ro;
+
+
+--
+-- Name: VIEW v_client_banks_masked; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT ON TABLE public.v_client_banks_masked TO wallet_app;
+GRANT SELECT ON TABLE public.v_client_banks_masked TO wallet_pii_ro;
 
 
 --

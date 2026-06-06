@@ -150,19 +150,60 @@ func (h *Wallet) UpdateKYC(c *gin.Context) {
 //	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
 //	@Router			/v1/clients [get]
 func (h *Wallet) ListClients(c *gin.Context) {
+	q, ok := parseClientListQuery(c)
+	if !ok {
+		return
+	}
+	res, err := h.svc.ListClients(c.Request.Context(), q)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	writeOK(c, http.StatusOK, dto.ClientListRespFrom(q, res))
+}
+
+// ListClientsFull godoc
+//
+//	@Summary		List clients (unmasked, ops)
+//	@Description	UNMASKED client list — raw name + CCCD + decrypted phone/email (wallet_pii_ro). Same filters/keyset as the masked list. Privileged P1/PII read.
+//	@Tags			ops
+//	@Produce		json
+//	@Param			status		query		string	false	"Filter by status (A|B|C)"
+//	@Param			client_type	query		string	false	"Filter by client_type (IND|CORP|MER)"
+//	@Param			limit		query		int		false	"Page size (1..200, default 100)"
+//	@Param			after		query		string	false	"Keyset cursor: return rows with client_no > after"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.ClientFullListResponse}	"OK"
+//	@Failure		400			{object}	dto.ProblemDetails	"Validation error"
+//	@Failure		500			{object}	dto.ProblemDetails	"Internal error"
+//	@Router			/v1/ops/clients [get]
+func (h *Wallet) ListClientsFull(c *gin.Context) {
+	q, ok := parseClientListQuery(c)
+	if !ok {
+		return
+	}
+	res, err := h.svc.ListClientsFull(c.Request.Context(), q)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	writeOK(c, http.StatusOK, dto.ClientFullListRespFrom(q, res))
+}
+
+// parseClientListQuery parses the shared ?status=&client_type=&limit=&after=
+// pagination params. On a bad value it renders the 400 and returns ok=false.
+func parseClientListQuery(c *gin.Context) (domain.ClientListQuery, bool) {
 	limit := domain.DefaultClientPageSize
 	if v := c.Query("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
 			renderError(c, domain.InvalidRequest("invalid limit (positive integer)", nil))
-			return
+			return domain.ClientListQuery{}, false
 		}
 		limit = n
 	}
 	if limit > domain.MaxClientPageSize {
 		limit = domain.MaxClientPageSize
 	}
-
 	q := domain.ClientListQuery{Limit: limit}
 	if v := c.Query("after"); v != "" {
 		q.AfterNo = &v
@@ -173,13 +214,7 @@ func (h *Wallet) ListClients(c *gin.Context) {
 	if v := c.Query("client_type"); v != "" {
 		q.ClientType = &v
 	}
-
-	res, err := h.svc.ListClients(c.Request.Context(), q)
-	if err != nil {
-		renderError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, dto.ClientListRespFrom(q, res))
+	return q, true
 }
 
 // GetClient godoc
@@ -202,6 +237,26 @@ func (h *Wallet) GetClient(c *gin.Context) {
 	writeOK(c, http.StatusOK, dto.ClientProfileRespFrom(res))
 }
 
+// GetClient360 godoc
+//
+//	@Summary		Client 360 (masked)
+//	@Description	Aggregate customer view — masked profile + wallets + linked banks (acct_no masked) + restraints. PII masked (wallet_app). Unknown client → 404.
+//	@Tags			clients
+//	@Produce		json
+//	@Param			client_no	path		string	true	"Client number"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.Client360Response}	"OK"
+//	@Failure		404			{object}	dto.ProblemDetails	"Client not found"
+//	@Failure		500			{object}	dto.ProblemDetails	"Internal error"
+//	@Router			/v1/clients/{client_no}/360 [get]
+func (h *Wallet) GetClient360(c *gin.Context) {
+	res, err := h.svc.GetClient360(c.Request.Context(), c.Param("client_no"), false)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	writeOK(c, http.StatusOK, dto.Client360RespFrom(res))
+}
+
 // GetClientFull godoc
 //
 //	@Summary		Get a client (unmasked, ops)
@@ -220,6 +275,26 @@ func (h *Wallet) GetClientFull(c *gin.Context) {
 		return
 	}
 	writeOK(c, http.StatusOK, dto.ClientFullRespFrom(res))
+}
+
+// GetClientFull360 godoc
+//
+//	@Summary		Client 360 (unmasked, ops)
+//	@Description	Aggregate customer view — raw profile with decrypted phone/email + wallets + linked banks (acct_no decrypted) + restraints. Privileged P1/PII read (wallet_pii_ro). Unknown client → 404.
+//	@Tags			ops
+//	@Produce		json
+//	@Param			client_no	path		string	true	"Client number"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.Client360Response}	"OK"
+//	@Failure		404			{object}	dto.ProblemDetails	"Client not found"
+//	@Failure		500			{object}	dto.ProblemDetails	"Internal error"
+//	@Router			/v1/ops/clients/{client_no}/360 [get]
+func (h *Wallet) GetClientFull360(c *gin.Context) {
+	res, err := h.svc.GetClient360(c.Request.Context(), c.Param("client_no"), true)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	writeOK(c, http.StatusOK, dto.Client360RespFrom(res))
 }
 
 // UpdateClient godoc

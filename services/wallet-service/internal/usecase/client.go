@@ -56,6 +56,24 @@ func (s *WalletService) GetClientFull(ctx context.Context, clientNo string) (*do
 	return s.repo.GetClientFull(ctx, clientNo)
 }
 
+// ListClientsFull returns a keyset-paginated page of UNMASKED client profiles
+// (wallet_pii_ro path, ops only). Page size clamped to [1, MaxClientPageSize].
+func (s *WalletService) ListClientsFull(ctx context.Context, q domain.ClientListQuery) ([]domain.ClientFullView, error) {
+	if q.Limit <= 0 {
+		q.Limit = domain.DefaultClientPageSize
+	}
+	if q.Limit > domain.MaxClientPageSize {
+		q.Limit = domain.MaxClientPageSize
+	}
+	return s.repo.ListClientsFull(ctx, q)
+}
+
+// GetClient360 returns the aggregate customer view (profile + wallets + banks +
+// restraints). unmask=true exposes raw PII (wallet_pii_ro, /v1/ops only).
+func (s *WalletService) GetClient360(ctx context.Context, clientNo string, unmask bool) (*domain.Client360, error) {
+	return s.repo.GetClient360(ctx, clientNo, unmask)
+}
+
 // ListClients returns a keyset-paginated page of masked client profiles
 // (wallet_app path). Page size is clamped to [1, MaxClientPageSize].
 func (s *WalletService) ListClients(ctx context.Context, q domain.ClientListQuery) ([]domain.ClientView, error) {

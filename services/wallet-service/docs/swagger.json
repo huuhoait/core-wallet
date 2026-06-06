@@ -572,6 +572,59 @@
                 }
             }
         },
+        "/v1/clients/{client_no}/360": {
+            "get": {
+                "description": "Aggregate customer view — masked profile + wallets + linked banks (acct_no masked) + restraints. PII masked (wallet_app). Unknown client → 404.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Client 360 (masked)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.Client360Response"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/clients/{client_no}/accounts": {
             "get": {
                 "description": "List every wallet owned by a client (full account profiles, no client PII), oldest-first. A client with no wallets returns an empty list; unknown client → 404.",
@@ -2448,6 +2501,76 @@
                 }
             }
         },
+        "/v1/ops/clients": {
+            "get": {
+                "description": "UNMASKED client list — raw name + CCCD + decrypted phone/email (wallet_pii_ro). Same filters/keyset as the masked list. Privileged P1/PII read.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "List clients (unmasked, ops)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by status (A|B|C)",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by client_type (IND|CORP|MER)",
+                        "name": "client_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (1..200, default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Keyset cursor: return rows with client_no \u003e after",
+                        "name": "after",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientFullListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/ops/clients/{client_no}": {
             "get": {
                 "description": "Privileged P1/PII read — raw name + CCCD/passport (wallet_pii_ro pool). Phone/email stay encrypted at rest.",
@@ -2480,6 +2603,59 @@
                                     "properties": {
                                         "data": {
                                             "$ref": "#/definitions/dto.ClientFullResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/ops/clients/{client_no}/360": {
+            "get": {
+                "description": "Aggregate customer view — raw profile with decrypted phone/email + wallets + linked banks (acct_no decrypted) + restraints. Privileged P1/PII read (wallet_pii_ro). Unknown client → 404.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Client 360 (unmasked, ops)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.Client360Response"
                                         }
                                     }
                                 }
@@ -3147,6 +3323,210 @@
                 }
             }
         },
+        "dto.Client360Account": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "acct_open_date": {
+                    "type": "string"
+                },
+                "acct_role": {
+                    "type": "string"
+                },
+                "acct_status": {
+                    "type": "string"
+                },
+                "acct_type": {
+                    "type": "string"
+                },
+                "actual_bal": {
+                    "type": "string"
+                },
+                "available_bal": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "cr_blocked": {
+                    "type": "string"
+                },
+                "last_tran_date": {
+                    "type": "string"
+                },
+                "prev_day_bal": {
+                    "type": "string"
+                },
+                "restrained_amt": {
+                    "type": "string"
+                },
+                "restraint_present": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.Client360Bank": {
+            "type": "object",
+            "properties": {
+                "acct_holder_name": {
+                    "type": "string"
+                },
+                "acct_no": {
+                    "type": "string"
+                },
+                "bank_code": {
+                    "type": "string"
+                },
+                "bank_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "is_default": {
+                    "type": "boolean"
+                },
+                "link_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.Client360Profile": {
+            "type": "object",
+            "properties": {
+                "birth_date": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "description": "raw — unmasked path only",
+                    "type": "string"
+                },
+                "client_name_masked": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string"
+                },
+                "client_type": {
+                    "type": "string"
+                },
+                "country_citizen": {
+                    "type": "string"
+                },
+                "country_loc": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "email": {
+                    "description": "decrypted — unmasked path only",
+                    "type": "string"
+                },
+                "given_name": {
+                    "type": "string"
+                },
+                "global_id": {
+                    "description": "raw — unmasked path only",
+                    "type": "string"
+                },
+                "global_id_masked": {
+                    "type": "string"
+                },
+                "global_id_type": {
+                    "type": "string"
+                },
+                "kyc_status": {
+                    "type": "string"
+                },
+                "kyc_tier": {
+                    "type": "string"
+                },
+                "phone": {
+                    "description": "decrypted — unmasked path only",
+                    "type": "string"
+                },
+                "phone_masked": {
+                    "type": "string"
+                },
+                "registered_date": {
+                    "type": "string"
+                },
+                "resident_status": {
+                    "type": "string"
+                },
+                "risk_level": {
+                    "type": "string"
+                },
+                "sex": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "surname": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "verified_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.Client360Response": {
+            "type": "object",
+            "properties": {
+                "accounts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.Client360Account"
+                    }
+                },
+                "banks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.Client360Bank"
+                    }
+                },
+                "profile": {
+                    "$ref": "#/definitions/dto.Client360Profile"
+                },
+                "restraints": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.RestraintViewResponse"
+                    }
+                }
+            }
+        },
+        "dto.ClientFullListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.ClientFullResponse"
+                    }
+                },
+                "next_cursor": {
+                    "description": "pass as ?after= for the next page",
+                    "type": "string"
+                },
+                "page_size": {
+                    "type": "integer"
+                }
+            }
+        },
         "dto.ClientFullResponse": {
             "type": "object",
             "properties": {
@@ -3177,6 +3557,10 @@
                 "created_at": {
                     "type": "string"
                 },
+                "email": {
+                    "description": "decrypted; only on 360/list paths",
+                    "type": "string"
+                },
                 "given_name": {
                     "type": "string"
                 },
@@ -3193,6 +3577,10 @@
                     "type": "string"
                 },
                 "marital_status": {
+                    "type": "string"
+                },
+                "phone": {
+                    "description": "decrypted; only on 360/list paths",
                     "type": "string"
                 },
                 "registered_date": {
