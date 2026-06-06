@@ -16,8 +16,21 @@ import (
 // shard_count — the hot-tier default (groups are created cold with 0 shards).
 const defaultHotShardCount int16 = 4
 
-// POST /v1/merchant-groups/:group_id/activate — promote a cold merchant group
-// (0 shards) to a hot wallet by creating N empty SHARD sub-accounts.
+// ActivateHotWallet godoc
+//
+//	@Summary		Activate hot wallet
+//	@Description	Promote a cold merchant group (0 shards) to a hot wallet by creating N empty SHARD sub-accounts (US-1.9). Body optional; defaults to 4 shards.
+//	@Tags			merchant-groups
+//	@Accept			json
+//	@Produce		json
+//	@Param			group_id	path		string							true	"Merchant group id"
+//	@Param			request		body		dto.ActivateHotWalletRequest	false	"Activation payload (optional; default 4 shards)"
+//	@Success		201			{object}	dto.SuccessEnvelope{data=dto.ActivateHotWalletResponse}	"Created"
+//	@Failure		400			{object}	dto.ProblemDetails				"Validation error"
+//	@Failure		404			{object}	dto.ProblemDetails				"Group not found"
+//	@Failure		422			{object}	dto.ProblemDetails				"Business rule violation (e.g. already hot)"
+//	@Failure		500			{object}	dto.ProblemDetails				"Internal error"
+//	@Router			/v1/merchant-groups/{group_id}/activate [post]
 func (h *Wallet) ActivateHotWallet(c *gin.Context) {
 	var req dto.ActivateHotWalletRequest
 	// Body is optional: an empty body (io.EOF) means "use the hot default"; a
@@ -42,9 +55,19 @@ func (h *Wallet) ActivateHotWallet(c *gin.Context) {
 	writeOK(c, http.StatusCreated, dto.ActivateHotWalletRespFrom(res))
 }
 
-// POST /v1/merchant-groups — provision a NEW cold merchant/agent group: the group
-// row + its settlement account in one TX (US-1.10). Defaults: MERCHANT group of a
-// MERCHANT-type VND settlement wallet.
+// ProvisionAcctGroup godoc
+//
+//	@Summary		Provision a merchant group
+//	@Description	Provision a new COLD merchant/agent group: the group row + its settlement account in one TX (US-1.10). Defaults: MERCHANT group of a MERCHANT-type VND settlement wallet.
+//	@Tags			merchant-groups
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.ProvisionGroupRequest	true	"Provision group request"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.ProvisionGroupResponse}	"Created"
+//	@Failure		400		{object}	dto.ProblemDetails			"Validation error"
+//	@Failure		422		{object}	dto.ProblemDetails			"Business rule violation"
+//	@Failure		500		{object}	dto.ProblemDetails			"Internal error"
+//	@Router			/v1/merchant-groups [post]
 func (h *Wallet) ProvisionAcctGroup(c *gin.Context) {
 	var req dto.ProvisionGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -81,8 +104,21 @@ func (h *Wallet) ProvisionAcctGroup(c *gin.Context) {
 	writeOK(c, http.StatusCreated, dto.ProvisionGroupRespFrom(res))
 }
 
-// POST /v1/merchant-groups/:group_id/rescale — grow an already-hot group up a
-// tier (4→8→16) and rebalance existing shards back to settlement (US-1.12).
+// RescaleHotWallet godoc
+//
+//	@Summary		Rescale hot wallet
+//	@Description	Grow an already-hot group up a tier (4->8->16) and rebalance existing shards back to settlement first (US-1.12).
+//	@Tags			merchant-groups
+//	@Accept			json
+//	@Produce		json
+//	@Param			group_id	path		string							true	"Merchant group id"
+//	@Param			request		body		dto.RescaleHotWalletRequest		true	"Rescale request"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.RescaleHotWalletResponse}	"OK"
+//	@Failure		400			{object}	dto.ProblemDetails				"Validation error"
+//	@Failure		404			{object}	dto.ProblemDetails				"Group not found"
+//	@Failure		422			{object}	dto.ProblemDetails				"Business rule violation"
+//	@Failure		500			{object}	dto.ProblemDetails				"Internal error"
+//	@Router			/v1/merchant-groups/{group_id}/rescale [post]
 func (h *Wallet) RescaleHotWallet(c *gin.Context) {
 	var req dto.RescaleHotWalletRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -101,8 +137,21 @@ func (h *Wallet) RescaleHotWallet(c *gin.Context) {
 	writeOK(c, http.StatusOK, dto.RescaleHotWalletRespFrom(res))
 }
 
-// POST /v1/finance/merchant-deposit — route an inbound merchant deposit/payment
-// into a group: settlement while cold, a reference-hashed shard once hot (US-1.11).
+// MerchantDeposit godoc
+//
+//	@Summary		Merchant deposit
+//	@Description	Route an inbound merchant deposit/payment into a group: settlement while cold, a reference-hashed shard once hot (US-1.11). Idempotent on `reference`.
+//	@Tags			finance
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.MerchantDepositRequest	true	"Merchant deposit request"
+//	@Success		201		{object}	dto.SuccessEnvelope{data=dto.MerchantDepositResponse}	"Posted"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.MerchantDepositResponse}	"Duplicate idempotent replay"
+//	@Failure		400		{object}	dto.ProblemDetails			"Validation error"
+//	@Failure		404		{object}	dto.ProblemDetails			"Group not found"
+//	@Failure		422		{object}	dto.ProblemDetails			"Business rule violation"
+//	@Failure		500		{object}	dto.ProblemDetails			"Internal error"
+//	@Router			/v1/finance/merchant-deposit [post]
 func (h *Wallet) MerchantDeposit(c *gin.Context) {
 	var req dto.MerchantDepositRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

@@ -1,0 +1,3114 @@
+basePath: /
+consumes:
+- application/json
+definitions:
+  dto.AccountOpenResponse:
+    properties:
+      acct_no:
+        type: string
+      acct_status:
+        type: string
+      acct_type:
+        type: string
+      ccy:
+        type: string
+      client_no:
+        type: string
+    type: object
+  dto.AccountResponse:
+    properties:
+      acct_no:
+        type: string
+      acct_open_date:
+        type: string
+      acct_role:
+        type: string
+      acct_status:
+        type: string
+      acct_type:
+        type: string
+      actual_bal:
+        type: string
+      available_bal:
+        description: calc_bal = actual - restrained
+        type: string
+      ccy:
+        type: string
+      client_no:
+        type: string
+      cr_blocked:
+        type: string
+      group_id:
+        type: string
+      last_tran_date:
+        type: string
+      prev_day_bal:
+        type: string
+      restrained_amt:
+        type: string
+      restraint_present:
+        type: string
+      shard_index:
+        type: integer
+      version:
+        type: integer
+    type: object
+  dto.AccountStatusResponse:
+    properties:
+      acct_no:
+        type: string
+      acct_status:
+        type: string
+      version:
+        type: integer
+    type: object
+  dto.AckRequest:
+    properties:
+      treasury_batch_id:
+        maxLength: 64
+        minLength: 4
+        type: string
+    required:
+    - treasury_batch_id
+    type: object
+  dto.ActivateHotWalletRequest:
+    properties:
+      shard_count:
+        enum:
+        - 4
+        - 8
+        - 16
+        type: integer
+    type: object
+  dto.ActivateHotWalletResponse:
+    properties:
+      group_id:
+        type: string
+      settlement_acct_no:
+        type: string
+      shard_acct_nos:
+        items:
+          type: string
+        type: array
+      shard_count:
+        type: integer
+    type: object
+  dto.AddRestraintRequest:
+    properties:
+      acct_no:
+        type: string
+      end_date:
+        type: string
+      narrative:
+        maxLength: 500
+        type: string
+      pledged_amt:
+        type: string
+      reference_doc:
+        maxLength: 500
+        type: string
+      restraint_purpose:
+        type: string
+      restraint_type:
+        type: string
+      start_date:
+        type: string
+    required:
+    - acct_no
+    - restraint_purpose
+    - restraint_type
+    type: object
+  dto.BalanceBatchItem:
+    properties:
+      acct_no:
+        type: string
+      actual_bal:
+        type: string
+      available_bal:
+        type: string
+      ccy:
+        type: string
+      error:
+        type: string
+      restrained_amt:
+        type: string
+    type: object
+  dto.BalanceBatchRequest:
+    properties:
+      acct_nos:
+        items:
+          type: string
+        maxItems: 100
+        minItems: 1
+        type: array
+    required:
+    - acct_nos
+    type: object
+  dto.BalanceBatchResponse:
+    properties:
+      as_of:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/dto.BalanceBatchItem'
+        type: array
+    type: object
+  dto.BalanceOpsResponse:
+    properties:
+      acct_no:
+        type: string
+      acct_status:
+        type: string
+      active_restraints:
+        items:
+          type: object
+        type: array
+      actual_bal:
+        type: string
+      as_of:
+        type: string
+      available_bal:
+        type: string
+      calc_bal:
+        type: string
+      ccy:
+        type: string
+      client_no:
+        type: string
+      cr_blocked:
+        type: string
+      last_tran_date:
+        type: string
+      ledger_bal:
+        type: string
+      previous_day_bal:
+        type: string
+      restrained_amt:
+        type: string
+      restraint_present:
+        type: string
+      version:
+        type: integer
+    type: object
+  dto.BalanceResponse:
+    properties:
+      acct_no:
+        type: string
+      acct_status:
+        type: string
+      actual_bal:
+        type: string
+      as_of:
+        type: string
+      available_bal:
+        type: string
+      ccy:
+        type: string
+      last_tran_date:
+        type: string
+      masked:
+        type: boolean
+      message:
+        type: string
+      restrained_amt:
+        type: string
+    type: object
+  dto.BankLinkResponse:
+    properties:
+      client_no:
+        type: string
+      is_default:
+        type: boolean
+      link_id:
+        type: integer
+      status:
+        type: string
+      timestamp:
+        type: string
+    type: object
+  dto.ClientFullResponse:
+    properties:
+      acct_exec:
+        type: string
+      birth_date:
+        type: string
+      client_grp:
+        type: string
+      client_name:
+        type: string
+      client_no:
+        type: string
+      client_type:
+        type: string
+      country_citizen:
+        type: string
+      country_loc:
+        type: string
+      created_at:
+        type: string
+      given_name:
+        type: string
+      global_id:
+        type: string
+      global_id_type:
+        type: string
+      kyc_status:
+        type: string
+      kyc_tier:
+        type: string
+      marital_status:
+        type: string
+      registered_date:
+        type: string
+      resident_status:
+        type: string
+      risk_level:
+        type: string
+      sex:
+        type: string
+      status:
+        type: string
+      surname:
+        type: string
+      updated_at:
+        type: string
+      verified_at:
+        type: string
+    type: object
+  dto.ClientListResponse:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/dto.ClientProfileResponse'
+        type: array
+      next_cursor:
+        description: pass as ?after= for the next page
+        type: string
+      page_size:
+        type: integer
+    type: object
+  dto.ClientProfileResponse:
+    properties:
+      acct_exec:
+        type: string
+      birth_date:
+        type: string
+      client_grp:
+        type: string
+      client_name_masked:
+        type: string
+      client_no:
+        type: string
+      client_type:
+        type: string
+      country_citizen:
+        type: string
+      country_loc:
+        type: string
+      global_id_masked:
+        type: string
+      global_id_type:
+        type: string
+      kyc_status:
+        type: string
+      kyc_tier:
+        type: string
+      phone_masked:
+        type: string
+      resident_status:
+        type: string
+      risk_level:
+        type: string
+      sex:
+        type: string
+      status:
+        type: string
+      verified_at:
+        type: string
+    type: object
+  dto.ClientResponse:
+    properties:
+      client_no:
+        type: string
+      status:
+        type: string
+      timestamp:
+        type: string
+    type: object
+  dto.CompletedRequest:
+    properties:
+      napas_ref:
+        maxLength: 64
+        minLength: 4
+        type: string
+    required:
+    - napas_ref
+    type: object
+  dto.CreateClientRequest:
+    properties:
+      birth_date:
+        type: string
+      client_name:
+        maxLength: 200
+        type: string
+      client_type:
+        type: string
+      country_citizen:
+        maxLength: 8
+        type: string
+      country_loc:
+        maxLength: 8
+        type: string
+      given_name:
+        maxLength: 80
+        type: string
+      global_id:
+        maxLength: 64
+        type: string
+      global_id_type:
+        maxLength: 12
+        type: string
+      sex:
+        enum:
+        - M
+        - F
+        - O
+        type: string
+      surname:
+        maxLength: 80
+        type: string
+    required:
+    - client_name
+    - client_type
+    type: object
+  dto.FeeChargeRequest:
+    properties:
+      acct_no:
+        type: string
+      amount:
+        type: string
+      fee_code:
+        maxLength: 16
+        minLength: 2
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      narrative:
+        maxLength: 250
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - acct_no
+    - amount
+    - reference
+    type: object
+  dto.FeeChargeResponse:
+    properties:
+      event_uuid:
+        type: string
+      fee_gross:
+        type: string
+      new_balance:
+        type: string
+      status:
+        type: string
+      tran_internal_key:
+        type: integer
+      vat_amount:
+        type: string
+    type: object
+  dto.FeeChargeReversalRequest:
+    properties:
+      initiator:
+        enum:
+        - OPS_MANUAL
+        - FRAUD
+        - DISPUTE
+        - SYSTEM
+        type: string
+      reason:
+        maxLength: 500
+        minLength: 3
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - reason
+    - reference
+    type: object
+  dto.FeeChargeReversalResponse:
+    properties:
+      event_uuid:
+        type: string
+      new_balance:
+        type: string
+      reversal_tran_key:
+        type: integer
+      was_already_reversed:
+        type: boolean
+    type: object
+  dto.FieldError:
+    properties:
+      code:
+        type: string
+      message:
+        type: string
+      path:
+        type: string
+    type: object
+  dto.KycResponse:
+    properties:
+      client_no:
+        type: string
+      kyc_tier:
+        type: string
+      risk_level:
+        type: string
+      status:
+        type: string
+      verified_at:
+        type: string
+    type: object
+  dto.KycUpdateRequest:
+    properties:
+      ekyc_provider:
+        maxLength: 40
+        type: string
+      ekyc_ref:
+        maxLength: 80
+        type: string
+      extra_data:
+        additionalProperties: {}
+        type: object
+      face_match_score:
+        maximum: 1
+        minimum: 0
+        type: number
+      kyc_tier:
+        enum:
+        - "0"
+        - "1"
+        - "2"
+        - "3"
+        type: string
+      liveness_result:
+        maxLength: 8
+        type: string
+      risk_level:
+        maxLength: 4
+        type: string
+      status:
+        enum:
+        - A
+        - B
+        - C
+        - P
+        type: string
+    type: object
+  dto.LinkBankRequest:
+    properties:
+      acct_holder_name:
+        maxLength: 200
+        type: string
+      acct_no:
+        maxLength: 40
+        type: string
+      bank_code:
+        maxLength: 20
+        type: string
+      bank_name:
+        maxLength: 120
+        type: string
+      is_default:
+        type: boolean
+    required:
+    - acct_no
+    - bank_code
+    type: object
+  dto.MarkResponse:
+    properties:
+      acct_no:
+        type: string
+      event_uuid:
+        type: string
+      status:
+        type: string
+      transaction_status:
+        description: ISO 20022 (§13.3)
+        type: string
+    type: object
+  dto.MerchantDepositRequest:
+    properties:
+      amount:
+        type: string
+      group_id:
+        maxLength: 20
+        minLength: 2
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - amount
+    - group_id
+    - reference
+    type: object
+  dto.MerchantDepositResponse:
+    properties:
+      event_uuid:
+        type: string
+      new_balance:
+        type: string
+      shard_index:
+        description: null when routed to settlement (cold group)
+        type: integer
+      status:
+        type: string
+      target_acct_no:
+        type: string
+      tran_internal_key:
+        type: integer
+    type: object
+  dto.MerchantWithdrawRequest:
+    properties:
+      amount:
+        type: string
+      auto_sweep:
+        description: AutoSweep defaults to true (pointer distinguishes "omitted" from
+          "false").
+        type: boolean
+      ext_payout_ref:
+        maxLength: 64
+        minLength: 8
+        type: string
+      group_id:
+        maxLength: 32
+        minLength: 2
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - amount
+    - group_id
+    - reference
+    type: object
+  dto.MerchantWithdrawResponse:
+    properties:
+      amount:
+        type: string
+      event_uuid:
+        type: string
+      fee_gross:
+        type: string
+      settlement_balance_after:
+        type: string
+      status:
+        type: string
+      total_deducted:
+        type: string
+      tran_internal_key:
+        type: integer
+      transaction_status:
+        description: ISO 20022 (§13.3)
+        type: string
+      vat_amount:
+        type: string
+    type: object
+  dto.MerchantWithdrawReversalRequest:
+    properties:
+      fail_code:
+        maxLength: 64
+        minLength: 3
+        type: string
+      fail_reason:
+        maxLength: 500
+        minLength: 3
+        type: string
+      initiator:
+        enum:
+        - OPS_MANUAL
+        - FRAUD
+        - DISPUTE
+        - SYSTEM
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - fail_code
+    - fail_reason
+    - reference
+    type: object
+  dto.MerchantWithdrawReversalResponse:
+    properties:
+      event_uuid:
+        type: string
+      reversal_tran_key:
+        type: integer
+      settlement_balance_after:
+        type: string
+      was_already_reversed:
+        type: boolean
+    type: object
+  dto.OnboardRequest:
+    properties:
+      acct_type:
+        enum:
+        - CONSUMER
+        - MERCHANT
+        type: string
+      birthdate:
+        description: Flat identity columns (FM_CLIENT_KYC). Dates are YYYY-MM-DD.
+        type: string
+      ccy:
+        type: string
+      client_name:
+        maxLength: 200
+        type: string
+      client_type:
+        enum:
+        - IND
+        - CORP
+        - MER
+        type: string
+      country_citizen:
+        maxLength: 8
+        type: string
+      country_loc:
+        maxLength: 8
+        type: string
+      date_issue:
+        type: string
+      email:
+        maxLength: 120
+        type: string
+      expire_date:
+        type: string
+      extra_data:
+        additionalProperties: {}
+        type: object
+      global_id:
+        maxLength: 64
+        type: string
+      global_id_type:
+        maxLength: 12
+        type: string
+      phone:
+        type: string
+      place_issue:
+        maxLength: 120
+        type: string
+      sex:
+        enum:
+        - M
+        - F
+        - O
+        type: string
+    required:
+    - client_name
+    - client_type
+    - phone
+    type: object
+  dto.OnboardResponse:
+    properties:
+      acct_no:
+        type: string
+      balance:
+        type: string
+      ccy:
+        type: string
+      client_no:
+        type: string
+      created_at:
+        type: string
+      internal_key:
+        type: integer
+      kyc_status:
+        type: string
+      kyc_tier:
+        type: string
+    type: object
+  dto.OpenAccountRequest:
+    properties:
+      acct_type:
+        type: string
+      ccy:
+        maxLength: 4
+        type: string
+      client_no:
+        maxLength: 48
+        type: string
+    required:
+    - acct_type
+    - client_no
+    type: object
+  dto.ProblemDetails:
+    properties:
+      detail:
+        description: human-readable detail (dynamic context)
+        example: available 50000 < required 100000
+        type: string
+      details:
+        additionalProperties: {}
+        type: object
+      errorCode:
+        description: 'SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for
+          PG-raised, E#### synthetic for Go-side, "999999" when the canonical name
+          is not whitelisted (§3.3)'
+        example: E4022
+        type: string
+      errorMessage:
+        description: 'full raw "CODE: detail" message (pg.Message verbatim for PG
+          errors, synthesized for Go); "Internal Error" when not whitelisted'
+        example: 'INSUFFICIENT_FUNDS: available 50000 < required 100000'
+        type: string
+      errors:
+        description: field-level (Berlin Group / OBIE style)
+        items:
+          $ref: '#/definitions/dto.FieldError'
+        type: array
+      iso20022_reason_code:
+        description: ISO 20022 External Status Reason (§13.2)
+        example: AM04
+        type: string
+      timestamp:
+        description: RFC 3339
+        example: "2026-06-06T07:30:00Z"
+        type: string
+      trace_id:
+        description: = X-Request-Id
+        example: 5f3b2c8e-1a2b-4c3d-9e8f-0a1b2c3d4e5f
+        type: string
+      transaction_status:
+        description: pain.002 status (§13.3)
+        example: RJCT
+        type: string
+    type: object
+  dto.ProvisionGroupRequest:
+    properties:
+      acct_type:
+        maxLength: 12
+        type: string
+      ccy:
+        type: string
+      client_no:
+        maxLength: 48
+        minLength: 2
+        type: string
+      group_id:
+        maxLength: 20
+        minLength: 2
+        type: string
+      group_type:
+        enum:
+        - MERCHANT
+        - AGENT
+        - NOSTRO_HOT
+        type: string
+      shard_buffer:
+        type: string
+      shard_threshold:
+        type: string
+      sweep_interval_sec:
+        maximum: 3600
+        minimum: 1
+        type: integer
+    required:
+    - client_no
+    - group_id
+    type: object
+  dto.ProvisionGroupResponse:
+    properties:
+      group_id:
+        type: string
+      group_status:
+        type: string
+      group_type:
+        type: string
+      settlement_acct_no:
+        type: string
+      settlement_internal_key:
+        type: integer
+    type: object
+  dto.ReleaseRestraintRequest:
+    properties:
+      reason:
+        maxLength: 500
+        type: string
+    type: object
+  dto.RescaleHotWalletRequest:
+    properties:
+      new_shard_count:
+        enum:
+        - 8
+        - 16
+        type: integer
+    required:
+    - new_shard_count
+    type: object
+  dto.RescaleHotWalletResponse:
+    properties:
+      added_acct_nos:
+        items:
+          type: string
+        type: array
+      group_id:
+        type: string
+      new_shard_count:
+        type: integer
+      old_shard_count:
+        type: integer
+      rebalanced_amount:
+        type: string
+      settlement_acct_no:
+        type: string
+    type: object
+  dto.RestraintListResponse:
+    properties:
+      acct_no:
+        type: string
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/dto.RestraintViewResponse'
+        type: array
+      next_cursor:
+        description: pass as ?before_seq= for the next page
+        type: integer
+      page_size:
+        type: integer
+    type: object
+  dto.RestraintResponse:
+    properties:
+      available_bal_after:
+        type: string
+      pledged_amt:
+        type: string
+      restraint_id:
+        type: integer
+      status:
+        description: '''A'' added | ''R'' released'
+        type: string
+      version:
+        type: integer
+    type: object
+  dto.RestraintViewResponse:
+    properties:
+      acct_no:
+        description: empty for group-scoped
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      end_date:
+        type: string
+      narrative:
+        type: string
+      pledged_amt:
+        type: string
+      reference_doc:
+        type: string
+      removed_at:
+        type: string
+      removed_by:
+        type: string
+      removed_reason:
+        type: string
+      restraint_id:
+        type: integer
+      restraint_purpose:
+        type: string
+      restraint_type:
+        type: string
+      start_date:
+        type: string
+      status:
+        description: A active | R released | E expired
+        type: string
+    type: object
+  dto.ReversalRequest:
+    properties:
+      fail_code:
+        enum:
+        - NAPAS_INSUFFICIENT_FUNDS
+        - BENEF_CLOSED
+        - NAPAS_TIMEOUT
+        - SLA_TIMEOUT
+        - OPS_MANUAL
+        - UNKNOWN
+        type: string
+      fail_reason:
+        maxLength: 500
+        minLength: 4
+        type: string
+      initiator:
+        enum:
+        - TREASURY_FAILED
+        - SLA_TIMEOUT
+        - OPS_MANUAL
+        type: string
+    required:
+    - fail_code
+    - fail_reason
+    - initiator
+    type: object
+  dto.ReversalResponse:
+    properties:
+      event_uuid:
+        type: string
+      reversal_tran_key:
+        type: integer
+      was_already_reversed:
+        type: boolean
+    type: object
+  dto.SuccessEnvelope:
+    properties:
+      data: {}
+      errorCode:
+        type: string
+      errorMessage:
+        type: string
+      timestamp:
+        type: string
+      trace_id:
+        type: string
+    type: object
+  dto.TopupRequest:
+    properties:
+      acct_no:
+        type: string
+      amount:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      narrative:
+        maxLength: 250
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - acct_no
+    - amount
+    - reference
+    type: object
+  dto.TopupResponse:
+    properties:
+      event_uuid:
+        type: string
+      new_balance:
+        type: string
+      status:
+        type: string
+      tran_internal_key:
+        type: integer
+      transaction_status:
+        description: ISO 20022 (§13.3)
+        type: string
+    type: object
+  dto.TopupReversalRequest:
+    properties:
+      initiator:
+        enum:
+        - OPS_MANUAL
+        - FRAUD
+        - DISPUTE
+        - SYSTEM
+        type: string
+      reason:
+        maxLength: 500
+        minLength: 3
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - reason
+    - reference
+    type: object
+  dto.TopupReversalResponse:
+    properties:
+      event_uuid:
+        type: string
+      new_balance:
+        type: string
+      reversal_tran_key:
+        type: integer
+      was_already_reversed:
+        type: boolean
+    type: object
+  dto.TransferRequest:
+    properties:
+      amount:
+        type: string
+      from_acct_no:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      narrative:
+        maxLength: 250
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+      to_acct_no:
+        type: string
+      tran_type:
+        enum:
+        - TRFOUT
+        - TRFOUTF
+        type: string
+    required:
+    - amount
+    - from_acct_no
+    - reference
+    - to_acct_no
+    type: object
+  dto.TransferResponse:
+    properties:
+      event_uuid:
+        type: string
+      fee_gross:
+        type: string
+      new_balance_from:
+        type: string
+      new_balance_to:
+        type: string
+      status:
+        type: string
+      tran_internal_key:
+        type: integer
+      transaction_status:
+        description: ISO 20022 (§13.3)
+        type: string
+      vat_amount:
+        type: string
+    type: object
+  dto.TransferReversalRequest:
+    properties:
+      initiator:
+        enum:
+        - OPS_MANUAL
+        - FRAUD
+        - DISPUTE
+        - SYSTEM
+        type: string
+      reason:
+        maxLength: 500
+        minLength: 3
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - reason
+    - reference
+    type: object
+  dto.TransferReversalResponse:
+    properties:
+      event_uuid:
+        type: string
+      new_balance_from:
+        type: string
+      new_balance_to:
+        type: string
+      reversal_tran_key:
+        type: integer
+      was_already_reversed:
+        type: boolean
+    type: object
+  dto.TxDetailResponse:
+    properties:
+      leg_count:
+        type: integer
+      legs:
+        items:
+          $ref: '#/definitions/dto.TxLegResponse'
+        type: array
+      post_date:
+        type: string
+      reference:
+        type: string
+      transaction_id:
+        description: tran_internal_key
+        type: integer
+    type: object
+  dto.TxEntryResponse:
+    properties:
+      amount:
+        type: string
+      balance_after:
+        type: string
+      ccy:
+        type: string
+      dr_cr:
+        type: string
+      narrative:
+        type: string
+      post_date:
+        type: string
+      reference:
+        type: string
+      seq_no:
+        type: integer
+      tran_type:
+        type: string
+      transaction_id:
+        description: = tran_internal_key
+        type: integer
+      value_date:
+        type: string
+    type: object
+  dto.TxLegResponse:
+    properties:
+      acct_no:
+        type: string
+      amount:
+        type: string
+      balance_after:
+        type: string
+      ccy:
+        type: string
+      dr_cr:
+        type: string
+      narrative:
+        type: string
+      post_date:
+        type: string
+      reference:
+        type: string
+      seq_no:
+        type: integer
+      tfr_seq_no:
+        type: integer
+      tran_type:
+        type: string
+      value_date:
+        type: string
+    type: object
+  dto.TxListResponse:
+    properties:
+      acct_no:
+        type: string
+      count:
+        type: integer
+      from:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/dto.TxEntryResponse'
+        type: array
+      next_cursor:
+        description: pass as ?before_seq= for the next page
+        type: integer
+      page_size:
+        type: integer
+      to:
+        type: string
+    type: object
+  dto.UpdateAccountStatusRequest:
+    properties:
+      status:
+        enum:
+        - A
+        - B
+        - C
+        type: string
+    required:
+    - status
+    type: object
+  dto.UpdateClientRequest:
+    properties:
+      birth_date:
+        type: string
+      client_name:
+        maxLength: 200
+        type: string
+      country_citizen:
+        maxLength: 8
+        type: string
+      country_loc:
+        maxLength: 8
+        type: string
+      given_name:
+        maxLength: 80
+        type: string
+      sex:
+        enum:
+        - M
+        - F
+        - O
+        type: string
+      status:
+        maxLength: 4
+        type: string
+      surname:
+        maxLength: 80
+        type: string
+    type: object
+  dto.WithdrawRequest:
+    properties:
+      acct_no:
+        type: string
+      amount:
+        type: string
+      beneficiary_acct:
+        maxLength: 40
+        minLength: 6
+        type: string
+      beneficiary_bank:
+        maxLength: 20
+        minLength: 3
+        type: string
+      ext_payout_ref:
+        maxLength: 64
+        minLength: 8
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      narrative:
+        maxLength: 250
+        type: string
+      reference:
+        maxLength: 64
+        minLength: 8
+        type: string
+    required:
+    - acct_no
+    - amount
+    - beneficiary_acct
+    - beneficiary_bank
+    - ext_payout_ref
+    - reference
+    type: object
+  dto.WithdrawResponse:
+    properties:
+      event_uuid:
+        type: string
+      fee_gross:
+        type: string
+      new_balance:
+        type: string
+      status:
+        type: string
+      tran_internal_key:
+        type: integer
+      transaction_status:
+        description: ISO 20022 (§13.3)
+        type: string
+      vat_amount:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: hoalh2@hdbank.com.vn
+    name: Core Wallet Team
+  description: |-
+    Double-entry e-wallet ledger. The Go service is a thin RPC client over PostgreSQL stored functions; all balance validation, double-entry posting, fee/VAT and reversal logic run atomically in plpgsql. Scope is internal synchronous posting (top-up, transfer, withdraw, merchant settlement, fee/VAT, reversal). External rails (NAPAS, card 3DS, MT940) are out of scope.
+
+    ## Response envelope
+    All responses use a uniform envelope. Success (2xx): `{ "errorCode": "00000", "errorMessage": "Success!", "data": <payload>, "trace_id": "...", "timestamp": "..." }` — the operation payload shown in each endpoint's 200/201 schema lives under `data`. Errors use `application/problem+json`: `errorCode` is a SQLSTATE-style code (real PostgreSQL SQLSTATE for SP-raised errors, an `E####` synthetic for Go-side errors, or `999999` when the code is not client-safe), and `errorMessage` is the full `BUSINESS_CODE: detail` string whose leading token is the business code listed below. Errors also carry `iso20022_reason_code`, `transaction_status` (pain.002), `detail`, `trace_id`, `timestamp`, and field-level `errors`.
+
+    ### Business error code catalogue
+    `business code` = leading token of `errorMessage`; `errorCode` = the value returned in the body's `errorCode` field.
+    | business code | errorCode | HTTP | ISO 20022 | Description |
+    | --- | --- | --- | --- | --- |
+    | INVALID_AMOUNT | E4024 | 400 | AM12 | The transaction amount is invalid or missing |
+    | AMOUNT_OUT_OF_RANGE | E4024 | 400 | AM02 | The amount is outside the allowed range for this transaction type |
+    | METADATA_TOO_LARGE | E4007 | 400 | - | The metadata payload exceeds the maximum allowed size (1 KB) |
+    | METADATA_HAS_P1 | E4008 | 400 | - | The metadata contains forbidden PII keys (phone, email, cccd, passport, full_name, bank_acct_no) |
+    | SAME_ACCOUNT | E4002 | 400 | BE01 | Source and destination accounts must be different |
+    | TRAN_TYPE_INACTIVE | E4003 | 400 | AG02 | The requested transaction type is inactive or does not exist |
+    | INVALID_REQUEST | E4001 | 400 | - | The request body is malformed or missing required fields |
+    | INVALID_PHONE_FORMAT | E2001 | 400 | - | Phone number must match Vietnam format 0XXXXXXXXX (10 digits) |
+    | INSUFFICIENT_FUNDS | E4022 | 422 | AM04 | The account balance is not sufficient to cover this transaction |
+    | TIER_LIMIT_EXCEEDED | E4023 | 422 | AM02 | The transaction exceeds the daily or monthly limit for this account tier |
+    | ACCT_ROLE_INVALID | E3008 | 422 | - | Operation only allowed on standalone wallets, not SHARD/SETTLEMENT accounts |
+    | INVALID_CLIENT_TYPE | E2010 | 422 | - | Client type must be one of IND, CORP, MER |
+    | INVALID_ACCT_TYPE | E3007 | 422 | - | The specified account type does not exist |
+    | ACCT_CLOSE_NONZERO_BAL | E3003 | 422 | - | Account closure requires a zero balance |
+    | ORG_FIELDS_REQUIRED | E2013 | 422 | - | Corporate/merchant clients must provide business_reg_no and legal_rep in extra_data |
+    | INVALID_SHARD_COUNT | E3030 | 422 | - | Shard count must be 4, 8, or 16 |
+    | INVALID_GROUP_TYPE | E3032 | 422 | - | Group type must be one of MERCHANT, AGENT, NOSTRO_HOT |
+    | INVALID_DATE | E8003 | 422 | DT01 | The as_of_date parameter is invalid or refers to a future date |
+    | BATCH_SIZE_EXCEEDED | E8004 | 422 | - | The batch request exceeds the maximum number of items (100) |
+    | RESTRAINT_TYPE_INVALID | E3022 | 422 | - | Restraint type must be one of DEBIT, CREDIT, ALL, INFO |
+    | RESTRAINT_PURPOSE_INVALID | E3023 | 422 | - | Restraint purpose is not a recognized value |
+    | RESTRAINT_TYPE_PURPOSE_CONFLICT | E3024 | 422 | - | The restraint type/purpose combination is not allowed |
+    | RESTRAINT_AMT_EXCEEDS_BALANCE | E3025 | 422 | AM04 | The pledged amount cannot exceed the current account balance |
+    | RESTRAINT_DATE_INVALID | E3026 | 422 | DT01 | The end_date must be on or after the start_date |
+    | COURT_ORDER_REMOVE_REQUIRES_DOC | E3027 | 422 | RR04 | Removing a COURT_ORDER/TAX_LIEN restraint requires a reference_doc |
+    | TIER_INSUFFICIENT | E2007 | 403 | RR04 | Your KYC tier does not permit this operation |
+    | FORBIDDEN | E1006 | 403 | AG01 | You do not have permission to perform this operation |
+    | UNAUTHORIZED | E1001 | 401 | - | Authentication is required or the provided credentials are invalid |
+    | DR_RESTRAINT_ACTIVE | E3005 | 423 | AC06 | The account has an active debit restraint (hold/lien) |
+    | CR_RESTRAINT_ACTIVE | E3006 | 423 | AC06 | The account has an active credit restraint |
+    | ACCT_NOT_FOUND | E3001 | 404 | AC01 | The specified account does not exist |
+    | CLIENT_NOT_FOUND | E2011 | 404 | - | No client record found for the specified client number |
+    | KYC_NOT_FOUND | E2012 | 404 | - | No KYC record exists for this client |
+    | BANK_LINK_NOT_FOUND | E2014 | 404 | - | No linked bank account found with the specified ID |
+    | RESTRAINT_NOT_FOUND | E3020 | 404 | - | No restraint exists with the specified ID |
+    | WD_NOT_FOUND | E6101 | 404 | - | No withdrawal record found for the given payout reference |
+    | ACCT_NOT_ACTIVE | E3004 | 403 | AC04 | The account is blocked or closed and cannot process transactions |
+    | VERSION_CONFLICT | E4025 | 409 | - | Another transaction updated this account simultaneously; retryable |
+    | DUPLICATE_REFERENCE | E4011 | 409 | AM05 | A transaction with this reference has already been processed |
+    | CLIENT_ALREADY_EXISTS | E2009 | 409 | AM05 | A client with this identity document already exists |
+    | PHONE_ALREADY_REGISTERED | E2002 | 409 | AM05 | This phone number is already associated with an existing account |
+    | MAX_WALLET_PER_CLIENT_EXCEEDED | E3002 | 409 | - | Maximum number of wallets reached (CONSUMER 3 per currency, MERCHANT 10) |
+    | GROUP_ALREADY_ACTIVATED | E3031 | 409 | - | This merchant group has already been activated with shards |
+    | GROUP_ALREADY_EXISTS | E3033 | 409 | AM05 | A group with this ID already exists |
+    | GROUP_NOT_ACTIVATED | E3034 | 409 | - | This group is still cold (0 shards); activate it before rescaling |
+    | RESTRAINT_ALREADY_REMOVED | E3021 | 409 | - | This restraint has already been released or expired |
+    | WD_ALREADY_COMPLETED | E6102 | 409 | - | This withdrawal has already reached COMPLETED status |
+    | WD_INVALID_STATE | E6103 | 409 | - | The withdrawal is in a state that does not permit this transition |
+    | WD_ALREADY_REVERSED | E6104 | 409 | - | This withdrawal has already been reversed |
+    | PERIOD_CLOSED | E8005 | 409 | DT01 | The target accounting date is sealed; post against the current open period |
+    | GONE_ONLINE | E8001 | 410 | - | Historical data beyond the online retention period; request an archive extract |
+    | TIMEOUT | E9004 | 504 | - | The request exceeded the allowed processing time; you may retry (503 on lock timeout) |
+    | PII_DEK_NOT_SET | E5005 | 500 | - | The server PII data-encryption key (DEK) is not set |
+    | BATCH_UNBALANCED | E5003 | 500 | - | Internal double-entry invariant violated (sum of debits != sum of credits) |
+    | INTERNAL_ERROR | E9001 | 500 | - | An unexpected error occurred; please retry or contact support |
+
+    Family fallbacks: any `*_NOT_FOUND` -> 404, `*_NOT_ACTIVE` -> 403, `*_CONFLICT` -> 409 (e.g. GROUP_NOT_FOUND, SETTLEMENT_NOT_FOUND, GROUP_NOT_ACTIVE).
+  license:
+    name: Proprietary
+  termsOfService: https://docs.wallet.example/terms
+  title: Core Wallet API
+  version: "1.0"
+paths:
+  /healthz:
+    get:
+      description: Cheap liveness probe (no DB round-trip).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'status: ok'
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Health check
+      tags:
+      - health
+  /v1/accounts:
+    post:
+      consumes:
+      - application/json
+      description: Open a zero-balance wallet for a client (count-limited per currency).
+      parameters:
+      - description: Open account request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.OpenAccountRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountOpenResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Client not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation (e.g. account count limit)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Open a wallet
+      tags:
+      - accounts
+  /v1/accounts/{acct_no}:
+    get:
+      description: Account profile (no client PII).
+      parameters:
+      - description: Account number
+        in: path
+        name: acct_no
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountResponse'
+              type: object
+        "404":
+          description: Account not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Get account profile
+      tags:
+      - accounts
+    patch:
+      consumes:
+      - application/json
+      description: Block / close / re-activate an account (status A | B | C).
+      parameters:
+      - description: Account number
+        in: path
+        name: acct_no
+        required: true
+        type: string
+      - description: Status update request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.UpdateAccountStatusRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountStatusResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Account not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation (e.g. illegal transition)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Update account status
+      tags:
+      - accounts
+  /v1/accounts/{acct_no}/balance:
+    get:
+      description: Without as_of_date → customer realtime balance (§9.3.1). With as_of_date
+        → historical end-of-day snapshot (§9.3.3, returns BalanceAsOfResponse).
+      parameters:
+      - description: Account number
+        in: path
+        name: acct_no
+        required: true
+        type: string
+      - description: Historical EOD snapshot date (YYYY-MM-DD)
+        in: query
+        name: as_of_date
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Realtime balance (or BalanceAsOfResponse when as_of_date is
+            set)
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BalanceResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Account not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Get account balance
+      tags:
+      - accounts
+  /v1/clients:
+    get:
+      description: Masked client list (PII masked), keyset-paginated by client_no
+        ascending. Optional status / client_type filters. Pass next_cursor as ?after=
+        for the next page.
+      parameters:
+      - description: Filter by status (A|B|C)
+        in: query
+        name: status
+        type: string
+      - description: Filter by client_type (IND|CORP|MER)
+        in: query
+        name: client_type
+        type: string
+      - description: Page size (1..200, default 100)
+        in: query
+        name: limit
+        type: integer
+      - description: 'Keyset cursor: return rows with client_no > after'
+        in: query
+        name: after
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientListResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: List clients (masked)
+      tags:
+      - clients
+    post:
+      consumes:
+      - application/json
+      description: Create a client master record (identity only; no KYC flow). client_type
+        is IND | CORP | MER.
+      parameters:
+      - description: Client create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.CreateClientRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation (e.g. invalid client type)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Create a client
+      tags:
+      - clients
+  /v1/clients/{client_no}:
+    get:
+      description: Masked client profile (name + CCCD/passport masked); raw PII never
+        exposed on this path.
+      parameters:
+      - description: Client number
+        in: path
+        name: client_no
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientProfileResponse'
+              type: object
+        "404":
+          description: Client not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Get a client (masked)
+      tags:
+      - clients
+    patch:
+      consumes:
+      - application/json
+      description: Patch mutable identity fields of an existing client (all fields
+        optional).
+      parameters:
+      - description: Client number
+        in: path
+        name: client_no
+        required: true
+        type: string
+      - description: Client update request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.UpdateClientRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Client not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Update a client
+      tags:
+      - clients
+  /v1/clients/{client_no}/banks:
+    post:
+      consumes:
+      - application/json
+      description: Link a bank account (optionally as default). acct_no is plaintext
+        in; the SP encrypts it at rest and never echoes it in clear.
+      parameters:
+      - description: Client number
+        in: path
+        name: client_no
+        required: true
+        type: string
+      - description: Bank link request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.LinkBankRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BankLinkResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Client not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Link a bank account to a client
+      tags:
+      - clients
+  /v1/clients/{client_no}/banks/{link_id}/default:
+    put:
+      description: Make an existing linked bank the client's default.
+      parameters:
+      - description: Client number
+        in: path
+        name: client_no
+        required: true
+        type: string
+      - description: Bank link id
+        in: path
+        name: link_id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BankLinkResponse'
+              type: object
+        "400":
+          description: Invalid link id
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Client or link not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Set default linked bank
+      tags:
+      - clients
+  /v1/clients/{client_no}/kyc:
+    post:
+      consumes:
+      - application/json
+      description: Submit/update eKYC info and raise the KYC tier (US-1.2). Reaching
+        tier >= 2 stamps verified_at.
+      parameters:
+      - description: Client number
+        in: path
+        name: client_no
+        required: true
+        type: string
+      - description: KYC update request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.KycUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.KycResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Client not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Update client KYC
+      tags:
+      - clients
+  /v1/finance/fee-charge:
+    post:
+      consumes:
+      - application/json
+      description: Charge an annual/penalty/service fee (with VAT) against a wallet,
+        not tied to any money movement (US-2.8). Idempotent on `reference`.
+      parameters:
+      - description: Fee charge request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.FeeChargeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Duplicate idempotent replay
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.FeeChargeResponse'
+              type: object
+        "201":
+          description: Posted
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.FeeChargeResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation (e.g. insufficient funds)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Charge a standalone fee + VAT
+      tags:
+      - finance
+  /v1/finance/fee-charge/reverse:
+    post:
+      consumes:
+      - application/json
+      description: Reverse a fee charge by its original `reference` (US-2.8). Idempotent.
+      parameters:
+      - description: Fee reversal request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.FeeChargeReversalRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.FeeChargeReversalResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Original charge not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Reverse a standalone fee charge
+      tags:
+      - finance
+  /v1/finance/merchant-deposit:
+    post:
+      consumes:
+      - application/json
+      description: 'Route an inbound merchant deposit/payment into a group: settlement
+        while cold, a reference-hashed shard once hot (US-1.11). Idempotent on `reference`.'
+      parameters:
+      - description: Merchant deposit request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.MerchantDepositRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Duplicate idempotent replay
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantDepositResponse'
+              type: object
+        "201":
+          description: Posted
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantDepositResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Group not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Merchant deposit
+      tags:
+      - finance
+  /v1/finance/merchant-withdraw:
+    post:
+      consumes:
+      - application/json
+      description: Withdraw from a merchant group settlement account, sweeping hot
+        shards first when `auto_sweep` is true (default).
+      parameters:
+      - description: Merchant withdraw request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.MerchantWithdrawRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Duplicate idempotent replay
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantWithdrawResponse'
+              type: object
+        "201":
+          description: Posted
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantWithdrawResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "409":
+          description: Concurrency conflict (retryable)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Merchant settlement withdraw
+      tags:
+      - finance
+  /v1/finance/merchant-withdraw/reverse:
+    post:
+      consumes:
+      - application/json
+      description: Reverse a merchant-settlement withdraw by its original reference,
+        crediting principal + fee/VAT back to the settlement account. Idempotent.
+        Ops-only — requires role wallet.finance.reverse.
+      parameters:
+      - description: Merchant withdraw reversal request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.MerchantWithdrawReversalRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MerchantWithdrawReversalResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "403":
+          description: Missing wallet.finance.reverse role
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Original withdraw not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Reverse a merchant-settlement withdraw
+      tags:
+      - finance
+  /v1/finance/restraints:
+    get:
+      description: List an account's restraints (all statuses), newest-first, keyset-paginated.
+        Pass next_cursor as ?before_seq= for the next page.
+      parameters:
+      - description: Account number
+        in: query
+        name: acct_no
+        required: true
+        type: string
+      - description: Page size (1..200, default 100)
+        in: query
+        name: limit
+        type: integer
+      - description: 'Keyset cursor: return rows with seq_no < before_seq'
+        in: query
+        name: before_seq
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RestraintListResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: List account restraints
+      tags:
+      - finance
+    post:
+      consumes:
+      - application/json
+      description: Place a hold/lien on an account; reduces available balance.
+      parameters:
+      - description: Restraint request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.AddRestraintRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RestraintResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Account not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Add a restraint (hold/lien)
+      tags:
+      - finance
+  /v1/finance/restraints/{id}:
+    get:
+      parameters:
+      - description: Restraint id (seq_no)
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RestraintViewResponse'
+              type: object
+        "400":
+          description: Invalid id
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Restraint not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Get a restraint by id
+      tags:
+      - finance
+  /v1/finance/restraints/{id}/release:
+    post:
+      consumes:
+      - application/json
+      description: Release an active restraint. Body is optional (reason required
+        only for court/tax restraints, enforced by the SP).
+      parameters:
+      - description: Restraint id (seq_no)
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Release payload (optional)
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/dto.ReleaseRestraintRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RestraintResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Restraint not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Release a restraint
+      tags:
+      - finance
+  /v1/finance/reverse:
+    post:
+      consumes:
+      - application/json
+      description: Reverse a completed transfer by its original `reference`. Idempotent
+        (re-reversal returns was_already_reversed=true).
+      parameters:
+      - description: Transfer reversal request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.TransferReversalRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TransferReversalResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Original transfer not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Reverse an in-book transfer
+      tags:
+      - finance
+  /v1/finance/topup:
+    post:
+      consumes:
+      - application/json
+      description: Internal credit to a wallet; settles immediately. Idempotent on
+        `reference` — a duplicate returns 200 with the original result.
+      parameters:
+      - description: Top-up request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.TopupRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Duplicate idempotent replay
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TopupResponse'
+              type: object
+        "201":
+          description: Posted
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TopupResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Top up a wallet
+      tags:
+      - finance
+  /v1/finance/topup/reverse:
+    post:
+      consumes:
+      - application/json
+      description: Reverse a completed top-up by its original `reference`. Idempotent.
+      parameters:
+      - description: Top-up reversal request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.TopupReversalRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TopupReversalResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Original top-up not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Reverse a top-up
+      tags:
+      - finance
+  /v1/finance/transactions:
+    get:
+      description: List ledger legs for an account, newest-first, keyset-paginated.
+        Optional post_date range. Pass next_cursor as ?before_seq= for the next page.
+      parameters:
+      - description: Account number
+        in: query
+        name: acct_no
+        required: true
+        type: string
+      - description: post_date >= (YYYY-MM-DD)
+        in: query
+        name: from
+        type: string
+      - description: post_date <= (YYYY-MM-DD)
+        in: query
+        name: to
+        type: string
+      - description: Page size (1..200, default 200)
+        in: query
+        name: limit
+        type: integer
+      - description: 'Keyset cursor: return rows with seq_no < before_seq'
+        in: query
+        name: before_seq
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TxListResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Account not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Account statement (transaction list)
+      tags:
+      - finance
+  /v1/finance/transactions/{tran_key}:
+    get:
+      description: Return every ledger leg of one transaction, primary-leg first.
+      parameters:
+      - description: Transaction internal key (tran_internal_key)
+        in: path
+        name: tran_key
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TxDetailResponse'
+              type: object
+        "400":
+          description: Invalid transaction id
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Transaction not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Transaction detail (all legs)
+      tags:
+      - finance
+  /v1/finance/transfer:
+    post:
+      consumes:
+      - application/json
+      description: In-book transfer (settles immediately, fee/VAT applied). Idempotent
+        on `reference` — a duplicate returns 200.
+      parameters:
+      - description: Transfer request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.TransferRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Duplicate idempotent replay
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TransferResponse'
+              type: object
+        "201":
+          description: Posted
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TransferResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "409":
+          description: Concurrency conflict (retryable)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation (e.g. insufficient funds)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Transfer between wallets
+      tags:
+      - finance
+  /v1/finance/withdraw:
+    post:
+      consumes:
+      - application/json
+      description: Debit a wallet for external disbursement. Ledger commits immediately;
+        disbursement is then driven by the Treasury state machine. Idempotent on `reference`.
+      parameters:
+      - description: Withdraw request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.WithdrawRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Duplicate idempotent replay
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.WithdrawResponse'
+              type: object
+        "201":
+          description: Posted
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.WithdrawResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "409":
+          description: Concurrency conflict (retryable)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation (e.g. insufficient funds)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Withdraw from a wallet
+      tags:
+      - finance
+  /v1/merchant-groups:
+    post:
+      consumes:
+      - application/json
+      description: 'Provision a new COLD merchant/agent group: the group row + its
+        settlement account in one TX (US-1.10). Defaults: MERCHANT group of a MERCHANT-type
+        VND settlement wallet.'
+      parameters:
+      - description: Provision group request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.ProvisionGroupRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ProvisionGroupResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Provision a merchant group
+      tags:
+      - merchant-groups
+  /v1/merchant-groups/{group_id}/activate:
+    post:
+      consumes:
+      - application/json
+      description: Promote a cold merchant group (0 shards) to a hot wallet by creating
+        N empty SHARD sub-accounts (US-1.9). Body optional; defaults to 4 shards.
+      parameters:
+      - description: Merchant group id
+        in: path
+        name: group_id
+        required: true
+        type: string
+      - description: Activation payload (optional; default 4 shards)
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/dto.ActivateHotWalletRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ActivateHotWalletResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Group not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation (e.g. already hot)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Activate hot wallet
+      tags:
+      - merchant-groups
+  /v1/merchant-groups/{group_id}/rescale:
+    post:
+      consumes:
+      - application/json
+      description: Grow an already-hot group up a tier (4->8->16) and rebalance existing
+        shards back to settlement first (US-1.12).
+      parameters:
+      - description: Merchant group id
+        in: path
+        name: group_id
+        required: true
+        type: string
+      - description: Rescale request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.RescaleHotWalletRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.RescaleHotWalletResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Group not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Rescale hot wallet
+      tags:
+      - merchant-groups
+  /v1/onboard:
+    post:
+      consumes:
+      - application/json
+      description: US-1.1/1.7 — create client + KYC + first zero-balance wallet in
+        one TX. CORP/MER require extra_data.business_reg_no + legal_rep (BR-09).
+      parameters:
+      - description: Onboard request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.OnboardRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.OnboardResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Business rule violation (e.g. ORG_FIELDS_REQUIRED)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Onboard a client (OTP-free)
+      tags:
+      - clients
+  /v1/ops/accounts/{acct_no}/balance:
+    get:
+      description: Ops/internal full balance view incl. ledger/calc/restrained breakdown
+        and active restraints (§9.3.2).
+      parameters:
+      - description: Account number
+        in: path
+        name: acct_no
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BalanceOpsResponse'
+              type: object
+        "404":
+          description: Account not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Get account balance (ops full view)
+      tags:
+      - ops
+  /v1/ops/accounts/balance/batch:
+    post:
+      consumes:
+      - application/json
+      description: Query up to 100 account balances at once. Unknown accounts are
+        returned per-item with error=ACCT_NOT_FOUND (§9.3.4).
+      parameters:
+      - description: Batch balance request (max 100 accounts)
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.BalanceBatchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.BalanceBatchResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Batch balance query
+      tags:
+      - ops
+  /v1/ops/clients/{client_no}:
+    get:
+      description: Privileged P1/PII read — raw name + CCCD/passport (wallet_pii_ro
+        pool). Phone/email stay encrypted at rest.
+      parameters:
+      - description: Client number
+        in: path
+        name: client_no
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ClientFullResponse'
+              type: object
+        "404":
+          description: Client not found
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Get a client (unmasked, ops)
+      tags:
+      - ops
+  /v1/treasury/withdrawals/{ext_payout_ref}/acked:
+    post:
+      consumes:
+      - application/json
+      description: S2S callback — Treasury accepted the payout into a batch.
+      parameters:
+      - description: External payout reference
+        in: path
+        name: ext_payout_ref
+        required: true
+        type: string
+      - description: Ack payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.AckRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MarkResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Unknown payout reference
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Illegal state transition
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: 'Treasury: mark withdrawal acknowledged'
+      tags:
+      - treasury
+  /v1/treasury/withdrawals/{ext_payout_ref}/completed:
+    post:
+      consumes:
+      - application/json
+      description: S2S callback — payout settled at the rail (NAPAS ref captured).
+      parameters:
+      - description: External payout reference
+        in: path
+        name: ext_payout_ref
+        required: true
+        type: string
+      - description: Completion payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.CompletedRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MarkResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Unknown payout reference
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Illegal state transition
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: 'Treasury: mark withdrawal completed'
+      tags:
+      - treasury
+  /v1/treasury/withdrawals/{ext_payout_ref}/disbursing:
+    post:
+      description: S2S callback — Treasury has submitted the payout to the rail.
+      parameters:
+      - description: External payout reference
+        in: path
+        name: ext_payout_ref
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.MarkResponse'
+              type: object
+        "404":
+          description: Unknown payout reference
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Illegal state transition
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: 'Treasury: mark withdrawal disbursing'
+      tags:
+      - treasury
+  /v1/treasury/withdrawals/{ext_payout_ref}/reverse:
+    post:
+      consumes:
+      - application/json
+      description: S2S callback — payout failed/timed out; reverse the ledger debit.
+        Idempotent (re-reversal returns was_already_reversed=true).
+      parameters:
+      - description: External payout reference
+        in: path
+        name: ext_payout_ref
+        required: true
+        type: string
+      - description: Reversal payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.ReversalRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.ReversalResponse'
+              type: object
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "404":
+          description: Unknown payout reference
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "422":
+          description: Illegal state transition
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: 'Treasury: reverse a failed withdrawal'
+      tags:
+      - treasury
+produces:
+- application/json
+schemes:
+- http
+- https
+swagger: "2.0"
+tags:
+- description: Liveness/readiness probe
+  name: health
+- description: Money movement + ledger reads (topup, transfer, withdraw, merchant,
+    reversals, fee/VAT, statement, restraints)
+  name: finance
+- description: Client master CRUD, onboarding, KYC, linked banks
+  name: clients
+- description: Wallet lifecycle + profile + balance reads
+  name: accounts
+- description: Merchant hot-wallet group lifecycle (provision -> activate -> rescale)
+  name: merchant-groups
+- description: Privileged/internal reads (full balance, batch balance, unmasked client
+    PII)
+  name: ops
+- description: Withdrawal disbursement state machine (S2S callbacks)
+  name: treasury

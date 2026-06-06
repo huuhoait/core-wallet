@@ -77,14 +77,14 @@ func TransferRespFrom(r *domain.TransferResult) TransferResponse {
 // ----- withdraw -------------------------------------------------------------
 
 type WithdrawRequest struct {
-	AcctNo           string         `json:"acct_no"            binding:"required,acct_no"`
-	Amount           string         `json:"amount"             binding:"required,money"`
-	Reference        string         `json:"reference"          binding:"required,min=8,max=64"`
-	ExtPayoutRef     string         `json:"ext_payout_ref"     binding:"required,min=8,max=64"`
-	BeneficiaryBank  string         `json:"beneficiary_bank"   binding:"required,min=3,max=20"`
-	BeneficiaryAcct  string         `json:"beneficiary_acct"   binding:"required,min=6,max=40"`
-	Narrative        string         `json:"narrative,omitempty" binding:"omitempty,max=250"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
+	AcctNo          string         `json:"acct_no"            binding:"required,acct_no"`
+	Amount          string         `json:"amount"             binding:"required,money"`
+	Reference       string         `json:"reference"          binding:"required,min=8,max=64"`
+	ExtPayoutRef    string         `json:"ext_payout_ref"     binding:"required,min=8,max=64"`
+	BeneficiaryBank string         `json:"beneficiary_bank"   binding:"required,min=3,max=20"`
+	BeneficiaryAcct string         `json:"beneficiary_acct"   binding:"required,min=6,max=40"`
+	Narrative       string         `json:"narrative,omitempty" binding:"omitempty,max=250"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
 }
 
 type WithdrawResponse struct {
@@ -190,14 +190,14 @@ func MarkRespFrom(r *domain.MarkResult) MarkResponse {
 }
 
 type ReversalResponse struct {
-	ReversalTranKey     int64  `json:"reversal_tran_key"`
+	ReversalTranKey    int64  `json:"reversal_tran_key"`
 	WasAlreadyReversed bool   `json:"was_already_reversed"`
 	EventUUID          string `json:"event_uuid,omitempty"`
 }
 
 func ReversalRespFrom(r *domain.ReversalResult) ReversalResponse {
 	out := ReversalResponse{
-		ReversalTranKey:     r.ReversalTranKey,
+		ReversalTranKey:    r.ReversalTranKey,
 		WasAlreadyReversed: r.WasAlreadyReversed,
 	}
 	if r.EventUUID.String() != "00000000-0000-0000-0000-000000000000" {
@@ -216,15 +216,15 @@ const ProblemTypeBase = "https://docs.wallet.example/errors/"
 // `application/problem+json`. The first five fields are RFC 7807; the rest are
 // bank extensions documented in error_management.md §3 / §13.
 type ProblemDetails struct {
-	Status int    `json:"-"`                // HTTP status — kept on struct so abortProblem can call c.Status(p.Status); excluded from body (status lives in the HTTP header)
-	Detail string `json:"detail,omitempty"` // human-readable detail (dynamic context)
+	Status int    `json:"-"`                                                            // HTTP status — kept on struct so abortProblem can call c.Status(p.Status); excluded from body (status lives in the HTTP header)
+	Detail string `json:"detail,omitempty" example:"available 50000 < required 100000"` // human-readable detail (dynamic context)
 
-	ErrorCode         string         `json:"errorCode"`                      // SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for PG-raised, E#### synthetic for Go-side, "999999" when the canonical name is not whitelisted (§3.3)
-	ErrorMessage      string         `json:"errorMessage"`                   // full raw "CODE: detail" message (pg.Message verbatim for PG errors, synthesized for Go); "Internal Error" when not whitelisted
-	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty"` // ISO 20022 External Status Reason (§13.2)
-	TransactionStatus string         `json:"transaction_status,omitempty"`   // pain.002 status (§13.3)
-	TraceID           string         `json:"trace_id,omitempty"`             // = X-Request-Id
-	Timestamp         string         `json:"timestamp,omitempty"`            // RFC 3339
+	ErrorCode         string         `json:"errorCode" example:"E4022"`                                                    // SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for PG-raised, E#### synthetic for Go-side, "999999" when the canonical name is not whitelisted (§3.3)
+	ErrorMessage      string         `json:"errorMessage" example:"INSUFFICIENT_FUNDS: available 50000 < required 100000"` // full raw "CODE: detail" message (pg.Message verbatim for PG errors, synthesized for Go); "Internal Error" when not whitelisted
+	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty" example:"AM04"`                                // ISO 20022 External Status Reason (§13.2)
+	TransactionStatus string         `json:"transaction_status,omitempty" example:"RJCT"`                                  // pain.002 status (§13.3)
+	TraceID           string         `json:"trace_id,omitempty" example:"5f3b2c8e-1a2b-4c3d-9e8f-0a1b2c3d4e5f"`            // = X-Request-Id
+	Timestamp         string         `json:"timestamp,omitempty" example:"2026-06-06T07:30:00Z"`                           // RFC 3339
 	Details           map[string]any `json:"details,omitempty"`
 	Errors            []FieldError   `json:"errors,omitempty"` // field-level (Berlin Group / OBIE style)
 }
@@ -284,6 +284,7 @@ func Ok(data any, traceID string) SuccessEnvelope {
 // no rich *domain.Error is available. The values are synthesized:
 //   - errorCode = MetaFor(code).InternalCode (E#### synthetic SQLSTATE)
 //   - errorMessage = "code: detail"
+//
 // The whitelist gate still applies, so an unregistered code returns 999999.
 func NewProblem(code string, status int, detail, instance, traceID string) ProblemDetails {
 	return NewProblemFromError(&domain.Error{

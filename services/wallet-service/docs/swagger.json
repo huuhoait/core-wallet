@@ -1,0 +1,4676 @@
+{
+    "consumes": [
+        "application/json"
+    ],
+    "produces": [
+        "application/json"
+    ],
+    "schemes": [
+        "http",
+        "https"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "Double-entry e-wallet ledger. The Go service is a thin RPC client over PostgreSQL stored functions; all balance validation, double-entry posting, fee/VAT and reversal logic run atomically in plpgsql. Scope is internal synchronous posting (top-up, transfer, withdraw, merchant settlement, fee/VAT, reversal). External rails (NAPAS, card 3DS, MT940) are out of scope.\n\n## Response envelope\nAll responses use a uniform envelope. Success (2xx): `{ \"errorCode\": \"00000\", \"errorMessage\": \"Success!\", \"data\": \u003cpayload\u003e, \"trace_id\": \"...\", \"timestamp\": \"...\" }` — the operation payload shown in each endpoint's 200/201 schema lives under `data`. Errors use `application/problem+json`: `errorCode` is a SQLSTATE-style code (real PostgreSQL SQLSTATE for SP-raised errors, an `E####` synthetic for Go-side errors, or `999999` when the code is not client-safe), and `errorMessage` is the full `BUSINESS_CODE: detail` string whose leading token is the business code listed below. Errors also carry `iso20022_reason_code`, `transaction_status` (pain.002), `detail`, `trace_id`, `timestamp`, and field-level `errors`.\n\n### Business error code catalogue\n`business code` = leading token of `errorMessage`; `errorCode` = the value returned in the body's `errorCode` field.\n| business code | errorCode | HTTP | ISO 20022 | Description |\n| --- | --- | --- | --- | --- |\n| INVALID_AMOUNT | E4024 | 400 | AM12 | The transaction amount is invalid or missing |\n| AMOUNT_OUT_OF_RANGE | E4024 | 400 | AM02 | The amount is outside the allowed range for this transaction type |\n| METADATA_TOO_LARGE | E4007 | 400 | - | The metadata payload exceeds the maximum allowed size (1 KB) |\n| METADATA_HAS_P1 | E4008 | 400 | - | The metadata contains forbidden PII keys (phone, email, cccd, passport, full_name, bank_acct_no) |\n| SAME_ACCOUNT | E4002 | 400 | BE01 | Source and destination accounts must be different |\n| TRAN_TYPE_INACTIVE | E4003 | 400 | AG02 | The requested transaction type is inactive or does not exist |\n| INVALID_REQUEST | E4001 | 400 | - | The request body is malformed or missing required fields |\n| INVALID_PHONE_FORMAT | E2001 | 400 | - | Phone number must match Vietnam format 0XXXXXXXXX (10 digits) |\n| INSUFFICIENT_FUNDS | E4022 | 422 | AM04 | The account balance is not sufficient to cover this transaction |\n| TIER_LIMIT_EXCEEDED | E4023 | 422 | AM02 | The transaction exceeds the daily or monthly limit for this account tier |\n| ACCT_ROLE_INVALID | E3008 | 422 | - | Operation only allowed on standalone wallets, not SHARD/SETTLEMENT accounts |\n| INVALID_CLIENT_TYPE | E2010 | 422 | - | Client type must be one of IND, CORP, MER |\n| INVALID_ACCT_TYPE | E3007 | 422 | - | The specified account type does not exist |\n| ACCT_CLOSE_NONZERO_BAL | E3003 | 422 | - | Account closure requires a zero balance |\n| ORG_FIELDS_REQUIRED | E2013 | 422 | - | Corporate/merchant clients must provide business_reg_no and legal_rep in extra_data |\n| INVALID_SHARD_COUNT | E3030 | 422 | - | Shard count must be 4, 8, or 16 |\n| INVALID_GROUP_TYPE | E3032 | 422 | - | Group type must be one of MERCHANT, AGENT, NOSTRO_HOT |\n| INVALID_DATE | E8003 | 422 | DT01 | The as_of_date parameter is invalid or refers to a future date |\n| BATCH_SIZE_EXCEEDED | E8004 | 422 | - | The batch request exceeds the maximum number of items (100) |\n| RESTRAINT_TYPE_INVALID | E3022 | 422 | - | Restraint type must be one of DEBIT, CREDIT, ALL, INFO |\n| RESTRAINT_PURPOSE_INVALID | E3023 | 422 | - | Restraint purpose is not a recognized value |\n| RESTRAINT_TYPE_PURPOSE_CONFLICT | E3024 | 422 | - | The restraint type/purpose combination is not allowed |\n| RESTRAINT_AMT_EXCEEDS_BALANCE | E3025 | 422 | AM04 | The pledged amount cannot exceed the current account balance |\n| RESTRAINT_DATE_INVALID | E3026 | 422 | DT01 | The end_date must be on or after the start_date |\n| COURT_ORDER_REMOVE_REQUIRES_DOC | E3027 | 422 | RR04 | Removing a COURT_ORDER/TAX_LIEN restraint requires a reference_doc |\n| TIER_INSUFFICIENT | E2007 | 403 | RR04 | Your KYC tier does not permit this operation |\n| FORBIDDEN | E1006 | 403 | AG01 | You do not have permission to perform this operation |\n| UNAUTHORIZED | E1001 | 401 | - | Authentication is required or the provided credentials are invalid |\n| DR_RESTRAINT_ACTIVE | E3005 | 423 | AC06 | The account has an active debit restraint (hold/lien) |\n| CR_RESTRAINT_ACTIVE | E3006 | 423 | AC06 | The account has an active credit restraint |\n| ACCT_NOT_FOUND | E3001 | 404 | AC01 | The specified account does not exist |\n| CLIENT_NOT_FOUND | E2011 | 404 | - | No client record found for the specified client number |\n| KYC_NOT_FOUND | E2012 | 404 | - | No KYC record exists for this client |\n| BANK_LINK_NOT_FOUND | E2014 | 404 | - | No linked bank account found with the specified ID |\n| RESTRAINT_NOT_FOUND | E3020 | 404 | - | No restraint exists with the specified ID |\n| WD_NOT_FOUND | E6101 | 404 | - | No withdrawal record found for the given payout reference |\n| ACCT_NOT_ACTIVE | E3004 | 403 | AC04 | The account is blocked or closed and cannot process transactions |\n| VERSION_CONFLICT | E4025 | 409 | - | Another transaction updated this account simultaneously; retryable |\n| DUPLICATE_REFERENCE | E4011 | 409 | AM05 | A transaction with this reference has already been processed |\n| CLIENT_ALREADY_EXISTS | E2009 | 409 | AM05 | A client with this identity document already exists |\n| PHONE_ALREADY_REGISTERED | E2002 | 409 | AM05 | This phone number is already associated with an existing account |\n| MAX_WALLET_PER_CLIENT_EXCEEDED | E3002 | 409 | - | Maximum number of wallets reached (CONSUMER 3 per currency, MERCHANT 10) |\n| GROUP_ALREADY_ACTIVATED | E3031 | 409 | - | This merchant group has already been activated with shards |\n| GROUP_ALREADY_EXISTS | E3033 | 409 | AM05 | A group with this ID already exists |\n| GROUP_NOT_ACTIVATED | E3034 | 409 | - | This group is still cold (0 shards); activate it before rescaling |\n| RESTRAINT_ALREADY_REMOVED | E3021 | 409 | - | This restraint has already been released or expired |\n| WD_ALREADY_COMPLETED | E6102 | 409 | - | This withdrawal has already reached COMPLETED status |\n| WD_INVALID_STATE | E6103 | 409 | - | The withdrawal is in a state that does not permit this transition |\n| WD_ALREADY_REVERSED | E6104 | 409 | - | This withdrawal has already been reversed |\n| PERIOD_CLOSED | E8005 | 409 | DT01 | The target accounting date is sealed; post against the current open period |\n| GONE_ONLINE | E8001 | 410 | - | Historical data beyond the online retention period; request an archive extract |\n| TIMEOUT | E9004 | 504 | - | The request exceeded the allowed processing time; you may retry (503 on lock timeout) |\n| PII_DEK_NOT_SET | E5005 | 500 | - | The server PII data-encryption key (DEK) is not set |\n| BATCH_UNBALANCED | E5003 | 500 | - | Internal double-entry invariant violated (sum of debits != sum of credits) |\n| INTERNAL_ERROR | E9001 | 500 | - | An unexpected error occurred; please retry or contact support |\n\nFamily fallbacks: any `*_NOT_FOUND` -\u003e 404, `*_NOT_ACTIVE` -\u003e 403, `*_CONFLICT` -\u003e 409 (e.g. GROUP_NOT_FOUND, SETTLEMENT_NOT_FOUND, GROUP_NOT_ACTIVE).",
+        "title": "Core Wallet API",
+        "termsOfService": "https://docs.wallet.example/terms",
+        "contact": {
+            "name": "Core Wallet Team",
+            "email": "hoalh2@hdbank.com.vn"
+        },
+        "license": {
+            "name": "Proprietary"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/",
+    "paths": {
+        "/healthz": {
+            "get": {
+                "description": "Cheap liveness probe (no DB round-trip).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "status: ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/accounts": {
+            "post": {
+                "description": "Open a zero-balance wallet for a client (count-limited per currency).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "accounts"
+                ],
+                "summary": "Open a wallet",
+                "parameters": [
+                    {
+                        "description": "Open account request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.OpenAccountRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountOpenResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation (e.g. account count limit)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/accounts/{acct_no}": {
+            "get": {
+                "description": "Account profile (no client PII).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "accounts"
+                ],
+                "summary": "Get account profile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Account number",
+                        "name": "acct_no",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Account not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Block / close / re-activate an account (status A | B | C).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "accounts"
+                ],
+                "summary": "Update account status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Account number",
+                        "name": "acct_no",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Status update request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.UpdateAccountStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountStatusResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Account not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation (e.g. illegal transition)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/accounts/{acct_no}/balance": {
+            "get": {
+                "description": "Without as_of_date → customer realtime balance (§9.3.1). With as_of_date → historical end-of-day snapshot (§9.3.3, returns BalanceAsOfResponse).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "accounts"
+                ],
+                "summary": "Get account balance",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Account number",
+                        "name": "acct_no",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Historical EOD snapshot date (YYYY-MM-DD)",
+                        "name": "as_of_date",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Realtime balance (or BalanceAsOfResponse when as_of_date is set)",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BalanceResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Account not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/clients": {
+            "get": {
+                "description": "Masked client list (PII masked), keyset-paginated by client_no ascending. Optional status / client_type filters. Pass next_cursor as ?after= for the next page.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "List clients (masked)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by status (A|B|C)",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by client_type (IND|CORP|MER)",
+                        "name": "client_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (1..200, default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Keyset cursor: return rows with client_no \u003e after",
+                        "name": "after",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Create a client master record (identity only; no KYC flow). client_type is IND | CORP | MER.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Create a client",
+                "parameters": [
+                    {
+                        "description": "Client create request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.CreateClientRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation (e.g. invalid client type)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/clients/{client_no}": {
+            "get": {
+                "description": "Masked client profile (name + CCCD/passport masked); raw PII never exposed on this path.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Get a client (masked)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientProfileResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Patch mutable identity fields of an existing client (all fields optional).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Update a client",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Client update request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.UpdateClientRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/clients/{client_no}/banks": {
+            "post": {
+                "description": "Link a bank account (optionally as default). acct_no is plaintext in; the SP encrypts it at rest and never echoes it in clear.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Link a bank account to a client",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Bank link request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.LinkBankRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BankLinkResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/clients/{client_no}/banks/{link_id}/default": {
+            "put": {
+                "description": "Make an existing linked bank the client's default.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Set default linked bank",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Bank link id",
+                        "name": "link_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BankLinkResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid link id",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Client or link not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/clients/{client_no}/kyc": {
+            "post": {
+                "description": "Submit/update eKYC info and raise the KYC tier (US-1.2). Reaching tier \u003e= 2 stamps verified_at.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Update client KYC",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "KYC update request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.KycUpdateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.KycResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/fee-charge": {
+            "post": {
+                "description": "Charge an annual/penalty/service fee (with VAT) against a wallet, not tied to any money movement (US-2.8). Idempotent on `reference`.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Charge a standalone fee + VAT",
+                "parameters": [
+                    {
+                        "description": "Fee charge request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.FeeChargeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Duplicate idempotent replay",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.FeeChargeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "201": {
+                        "description": "Posted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.FeeChargeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation (e.g. insufficient funds)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/fee-charge/reverse": {
+            "post": {
+                "description": "Reverse a fee charge by its original `reference` (US-2.8). Idempotent.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Reverse a standalone fee charge",
+                "parameters": [
+                    {
+                        "description": "Fee reversal request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.FeeChargeReversalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.FeeChargeReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Original charge not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/merchant-deposit": {
+            "post": {
+                "description": "Route an inbound merchant deposit/payment into a group: settlement while cold, a reference-hashed shard once hot (US-1.11). Idempotent on `reference`.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Merchant deposit",
+                "parameters": [
+                    {
+                        "description": "Merchant deposit request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.MerchantDepositRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Duplicate idempotent replay",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantDepositResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "201": {
+                        "description": "Posted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantDepositResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Group not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/merchant-withdraw": {
+            "post": {
+                "description": "Withdraw from a merchant group settlement account, sweeping hot shards first when `auto_sweep` is true (default).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Merchant settlement withdraw",
+                "parameters": [
+                    {
+                        "description": "Merchant withdraw request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.MerchantWithdrawRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Duplicate idempotent replay",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantWithdrawResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "201": {
+                        "description": "Posted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantWithdrawResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "409": {
+                        "description": "Concurrency conflict (retryable)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/merchant-withdraw/reverse": {
+            "post": {
+                "description": "Reverse a merchant-settlement withdraw by its original reference, crediting principal + fee/VAT back to the settlement account. Idempotent. Ops-only — requires role wallet.finance.reverse.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Reverse a merchant-settlement withdraw",
+                "parameters": [
+                    {
+                        "description": "Merchant withdraw reversal request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.MerchantWithdrawReversalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MerchantWithdrawReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "403": {
+                        "description": "Missing wallet.finance.reverse role",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Original withdraw not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/restraints": {
+            "get": {
+                "description": "List an account's restraints (all statuses), newest-first, keyset-paginated. Pass next_cursor as ?before_seq= for the next page.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "List account restraints",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Account number",
+                        "name": "acct_no",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (1..200, default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Keyset cursor: return rows with seq_no \u003c before_seq",
+                        "name": "before_seq",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RestraintListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Place a hold/lien on an account; reduces available balance.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Add a restraint (hold/lien)",
+                "parameters": [
+                    {
+                        "description": "Restraint request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.AddRestraintRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RestraintResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Account not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/restraints/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Get a restraint by id",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Restraint id (seq_no)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RestraintViewResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid id",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Restraint not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/restraints/{id}/release": {
+            "post": {
+                "description": "Release an active restraint. Body is optional (reason required only for court/tax restraints, enforced by the SP).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Release a restraint",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Restraint id (seq_no)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Release payload (optional)",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ReleaseRestraintRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RestraintResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Restraint not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/reverse": {
+            "post": {
+                "description": "Reverse a completed transfer by its original `reference`. Idempotent (re-reversal returns was_already_reversed=true).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Reverse an in-book transfer",
+                "parameters": [
+                    {
+                        "description": "Transfer reversal request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.TransferReversalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TransferReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Original transfer not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/topup": {
+            "post": {
+                "description": "Internal credit to a wallet; settles immediately. Idempotent on `reference` — a duplicate returns 200 with the original result.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Top up a wallet",
+                "parameters": [
+                    {
+                        "description": "Top-up request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.TopupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Duplicate idempotent replay",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TopupResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "201": {
+                        "description": "Posted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TopupResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/topup/reverse": {
+            "post": {
+                "description": "Reverse a completed top-up by its original `reference`. Idempotent.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Reverse a top-up",
+                "parameters": [
+                    {
+                        "description": "Top-up reversal request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.TopupReversalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TopupReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Original top-up not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/transactions": {
+            "get": {
+                "description": "List ledger legs for an account, newest-first, keyset-paginated. Optional post_date range. Pass next_cursor as ?before_seq= for the next page.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Account statement (transaction list)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Account number",
+                        "name": "acct_no",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "post_date \u003e= (YYYY-MM-DD)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "post_date \u003c= (YYYY-MM-DD)",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (1..200, default 200)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Keyset cursor: return rows with seq_no \u003c before_seq",
+                        "name": "before_seq",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TxListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Account not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/transactions/{tran_key}": {
+            "get": {
+                "description": "Return every ledger leg of one transaction, primary-leg first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Transaction detail (all legs)",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Transaction internal key (tran_internal_key)",
+                        "name": "tran_key",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TxDetailResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid transaction id",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Transaction not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/transfer": {
+            "post": {
+                "description": "In-book transfer (settles immediately, fee/VAT applied). Idempotent on `reference` — a duplicate returns 200.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Transfer between wallets",
+                "parameters": [
+                    {
+                        "description": "Transfer request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.TransferRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Duplicate idempotent replay",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TransferResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "201": {
+                        "description": "Posted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TransferResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "409": {
+                        "description": "Concurrency conflict (retryable)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation (e.g. insufficient funds)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/finance/withdraw": {
+            "post": {
+                "description": "Debit a wallet for external disbursement. Ledger commits immediately; disbursement is then driven by the Treasury state machine. Idempotent on `reference`.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "finance"
+                ],
+                "summary": "Withdraw from a wallet",
+                "parameters": [
+                    {
+                        "description": "Withdraw request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.WithdrawRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Duplicate idempotent replay",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.WithdrawResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "201": {
+                        "description": "Posted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.WithdrawResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "409": {
+                        "description": "Concurrency conflict (retryable)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation (e.g. insufficient funds)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/merchant-groups": {
+            "post": {
+                "description": "Provision a new COLD merchant/agent group: the group row + its settlement account in one TX (US-1.10). Defaults: MERCHANT group of a MERCHANT-type VND settlement wallet.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "merchant-groups"
+                ],
+                "summary": "Provision a merchant group",
+                "parameters": [
+                    {
+                        "description": "Provision group request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProvisionGroupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ProvisionGroupResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/merchant-groups/{group_id}/activate": {
+            "post": {
+                "description": "Promote a cold merchant group (0 shards) to a hot wallet by creating N empty SHARD sub-accounts (US-1.9). Body optional; defaults to 4 shards.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "merchant-groups"
+                ],
+                "summary": "Activate hot wallet",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Merchant group id",
+                        "name": "group_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Activation payload (optional; default 4 shards)",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ActivateHotWalletRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ActivateHotWalletResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Group not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation (e.g. already hot)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/merchant-groups/{group_id}/rescale": {
+            "post": {
+                "description": "Grow an already-hot group up a tier (4-\u003e8-\u003e16) and rebalance existing shards back to settlement first (US-1.12).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "merchant-groups"
+                ],
+                "summary": "Rescale hot wallet",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Merchant group id",
+                        "name": "group_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rescale request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.RescaleHotWalletRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.RescaleHotWalletResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Group not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/onboard": {
+            "post": {
+                "description": "US-1.1/1.7 — create client + KYC + first zero-balance wallet in one TX. CORP/MER require extra_data.business_reg_no + legal_rep (BR-09).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Onboard a client (OTP-free)",
+                "parameters": [
+                    {
+                        "description": "Onboard request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.OnboardRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.OnboardResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Business rule violation (e.g. ORG_FIELDS_REQUIRED)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/ops/accounts/balance/batch": {
+            "post": {
+                "description": "Query up to 100 account balances at once. Unknown accounts are returned per-item with error=ACCT_NOT_FOUND (§9.3.4).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Batch balance query",
+                "parameters": [
+                    {
+                        "description": "Batch balance request (max 100 accounts)",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.BalanceBatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BalanceBatchResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/ops/accounts/{acct_no}/balance": {
+            "get": {
+                "description": "Ops/internal full balance view incl. ledger/calc/restrained breakdown and active restraints (§9.3.2).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Get account balance (ops full view)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Account number",
+                        "name": "acct_no",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.BalanceOpsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Account not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/ops/clients/{client_no}": {
+            "get": {
+                "description": "Privileged P1/PII read — raw name + CCCD/passport (wallet_pii_ro pool). Phone/email stay encrypted at rest.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Get a client (unmasked, ops)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client number",
+                        "name": "client_no",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ClientFullResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Client not found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/treasury/withdrawals/{ext_payout_ref}/acked": {
+            "post": {
+                "description": "S2S callback — Treasury accepted the payout into a batch.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "treasury"
+                ],
+                "summary": "Treasury: mark withdrawal acknowledged",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "External payout reference",
+                        "name": "ext_payout_ref",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Ack payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.AckRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MarkResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown payout reference",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Illegal state transition",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/treasury/withdrawals/{ext_payout_ref}/completed": {
+            "post": {
+                "description": "S2S callback — payout settled at the rail (NAPAS ref captured).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "treasury"
+                ],
+                "summary": "Treasury: mark withdrawal completed",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "External payout reference",
+                        "name": "ext_payout_ref",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Completion payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.CompletedRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MarkResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown payout reference",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Illegal state transition",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/treasury/withdrawals/{ext_payout_ref}/disbursing": {
+            "post": {
+                "description": "S2S callback — Treasury has submitted the payout to the rail.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "treasury"
+                ],
+                "summary": "Treasury: mark withdrawal disbursing",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "External payout reference",
+                        "name": "ext_payout_ref",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.MarkResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown payout reference",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Illegal state transition",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/treasury/withdrawals/{ext_payout_ref}/reverse": {
+            "post": {
+                "description": "S2S callback — payout failed/timed out; reverse the ledger debit. Idempotent (re-reversal returns was_already_reversed=true).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "treasury"
+                ],
+                "summary": "Treasury: reverse a failed withdrawal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "External payout reference",
+                        "name": "ext_payout_ref",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Reversal payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.ReversalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.ReversalResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown payout reference",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "422": {
+                        "description": "Illegal state transition",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "dto.AccountOpenResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "acct_status": {
+                    "type": "string"
+                },
+                "acct_type": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.AccountResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "acct_open_date": {
+                    "type": "string"
+                },
+                "acct_role": {
+                    "type": "string"
+                },
+                "acct_status": {
+                    "type": "string"
+                },
+                "acct_type": {
+                    "type": "string"
+                },
+                "actual_bal": {
+                    "type": "string"
+                },
+                "available_bal": {
+                    "description": "calc_bal = actual - restrained",
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string"
+                },
+                "cr_blocked": {
+                    "type": "string"
+                },
+                "group_id": {
+                    "type": "string"
+                },
+                "last_tran_date": {
+                    "type": "string"
+                },
+                "prev_day_bal": {
+                    "type": "string"
+                },
+                "restrained_amt": {
+                    "type": "string"
+                },
+                "restraint_present": {
+                    "type": "string"
+                },
+                "shard_index": {
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.AccountStatusResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "acct_status": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.AckRequest": {
+            "type": "object",
+            "required": [
+                "treasury_batch_id"
+            ],
+            "properties": {
+                "treasury_batch_id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 4
+                }
+            }
+        },
+        "dto.ActivateHotWalletRequest": {
+            "type": "object",
+            "properties": {
+                "shard_count": {
+                    "type": "integer",
+                    "enum": [
+                        4,
+                        8,
+                        16
+                    ]
+                }
+            }
+        },
+        "dto.ActivateHotWalletResponse": {
+            "type": "object",
+            "properties": {
+                "group_id": {
+                    "type": "string"
+                },
+                "settlement_acct_no": {
+                    "type": "string"
+                },
+                "shard_acct_nos": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "shard_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.AddRestraintRequest": {
+            "type": "object",
+            "required": [
+                "acct_no",
+                "restraint_purpose",
+                "restraint_type"
+            ],
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "end_date": {
+                    "type": "string"
+                },
+                "narrative": {
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "pledged_amt": {
+                    "type": "string"
+                },
+                "reference_doc": {
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "restraint_purpose": {
+                    "type": "string"
+                },
+                "restraint_type": {
+                    "type": "string"
+                },
+                "start_date": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.BalanceBatchItem": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "actual_bal": {
+                    "type": "string"
+                },
+                "available_bal": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "restrained_amt": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.BalanceBatchRequest": {
+            "type": "object",
+            "required": [
+                "acct_nos"
+            ],
+            "properties": {
+                "acct_nos": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "dto.BalanceBatchResponse": {
+            "type": "object",
+            "properties": {
+                "as_of": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.BalanceBatchItem"
+                    }
+                }
+            }
+        },
+        "dto.BalanceOpsResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "acct_status": {
+                    "type": "string"
+                },
+                "active_restraints": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "actual_bal": {
+                    "type": "string"
+                },
+                "as_of": {
+                    "type": "string"
+                },
+                "available_bal": {
+                    "type": "string"
+                },
+                "calc_bal": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string"
+                },
+                "cr_blocked": {
+                    "type": "string"
+                },
+                "last_tran_date": {
+                    "type": "string"
+                },
+                "ledger_bal": {
+                    "type": "string"
+                },
+                "previous_day_bal": {
+                    "type": "string"
+                },
+                "restrained_amt": {
+                    "type": "string"
+                },
+                "restraint_present": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.BalanceResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "acct_status": {
+                    "type": "string"
+                },
+                "actual_bal": {
+                    "type": "string"
+                },
+                "as_of": {
+                    "type": "string"
+                },
+                "available_bal": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "last_tran_date": {
+                    "type": "string"
+                },
+                "masked": {
+                    "type": "boolean"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "restrained_amt": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.BankLinkResponse": {
+            "type": "object",
+            "properties": {
+                "client_no": {
+                    "type": "string"
+                },
+                "is_default": {
+                    "type": "boolean"
+                },
+                "link_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.ClientFullResponse": {
+            "type": "object",
+            "properties": {
+                "acct_exec": {
+                    "type": "string"
+                },
+                "birth_date": {
+                    "type": "string"
+                },
+                "client_grp": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string"
+                },
+                "client_type": {
+                    "type": "string"
+                },
+                "country_citizen": {
+                    "type": "string"
+                },
+                "country_loc": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "given_name": {
+                    "type": "string"
+                },
+                "global_id": {
+                    "type": "string"
+                },
+                "global_id_type": {
+                    "type": "string"
+                },
+                "kyc_status": {
+                    "type": "string"
+                },
+                "kyc_tier": {
+                    "type": "string"
+                },
+                "marital_status": {
+                    "type": "string"
+                },
+                "registered_date": {
+                    "type": "string"
+                },
+                "resident_status": {
+                    "type": "string"
+                },
+                "risk_level": {
+                    "type": "string"
+                },
+                "sex": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "surname": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "verified_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.ClientListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.ClientProfileResponse"
+                    }
+                },
+                "next_cursor": {
+                    "description": "pass as ?after= for the next page",
+                    "type": "string"
+                },
+                "page_size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.ClientProfileResponse": {
+            "type": "object",
+            "properties": {
+                "acct_exec": {
+                    "type": "string"
+                },
+                "birth_date": {
+                    "type": "string"
+                },
+                "client_grp": {
+                    "type": "string"
+                },
+                "client_name_masked": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string"
+                },
+                "client_type": {
+                    "type": "string"
+                },
+                "country_citizen": {
+                    "type": "string"
+                },
+                "country_loc": {
+                    "type": "string"
+                },
+                "global_id_masked": {
+                    "type": "string"
+                },
+                "global_id_type": {
+                    "type": "string"
+                },
+                "kyc_status": {
+                    "type": "string"
+                },
+                "kyc_tier": {
+                    "type": "string"
+                },
+                "phone_masked": {
+                    "type": "string"
+                },
+                "resident_status": {
+                    "type": "string"
+                },
+                "risk_level": {
+                    "type": "string"
+                },
+                "sex": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "verified_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.ClientResponse": {
+            "type": "object",
+            "properties": {
+                "client_no": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.CompletedRequest": {
+            "type": "object",
+            "required": [
+                "napas_ref"
+            ],
+            "properties": {
+                "napas_ref": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 4
+                }
+            }
+        },
+        "dto.CreateClientRequest": {
+            "type": "object",
+            "required": [
+                "client_name",
+                "client_type"
+            ],
+            "properties": {
+                "birth_date": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string",
+                    "maxLength": 200
+                },
+                "client_type": {
+                    "type": "string"
+                },
+                "country_citizen": {
+                    "type": "string",
+                    "maxLength": 8
+                },
+                "country_loc": {
+                    "type": "string",
+                    "maxLength": 8
+                },
+                "given_name": {
+                    "type": "string",
+                    "maxLength": 80
+                },
+                "global_id": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "global_id_type": {
+                    "type": "string",
+                    "maxLength": 12
+                },
+                "sex": {
+                    "type": "string",
+                    "enum": [
+                        "M",
+                        "F",
+                        "O"
+                    ]
+                },
+                "surname": {
+                    "type": "string",
+                    "maxLength": 80
+                }
+            }
+        },
+        "dto.FeeChargeRequest": {
+            "type": "object",
+            "required": [
+                "acct_no",
+                "amount",
+                "reference"
+            ],
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "amount": {
+                    "type": "string"
+                },
+                "fee_code": {
+                    "type": "string",
+                    "maxLength": 16,
+                    "minLength": 2
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "narrative": {
+                    "type": "string",
+                    "maxLength": 250
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.FeeChargeResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "fee_gross": {
+                    "type": "string"
+                },
+                "new_balance": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tran_internal_key": {
+                    "type": "integer"
+                },
+                "vat_amount": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.FeeChargeReversalRequest": {
+            "type": "object",
+            "required": [
+                "reason",
+                "reference"
+            ],
+            "properties": {
+                "initiator": {
+                    "type": "string",
+                    "enum": [
+                        "OPS_MANUAL",
+                        "FRAUD",
+                        "DISPUTE",
+                        "SYSTEM"
+                    ]
+                },
+                "reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 3
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.FeeChargeReversalResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "new_balance": {
+                    "type": "string"
+                },
+                "reversal_tran_key": {
+                    "type": "integer"
+                },
+                "was_already_reversed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "dto.FieldError": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.KycResponse": {
+            "type": "object",
+            "properties": {
+                "client_no": {
+                    "type": "string"
+                },
+                "kyc_tier": {
+                    "type": "string"
+                },
+                "risk_level": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "verified_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.KycUpdateRequest": {
+            "type": "object",
+            "properties": {
+                "ekyc_provider": {
+                    "type": "string",
+                    "maxLength": 40
+                },
+                "ekyc_ref": {
+                    "type": "string",
+                    "maxLength": 80
+                },
+                "extra_data": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "face_match_score": {
+                    "type": "number",
+                    "maximum": 1,
+                    "minimum": 0
+                },
+                "kyc_tier": {
+                    "type": "string",
+                    "enum": [
+                        "0",
+                        "1",
+                        "2",
+                        "3"
+                    ]
+                },
+                "liveness_result": {
+                    "type": "string",
+                    "maxLength": 8
+                },
+                "risk_level": {
+                    "type": "string",
+                    "maxLength": 4
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "A",
+                        "B",
+                        "C",
+                        "P"
+                    ]
+                }
+            }
+        },
+        "dto.LinkBankRequest": {
+            "type": "object",
+            "required": [
+                "acct_no",
+                "bank_code"
+            ],
+            "properties": {
+                "acct_holder_name": {
+                    "type": "string",
+                    "maxLength": 200
+                },
+                "acct_no": {
+                    "type": "string",
+                    "maxLength": 40
+                },
+                "bank_code": {
+                    "type": "string",
+                    "maxLength": 20
+                },
+                "bank_name": {
+                    "type": "string",
+                    "maxLength": 120
+                },
+                "is_default": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "dto.MarkResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "event_uuid": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "transaction_status": {
+                    "description": "ISO 20022 (§13.3)",
+                    "type": "string"
+                }
+            }
+        },
+        "dto.MerchantDepositRequest": {
+            "type": "object",
+            "required": [
+                "amount",
+                "group_id",
+                "reference"
+            ],
+            "properties": {
+                "amount": {
+                    "type": "string"
+                },
+                "group_id": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 2
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.MerchantDepositResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "new_balance": {
+                    "type": "string"
+                },
+                "shard_index": {
+                    "description": "null when routed to settlement (cold group)",
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "target_acct_no": {
+                    "type": "string"
+                },
+                "tran_internal_key": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.MerchantWithdrawRequest": {
+            "type": "object",
+            "required": [
+                "amount",
+                "group_id",
+                "reference"
+            ],
+            "properties": {
+                "amount": {
+                    "type": "string"
+                },
+                "auto_sweep": {
+                    "description": "AutoSweep defaults to true (pointer distinguishes \"omitted\" from \"false\").",
+                    "type": "boolean"
+                },
+                "ext_payout_ref": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                },
+                "group_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 2
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.MerchantWithdrawResponse": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "string"
+                },
+                "event_uuid": {
+                    "type": "string"
+                },
+                "fee_gross": {
+                    "type": "string"
+                },
+                "settlement_balance_after": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "total_deducted": {
+                    "type": "string"
+                },
+                "tran_internal_key": {
+                    "type": "integer"
+                },
+                "transaction_status": {
+                    "description": "ISO 20022 (§13.3)",
+                    "type": "string"
+                },
+                "vat_amount": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.MerchantWithdrawReversalRequest": {
+            "type": "object",
+            "required": [
+                "fail_code",
+                "fail_reason",
+                "reference"
+            ],
+            "properties": {
+                "fail_code": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 3
+                },
+                "fail_reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 3
+                },
+                "initiator": {
+                    "type": "string",
+                    "enum": [
+                        "OPS_MANUAL",
+                        "FRAUD",
+                        "DISPUTE",
+                        "SYSTEM"
+                    ]
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.MerchantWithdrawReversalResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "reversal_tran_key": {
+                    "type": "integer"
+                },
+                "settlement_balance_after": {
+                    "type": "string"
+                },
+                "was_already_reversed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "dto.OnboardRequest": {
+            "type": "object",
+            "required": [
+                "client_name",
+                "client_type",
+                "phone"
+            ],
+            "properties": {
+                "acct_type": {
+                    "type": "string",
+                    "enum": [
+                        "CONSUMER",
+                        "MERCHANT"
+                    ]
+                },
+                "birthdate": {
+                    "description": "Flat identity columns (FM_CLIENT_KYC). Dates are YYYY-MM-DD.",
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string",
+                    "maxLength": 200
+                },
+                "client_type": {
+                    "type": "string",
+                    "enum": [
+                        "IND",
+                        "CORP",
+                        "MER"
+                    ]
+                },
+                "country_citizen": {
+                    "type": "string",
+                    "maxLength": 8
+                },
+                "country_loc": {
+                    "type": "string",
+                    "maxLength": 8
+                },
+                "date_issue": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string",
+                    "maxLength": 120
+                },
+                "expire_date": {
+                    "type": "string"
+                },
+                "extra_data": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "global_id": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "global_id_type": {
+                    "type": "string",
+                    "maxLength": 12
+                },
+                "phone": {
+                    "type": "string"
+                },
+                "place_issue": {
+                    "type": "string",
+                    "maxLength": 120
+                },
+                "sex": {
+                    "type": "string",
+                    "enum": [
+                        "M",
+                        "F",
+                        "O"
+                    ]
+                }
+            }
+        },
+        "dto.OnboardResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "balance": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "internal_key": {
+                    "type": "integer"
+                },
+                "kyc_status": {
+                    "type": "string"
+                },
+                "kyc_tier": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.OpenAccountRequest": {
+            "type": "object",
+            "required": [
+                "acct_type",
+                "client_no"
+            ],
+            "properties": {
+                "acct_type": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string",
+                    "maxLength": 4
+                },
+                "client_no": {
+                    "type": "string",
+                    "maxLength": 48
+                }
+            }
+        },
+        "dto.ProblemDetails": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "description": "human-readable detail (dynamic context)",
+                    "type": "string",
+                    "example": "available 50000 \u003c required 100000"
+                },
+                "details": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "errorCode": {
+                    "description": "SQLSTATE-style code: real pg SQLSTATE (P0060/40001/23505) for PG-raised, E#### synthetic for Go-side, \"999999\" when the canonical name is not whitelisted (§3.3)",
+                    "type": "string",
+                    "example": "E4022"
+                },
+                "errorMessage": {
+                    "description": "full raw \"CODE: detail\" message (pg.Message verbatim for PG errors, synthesized for Go); \"Internal Error\" when not whitelisted",
+                    "type": "string",
+                    "example": "INSUFFICIENT_FUNDS: available 50000 \u003c required 100000"
+                },
+                "errors": {
+                    "description": "field-level (Berlin Group / OBIE style)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.FieldError"
+                    }
+                },
+                "iso20022_reason_code": {
+                    "description": "ISO 20022 External Status Reason (§13.2)",
+                    "type": "string",
+                    "example": "AM04"
+                },
+                "timestamp": {
+                    "description": "RFC 3339",
+                    "type": "string",
+                    "example": "2026-06-06T07:30:00Z"
+                },
+                "trace_id": {
+                    "description": "= X-Request-Id",
+                    "type": "string",
+                    "example": "5f3b2c8e-1a2b-4c3d-9e8f-0a1b2c3d4e5f"
+                },
+                "transaction_status": {
+                    "description": "pain.002 status (§13.3)",
+                    "type": "string",
+                    "example": "RJCT"
+                }
+            }
+        },
+        "dto.ProvisionGroupRequest": {
+            "type": "object",
+            "required": [
+                "client_no",
+                "group_id"
+            ],
+            "properties": {
+                "acct_type": {
+                    "type": "string",
+                    "maxLength": 12
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string",
+                    "maxLength": 48,
+                    "minLength": 2
+                },
+                "group_id": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 2
+                },
+                "group_type": {
+                    "type": "string",
+                    "enum": [
+                        "MERCHANT",
+                        "AGENT",
+                        "NOSTRO_HOT"
+                    ]
+                },
+                "shard_buffer": {
+                    "type": "string"
+                },
+                "shard_threshold": {
+                    "type": "string"
+                },
+                "sweep_interval_sec": {
+                    "type": "integer",
+                    "maximum": 3600,
+                    "minimum": 1
+                }
+            }
+        },
+        "dto.ProvisionGroupResponse": {
+            "type": "object",
+            "properties": {
+                "group_id": {
+                    "type": "string"
+                },
+                "group_status": {
+                    "type": "string"
+                },
+                "group_type": {
+                    "type": "string"
+                },
+                "settlement_acct_no": {
+                    "type": "string"
+                },
+                "settlement_internal_key": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.ReleaseRestraintRequest": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                }
+            }
+        },
+        "dto.RescaleHotWalletRequest": {
+            "type": "object",
+            "required": [
+                "new_shard_count"
+            ],
+            "properties": {
+                "new_shard_count": {
+                    "type": "integer",
+                    "enum": [
+                        8,
+                        16
+                    ]
+                }
+            }
+        },
+        "dto.RescaleHotWalletResponse": {
+            "type": "object",
+            "properties": {
+                "added_acct_nos": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "group_id": {
+                    "type": "string"
+                },
+                "new_shard_count": {
+                    "type": "integer"
+                },
+                "old_shard_count": {
+                    "type": "integer"
+                },
+                "rebalanced_amount": {
+                    "type": "string"
+                },
+                "settlement_acct_no": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.RestraintListResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.RestraintViewResponse"
+                    }
+                },
+                "next_cursor": {
+                    "description": "pass as ?before_seq= for the next page",
+                    "type": "integer"
+                },
+                "page_size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.RestraintResponse": {
+            "type": "object",
+            "properties": {
+                "available_bal_after": {
+                    "type": "string"
+                },
+                "pledged_amt": {
+                    "type": "string"
+                },
+                "restraint_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "'A' added | 'R' released",
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.RestraintViewResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "description": "empty for group-scoped",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "end_date": {
+                    "type": "string"
+                },
+                "narrative": {
+                    "type": "string"
+                },
+                "pledged_amt": {
+                    "type": "string"
+                },
+                "reference_doc": {
+                    "type": "string"
+                },
+                "removed_at": {
+                    "type": "string"
+                },
+                "removed_by": {
+                    "type": "string"
+                },
+                "removed_reason": {
+                    "type": "string"
+                },
+                "restraint_id": {
+                    "type": "integer"
+                },
+                "restraint_purpose": {
+                    "type": "string"
+                },
+                "restraint_type": {
+                    "type": "string"
+                },
+                "start_date": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "A active | R released | E expired",
+                    "type": "string"
+                }
+            }
+        },
+        "dto.ReversalRequest": {
+            "type": "object",
+            "required": [
+                "fail_code",
+                "fail_reason",
+                "initiator"
+            ],
+            "properties": {
+                "fail_code": {
+                    "type": "string",
+                    "enum": [
+                        "NAPAS_INSUFFICIENT_FUNDS",
+                        "BENEF_CLOSED",
+                        "NAPAS_TIMEOUT",
+                        "SLA_TIMEOUT",
+                        "OPS_MANUAL",
+                        "UNKNOWN"
+                    ]
+                },
+                "fail_reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 4
+                },
+                "initiator": {
+                    "type": "string",
+                    "enum": [
+                        "TREASURY_FAILED",
+                        "SLA_TIMEOUT",
+                        "OPS_MANUAL"
+                    ]
+                }
+            }
+        },
+        "dto.ReversalResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "reversal_tran_key": {
+                    "type": "integer"
+                },
+                "was_already_reversed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "dto.SuccessEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {},
+                "errorCode": {
+                    "type": "string"
+                },
+                "errorMessage": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "trace_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.TopupRequest": {
+            "type": "object",
+            "required": [
+                "acct_no",
+                "amount",
+                "reference"
+            ],
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "amount": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "narrative": {
+                    "type": "string",
+                    "maxLength": 250
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.TopupResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "new_balance": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tran_internal_key": {
+                    "type": "integer"
+                },
+                "transaction_status": {
+                    "description": "ISO 20022 (§13.3)",
+                    "type": "string"
+                }
+            }
+        },
+        "dto.TopupReversalRequest": {
+            "type": "object",
+            "required": [
+                "reason",
+                "reference"
+            ],
+            "properties": {
+                "initiator": {
+                    "type": "string",
+                    "enum": [
+                        "OPS_MANUAL",
+                        "FRAUD",
+                        "DISPUTE",
+                        "SYSTEM"
+                    ]
+                },
+                "reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 3
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.TopupReversalResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "new_balance": {
+                    "type": "string"
+                },
+                "reversal_tran_key": {
+                    "type": "integer"
+                },
+                "was_already_reversed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "dto.TransferRequest": {
+            "type": "object",
+            "required": [
+                "amount",
+                "from_acct_no",
+                "reference",
+                "to_acct_no"
+            ],
+            "properties": {
+                "amount": {
+                    "type": "string"
+                },
+                "from_acct_no": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "narrative": {
+                    "type": "string",
+                    "maxLength": 250
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                },
+                "to_acct_no": {
+                    "type": "string"
+                },
+                "tran_type": {
+                    "type": "string",
+                    "enum": [
+                        "TRFOUT",
+                        "TRFOUTF"
+                    ]
+                }
+            }
+        },
+        "dto.TransferResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "fee_gross": {
+                    "type": "string"
+                },
+                "new_balance_from": {
+                    "type": "string"
+                },
+                "new_balance_to": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tran_internal_key": {
+                    "type": "integer"
+                },
+                "transaction_status": {
+                    "description": "ISO 20022 (§13.3)",
+                    "type": "string"
+                },
+                "vat_amount": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.TransferReversalRequest": {
+            "type": "object",
+            "required": [
+                "reason",
+                "reference"
+            ],
+            "properties": {
+                "initiator": {
+                    "type": "string",
+                    "enum": [
+                        "OPS_MANUAL",
+                        "FRAUD",
+                        "DISPUTE",
+                        "SYSTEM"
+                    ]
+                },
+                "reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 3
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.TransferReversalResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "new_balance_from": {
+                    "type": "string"
+                },
+                "new_balance_to": {
+                    "type": "string"
+                },
+                "reversal_tran_key": {
+                    "type": "integer"
+                },
+                "was_already_reversed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "dto.TxDetailResponse": {
+            "type": "object",
+            "properties": {
+                "leg_count": {
+                    "type": "integer"
+                },
+                "legs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.TxLegResponse"
+                    }
+                },
+                "post_date": {
+                    "type": "string"
+                },
+                "reference": {
+                    "type": "string"
+                },
+                "transaction_id": {
+                    "description": "tran_internal_key",
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.TxEntryResponse": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "string"
+                },
+                "balance_after": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "dr_cr": {
+                    "type": "string"
+                },
+                "narrative": {
+                    "type": "string"
+                },
+                "post_date": {
+                    "type": "string"
+                },
+                "reference": {
+                    "type": "string"
+                },
+                "seq_no": {
+                    "type": "integer"
+                },
+                "tran_type": {
+                    "type": "string"
+                },
+                "transaction_id": {
+                    "description": "= tran_internal_key",
+                    "type": "integer"
+                },
+                "value_date": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.TxLegResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "amount": {
+                    "type": "string"
+                },
+                "balance_after": {
+                    "type": "string"
+                },
+                "ccy": {
+                    "type": "string"
+                },
+                "dr_cr": {
+                    "type": "string"
+                },
+                "narrative": {
+                    "type": "string"
+                },
+                "post_date": {
+                    "type": "string"
+                },
+                "reference": {
+                    "type": "string"
+                },
+                "seq_no": {
+                    "type": "integer"
+                },
+                "tfr_seq_no": {
+                    "type": "integer"
+                },
+                "tran_type": {
+                    "type": "string"
+                },
+                "value_date": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.TxListResponse": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.TxEntryResponse"
+                    }
+                },
+                "next_cursor": {
+                    "description": "pass as ?before_seq= for the next page",
+                    "type": "integer"
+                },
+                "page_size": {
+                    "type": "integer"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.UpdateAccountStatusRequest": {
+            "type": "object",
+            "required": [
+                "status"
+            ],
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "A",
+                        "B",
+                        "C"
+                    ]
+                }
+            }
+        },
+        "dto.UpdateClientRequest": {
+            "type": "object",
+            "properties": {
+                "birth_date": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string",
+                    "maxLength": 200
+                },
+                "country_citizen": {
+                    "type": "string",
+                    "maxLength": 8
+                },
+                "country_loc": {
+                    "type": "string",
+                    "maxLength": 8
+                },
+                "given_name": {
+                    "type": "string",
+                    "maxLength": 80
+                },
+                "sex": {
+                    "type": "string",
+                    "enum": [
+                        "M",
+                        "F",
+                        "O"
+                    ]
+                },
+                "status": {
+                    "type": "string",
+                    "maxLength": 4
+                },
+                "surname": {
+                    "type": "string",
+                    "maxLength": 80
+                }
+            }
+        },
+        "dto.WithdrawRequest": {
+            "type": "object",
+            "required": [
+                "acct_no",
+                "amount",
+                "beneficiary_acct",
+                "beneficiary_bank",
+                "ext_payout_ref",
+                "reference"
+            ],
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "amount": {
+                    "type": "string"
+                },
+                "beneficiary_acct": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "minLength": 6
+                },
+                "beneficiary_bank": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 3
+                },
+                "ext_payout_ref": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "narrative": {
+                    "type": "string",
+                    "maxLength": 250
+                },
+                "reference": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 8
+                }
+            }
+        },
+        "dto.WithdrawResponse": {
+            "type": "object",
+            "properties": {
+                "event_uuid": {
+                    "type": "string"
+                },
+                "fee_gross": {
+                    "type": "string"
+                },
+                "new_balance": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tran_internal_key": {
+                    "type": "integer"
+                },
+                "transaction_status": {
+                    "description": "ISO 20022 (§13.3)",
+                    "type": "string"
+                },
+                "vat_amount": {
+                    "type": "string"
+                }
+            }
+        }
+    },
+    "tags": [
+        {
+            "description": "Liveness/readiness probe",
+            "name": "health"
+        },
+        {
+            "description": "Money movement + ledger reads (topup, transfer, withdraw, merchant, reversals, fee/VAT, statement, restraints)",
+            "name": "finance"
+        },
+        {
+            "description": "Client master CRUD, onboarding, KYC, linked banks",
+            "name": "clients"
+        },
+        {
+            "description": "Wallet lifecycle + profile + balance reads",
+            "name": "accounts"
+        },
+        {
+            "description": "Merchant hot-wallet group lifecycle (provision -\u003e activate -\u003e rescale)",
+            "name": "merchant-groups"
+        },
+        {
+            "description": "Privileged/internal reads (full balance, batch balance, unmasked client PII)",
+            "name": "ops"
+        },
+        {
+            "description": "Withdrawal disbursement state machine (S2S callbacks)",
+            "name": "treasury"
+        }
+    ]
+}

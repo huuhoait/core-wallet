@@ -9,10 +9,19 @@ import (
 	"github.com/ewallet-pg/wallet-service/internal/http/dto"
 )
 
-// GET /v1/wallets/:acct_no/balance[?as_of_date=YYYY-MM-DD]
+// GetBalance godoc
 //
-// Without as_of_date → customer realtime balance (§9.3.1).
-// With as_of_date    → historical end-of-day snapshot (§9.3.3).
+//	@Summary		Get account balance
+//	@Description	Without as_of_date → customer realtime balance (§9.3.1). With as_of_date → historical end-of-day snapshot (§9.3.3, returns BalanceAsOfResponse).
+//	@Tags			accounts
+//	@Produce		json
+//	@Param			acct_no		path		string				true	"Account number"
+//	@Param			as_of_date	query		string				false	"Historical EOD snapshot date (YYYY-MM-DD)"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.BalanceResponse}	"Realtime balance (or BalanceAsOfResponse when as_of_date is set)"
+//	@Failure		400			{object}	dto.ProblemDetails	"Validation error"
+//	@Failure		404			{object}	dto.ProblemDetails	"Account not found"
+//	@Failure		500			{object}	dto.ProblemDetails	"Internal error"
+//	@Router			/v1/accounts/{acct_no}/balance [get]
 func (h *Wallet) GetBalance(c *gin.Context) {
 	acctNo := c.Param("acct_no")
 
@@ -39,7 +48,17 @@ func (h *Wallet) GetBalance(c *gin.Context) {
 	writeOK(c, http.StatusOK, dto.BalanceRespFrom(res))
 }
 
-// GET /v1/ops/wallets/:acct_no/balance — ops/internal full view (§9.3.2).
+// GetBalanceOps godoc
+//
+//	@Summary		Get account balance (ops full view)
+//	@Description	Ops/internal full balance view incl. ledger/calc/restrained breakdown and active restraints (§9.3.2).
+//	@Tags			ops
+//	@Produce		json
+//	@Param			acct_no	path		string					true	"Account number"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.BalanceOpsResponse}	"OK"
+//	@Failure		404		{object}	dto.ProblemDetails		"Account not found"
+//	@Failure		500		{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/ops/accounts/{acct_no}/balance [get]
 func (h *Wallet) GetBalanceOps(c *gin.Context) {
 	res, err := h.svc.GetBalanceOps(c.Request.Context(), c.Param("acct_no"))
 	if err != nil {
@@ -49,7 +68,18 @@ func (h *Wallet) GetBalanceOps(c *gin.Context) {
 	writeOK(c, http.StatusOK, dto.BalanceOpsRespFrom(res))
 }
 
-// POST /v1/ops/wallets/balance/batch — batch query, max 100 (§9.3.4).
+// GetBalanceBatch godoc
+//
+//	@Summary		Batch balance query
+//	@Description	Query up to 100 account balances at once. Unknown accounts are returned per-item with error=ACCT_NOT_FOUND (§9.3.4).
+//	@Tags			ops
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.BalanceBatchRequest		true	"Batch balance request (max 100 accounts)"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.BalanceBatchResponse}	"OK"
+//	@Failure		400		{object}	dto.ProblemDetails			"Validation error"
+//	@Failure		500		{object}	dto.ProblemDetails			"Internal error"
+//	@Router			/v1/ops/accounts/balance/batch [post]
 func (h *Wallet) GetBalanceBatch(c *gin.Context) {
 	var req dto.BalanceBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
