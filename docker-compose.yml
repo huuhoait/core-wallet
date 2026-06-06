@@ -151,6 +151,10 @@ services:
       # Connect THROUGH PgBouncer (transaction mode) on its IN-NETWORK port 5432,
       # not the host-mapped 6432. Same wallet_app role / password as the .env DSN.
       DB_DSN: postgres://wallet_app:${WALLET_APP_PASSWORD:-wallet_app_dev}@pgbouncer:5432/wallet?sslmode=disable
+      # Least-privilege PII pool (wallet_pii_ro) for the unmasked client reads
+      # (GET /v1/ops/clients[...], /360). Unset → piiPool falls back to wallet_app,
+      # which has no SELECT on FM_CLIENT/FM_CLIENT_KYC → those reads 500.
+      DB_PII_DSN: postgres://wallet_pii_ro:${WALLET_PII_RO_PASSWORD:-wallet_pii_dev}@pgbouncer:5432/wallet?sslmode=disable
       DB_LOCK_TIMEOUT: ${DB_LOCK_TIMEOUT:-1500ms}
       DB_STATEMENT_TIMEOUT: ${DB_STATEMENT_TIMEOUT:-2500ms}
       HTTP_REQUEST_TIMEOUT: ${HTTP_REQUEST_TIMEOUT:-10s}
