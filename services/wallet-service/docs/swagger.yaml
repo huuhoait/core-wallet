@@ -64,6 +64,27 @@ definitions:
       version:
         type: integer
     type: object
+  dto.AccountSearchItem:
+    properties:
+      acct_no:
+        type: string
+      client_no:
+        type: string
+      name:
+        description: masked client name
+        type: string
+    type: object
+  dto.AccountSearchResponse:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/dto.AccountSearchItem'
+        type: array
+      query:
+        type: string
+    type: object
   dto.AccountStatusResponse:
     properties:
       acct_no:
@@ -1737,6 +1758,44 @@ paths:
           schema:
             $ref: '#/definitions/dto.ProblemDetails'
       summary: Get account balance
+      tags:
+      - accounts
+  /v1/accounts/search:
+    get:
+      description: Find accounts whose account number or client number contains the
+        query (case-insensitive, substring). Returns acct_no + client_no + the MASKED
+        client name. The query must be at least 6 characters (cheap-enumeration guard).
+      parameters:
+      - description: Search term (min 6 chars) — matched against acct_no / client_no
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Max results (1..200, default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountSearchResponse'
+              type: object
+        "400":
+          description: Missing or too-short query (< 6 chars)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Search accounts
       tags:
       - accounts
   /v1/clients:

@@ -121,6 +121,65 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/accounts/search": {
+            "get": {
+                "description": "Find accounts whose account number or client number contains the query (case-insensitive, substring). Returns acct_no + client_no + the MASKED client name. The query must be at least 6 characters (cheap-enumeration guard).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "accounts"
+                ],
+                "summary": "Search accounts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search term (min 6 chars) — matched against acct_no / client_no",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max results (1..200, default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountSearchResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Missing or too-short query (\u003c 6 chars)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/accounts/{acct_no}": {
             "get": {
                 "description": "Account profile (no client PII).",
@@ -3062,6 +3121,38 @@ const docTemplate = `{
                 },
                 "version": {
                     "type": "integer"
+                }
+            }
+        },
+        "dto.AccountSearchItem": {
+            "type": "object",
+            "properties": {
+                "acct_no": {
+                    "type": "string"
+                },
+                "client_no": {
+                    "type": "string"
+                },
+                "name": {
+                    "description": "masked client name",
+                    "type": "string"
+                }
+            }
+        },
+        "dto.AccountSearchResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.AccountSearchItem"
+                    }
+                },
+                "query": {
+                    "type": "string"
                 }
             }
         },

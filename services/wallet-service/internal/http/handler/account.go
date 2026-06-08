@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -29,6 +31,44 @@ func (h *Wallet) ListAccountsByClient(c *gin.Context) {
 		return
 	}
 	writeOK(c, http.StatusOK, dto.AccountListRespFrom(clientNo, res))
+}
+
+// SearchAccounts godoc
+//
+//	@Summary		Search accounts
+//	@Description	Find accounts whose account number or client number contains the query (case-insensitive, substring). Returns acct_no + client_no + the MASKED client name. The query must be at least 6 characters (cheap-enumeration guard).
+//	@Tags			accounts
+//	@Produce		json
+//	@Param			q		query		string	true	"Search term (min 6 chars) — matched against acct_no / client_no"
+//	@Param			limit	query		int		false	"Max results (1..200, default 50)"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.AccountSearchResponse}	"OK"
+//	@Failure		400		{object}	dto.ProblemDetails	"Missing or too-short query (< 6 chars)"
+//	@Failure		500		{object}	dto.ProblemDetails	"Internal error"
+//	@Router			/v1/accounts/search [get]
+func (h *Wallet) SearchAccounts(c *gin.Context) {
+	q := strings.TrimSpace(c.Query("q"))
+	if len([]rune(q)) < domain.MinAccountSearchLen {
+		renderError(c, domain.InvalidRequest("q must be at least 6 characters", nil))
+		return
+	}
+	limit := domain.DefaultAccountSearchSize
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			renderError(c, domain.InvalidRequest("invalid limit (positive integer)", nil))
+			return
+		}
+		limit = n
+	}
+	if limit > domain.MaxAccountSearchSize {
+		limit = domain.MaxAccountSearchSize
+	}
+	res, err := h.svc.SearchAccounts(c.Request.Context(), q, limit)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	writeOK(c, http.StatusOK, dto.AccountSearchRespFrom(q, res))
 }
 
 // OpenAccount godoc

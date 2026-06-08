@@ -40,6 +40,8 @@ type WalletRepository interface {
 	// ListAccountsByClient returns every wallet owned by a client (account
 	// profiles). Unknown client → NotFound.
 	ListAccountsByClient(ctx context.Context, clientNo string) ([]domain.AccountView, error)
+	// SearchAccounts finds accounts by acct_no/client_no substring → masked name.
+	SearchAccounts(ctx context.Context, query string, limit int) ([]domain.AccountSearchItem, error)
 	ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error)
 	GetTransaction(ctx context.Context, tranKey int64) ([]domain.TxLeg, error)
 

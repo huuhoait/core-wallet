@@ -47,3 +47,25 @@ func AccountListRespFrom(clientNo string, views []domain.AccountView) AccountLis
 	}
 	return AccountListResponse{ClientNo: clientNo, Items: items, Count: len(items)}
 }
+
+// AccountSearchItem — one hit of GET /v1/accounts/search (masked name).
+type AccountSearchItem struct {
+	AcctNo   string `json:"acct_no"`
+	ClientNo string `json:"client_no"`
+	Name     string `json:"name"` // masked client name
+}
+
+// AccountSearchResponse — GET /v1/accounts/search result.
+type AccountSearchResponse struct {
+	Query string              `json:"query"`
+	Items []AccountSearchItem `json:"items"`
+	Count int                 `json:"count"`
+}
+
+func AccountSearchRespFrom(query string, hits []domain.AccountSearchItem) AccountSearchResponse {
+	items := make([]AccountSearchItem, 0, len(hits))
+	for _, h := range hits {
+		items = append(items, AccountSearchItem{AcctNo: h.AcctNo, ClientNo: h.ClientNo, Name: h.Name})
+	}
+	return AccountSearchResponse{Query: query, Items: items, Count: len(items)}
+}

@@ -94,6 +94,39 @@ func (r *PgWalletRepo) ListAccountsByClient(ctx context.Context, clientNo string
 	return out, nil
 }
 
+// SearchAccounts finds accounts whose acct_no or client_no contains the query
+// substring (case-insensitive), returning acct_no + client_no + the MASKED client
+// name (v_client_masked). READ-ONLY (readPool, wallet_app); no PII. The caller
+// enforces the minimum query length. Empty slice when nothing matches.
+func (r *PgWalletRepo) SearchAccounts(ctx context.Context, query string, limit int) ([]domain.AccountSearchItem, error) {
+	const sql = `
+		SELECT a.acct_no, a.client_no, COALESCE(m.client_name_masked, '')
+		  FROM WLT_ACCT a
+		  LEFT JOIN v_client_masked m ON m.client_no = a.client_no
+		 WHERE a.acct_no ILIKE '%' || $1 || '%'
+		    OR a.client_no ILIKE '%' || $1 || '%'
+		 ORDER BY a.acct_no
+		 LIMIT $2
+	`
+	rows, err := r.readPool.Query(ctx, sql, query, limit)
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	defer rows.Close()
+	out := make([]domain.AccountSearchItem, 0, limit)
+	for rows.Next() {
+		var it domain.AccountSearchItem
+		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
+			return nil, mapErrIfPg(err)
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return out, nil
+}
+
 // ListTransactions returns an account statement (one row per ledger leg that
 // touched the account), newest-first, keyset-paginated by seq_no. An existing
 // account with no entries returns an empty slice; an unknown account → 404.

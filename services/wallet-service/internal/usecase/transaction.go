@@ -16,6 +16,19 @@ func (s *WalletService) ListAccountsByClient(ctx context.Context, clientNo strin
 	return s.repo.ListAccountsByClient(ctx, clientNo)
 }
 
+// SearchAccounts finds accounts by acct_no/client_no substring (masked name).
+// Limit is clamped to [1, MaxAccountSearchSize]; the handler enforces the
+// minimum query length.
+func (s *WalletService) SearchAccounts(ctx context.Context, query string, limit int) ([]domain.AccountSearchItem, error) {
+	if limit <= 0 {
+		limit = domain.DefaultAccountSearchSize
+	}
+	if limit > domain.MaxAccountSearchSize {
+		limit = domain.MaxAccountSearchSize
+	}
+	return s.repo.SearchAccounts(ctx, query, limit)
+}
+
 // ListTransactions returns an account statement page. Limit is clamped to
 // [1, MaxTxPageSize] with a default of DefaultTxPageSize (200).
 func (s *WalletService) ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error) {

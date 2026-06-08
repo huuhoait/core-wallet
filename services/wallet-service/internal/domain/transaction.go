@@ -58,6 +58,21 @@ const (
 	MaxTxPageSize     = 200
 )
 
+// Account search sizing + the minimum query length (cheap-enumeration guard).
+const (
+	DefaultAccountSearchSize = 50
+	MaxAccountSearchSize     = 200
+	MinAccountSearchLen      = 6
+)
+
+// AccountSearchItem is one hit of an account search: the account number, its
+// owning client, and the MASKED client name (no raw PII).
+type AccountSearchItem struct {
+	AcctNo   string
+	ClientNo string
+	Name     string // masked client name (client_name_masked)
+}
+
 // AccountView is the account profile (WLT_ACCT), excluding client PII.
 type AccountView struct {
 	AcctNo           string

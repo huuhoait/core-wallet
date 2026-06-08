@@ -127,6 +127,7 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 		accounts := v1.Group("/accounts")
 		{
 			accounts.POST("", h.OpenAccount)                   // open wallet (count-limited)
+			accounts.GET("/search", h.SearchAccounts)          // search by acct_no/client_no (q>=6) → masked name
 			accounts.PATCH("/:acct_no", h.UpdateAccountStatus) // block / close / re-activate
 			accounts.GET("/:acct_no", h.GetAccount)            // account profile (no client PII)
 			accounts.GET("/:acct_no/balance", h.GetBalance)    // realtime + historical (?as_of_date=)
