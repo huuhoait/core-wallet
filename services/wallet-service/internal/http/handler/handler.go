@@ -56,7 +56,7 @@ func (h *Wallet) Topup(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
-	writeOK(c, statusForTopup(res), dto.TopupRespFrom(res))
+	writeOK(c, statusFor(res.Status), dto.TopupRespFrom(res))
 }
 
 // Transfer godoc
@@ -387,11 +387,12 @@ func fieldErrors(err error) []dto.FieldError {
 	return out
 }
 
+// statusFor maps a posting SP's status string to an HTTP status: an idempotent
+// replay ("DUPLICATE") is 200, a freshly-posted transaction is 201. All three
+// finance ops (topup/transfer/withdraw) route through this — keep it uniform.
 func statusFor(s string) int {
 	if s == "DUPLICATE" {
 		return http.StatusOK
 	}
 	return http.StatusCreated
 }
-
-func statusForTopup(r *domain.TopupResult) int { return statusFor(r.Status) }
