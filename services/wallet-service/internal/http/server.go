@@ -142,6 +142,7 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 		// /v1/ops/* — privileged ops views. wallet.ops.read required (US-9.10).
 		ops := v1.Group("/ops/accounts", middleware.RequireAnyRole(middleware.RoleOpsRead))
 		{
+			ops.GET("/search", h.SearchAccountsFull) // UNMASKED search (matches + returns raw client name)
 			ops.GET("/:acct_no/balance", h.GetBalanceOps)
 			ops.POST("/balance/batch", h.GetBalanceBatch)
 		}

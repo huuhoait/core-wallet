@@ -21,7 +21,7 @@ import (
 // GetAccount returns the account profile (no client PII).
 func (r *PgWalletRepo) GetAccount(ctx context.Context, acctNo string) (*domain.AccountView, error) {
 	const q = `
-		SELECT acct_no, client_no, acct_type, ccy, acct_status, acct_role,
+		SELECT acct_no, client_no, acct_desc, acct_type, ccy, acct_status, acct_role,
 		       actual_bal::text, total_restrained_amt::text, calc_bal::text,
 		       prev_day_actual_bal::text, acct_open_date, last_tran_date,
 		       restraint_present, cr_blocked, version, group_id, shard_index
@@ -30,7 +30,7 @@ func (r *PgWalletRepo) GetAccount(ctx context.Context, acctNo string) (*domain.A
 	`
 	var a domain.AccountView
 	err := r.readPool.QueryRow(ctx, q, acctNo).Scan( // replica (lag-tolerant profile)
-		&a.AcctNo, &a.ClientNo, &a.AcctType, &a.Ccy, &a.AcctStatus, &a.AcctRole,
+		&a.AcctNo, &a.ClientNo, &a.AcctDesc, &a.AcctType, &a.Ccy, &a.AcctStatus, &a.AcctRole,
 		&a.ActualBal, &a.RestrainedAmt, &a.CalcBal, &a.PrevDayBal,
 		&a.AcctOpenDate, &a.LastTranDate, &a.RestraintPresent, &a.CrBlocked,
 		&a.Version, &a.GroupID, &a.ShardIndex,
@@ -49,7 +49,7 @@ func (r *PgWalletRepo) GetAccount(ctx context.Context, acctNo string) (*domain.A
 // client with no wallets returns an empty slice; an unknown client → 404.
 func (r *PgWalletRepo) ListAccountsByClient(ctx context.Context, clientNo string) ([]domain.AccountView, error) {
 	const q = `
-		SELECT acct_no, client_no, acct_type, ccy, acct_status, acct_role,
+		SELECT acct_no, client_no, acct_desc, acct_type, ccy, acct_status, acct_role,
 		       actual_bal::text, total_restrained_amt::text, calc_bal::text,
 		       prev_day_actual_bal::text, acct_open_date, last_tran_date,
 		       restraint_present, cr_blocked, version, group_id, shard_index
@@ -67,7 +67,7 @@ func (r *PgWalletRepo) ListAccountsByClient(ctx context.Context, clientNo string
 	for rows.Next() {
 		var a domain.AccountView
 		if err := rows.Scan(
-			&a.AcctNo, &a.ClientNo, &a.AcctType, &a.Ccy, &a.AcctStatus, &a.AcctRole,
+			&a.AcctNo, &a.ClientNo, &a.AcctDesc, &a.AcctType, &a.Ccy, &a.AcctStatus, &a.AcctRole,
 			&a.ActualBal, &a.RestrainedAmt, &a.CalcBal, &a.PrevDayBal,
 			&a.AcctOpenDate, &a.LastTranDate, &a.RestraintPresent, &a.CrBlocked,
 			&a.Version, &a.GroupID, &a.ShardIndex,
@@ -109,6 +109,39 @@ func (r *PgWalletRepo) SearchAccounts(ctx context.Context, query string, limit i
 		 LIMIT $2
 	`
 	rows, err := r.readPool.Query(ctx, sql, query, limit)
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	defer rows.Close()
+	out := make([]domain.AccountSearchItem, 0, limit)
+	for rows.Next() {
+		var it domain.AccountSearchItem
+		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
+			return nil, mapErrIfPg(err)
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return out, nil
+}
+
+// SearchAccountsFull is the UNMASKED account search (piiPool / wallet_pii_ro):
+// matches acct_no, client_no OR the RAW client name, and returns the raw client
+// name. Privileged P1/PII read — exposed only under /v1/ops. Empty slice when none.
+func (r *PgWalletRepo) SearchAccountsFull(ctx context.Context, query string, limit int) ([]domain.AccountSearchItem, error) {
+	const sql = `
+		SELECT a.acct_no, a.client_no, COALESCE(c.client_name, '')
+		  FROM WLT_ACCT a
+		  LEFT JOIN FM_CLIENT c ON c.client_no = a.client_no
+		 WHERE a.acct_no ILIKE '%' || $1 || '%'
+		    OR a.client_no ILIKE '%' || $1 || '%'
+		    OR c.client_name ILIKE '%' || $1 || '%'
+		 ORDER BY a.acct_no
+		 LIMIT $2
+	`
+	rows, err := r.piiPool.Query(ctx, sql, query, limit)
 	if err != nil {
 		return nil, mapErrIfPg(err)
 	}

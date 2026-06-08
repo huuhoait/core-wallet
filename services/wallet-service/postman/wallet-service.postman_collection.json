@@ -2320,6 +2320,63 @@
               }
             }
           ]
+        },
+        {
+          "name": "GET accounts search UNMASKED (ops, by name)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Caller-Subject",
+                "value": "{{actor}}"
+              },
+              {
+                "key": "X-Channel",
+                "value": "{{channel}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{request_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/ops/accounts/search?q=Tran Thi&limit=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "ops",
+                "accounts",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "Tran Thi",
+                  "description": "search term, min 6 chars — matched vs acct_no / client_no / RAW client name"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "max results (1..200, default 50)"
+                }
+              ]
+            },
+            "description": "UNMASKED account search (ops/wallet_pii_ro): also matches the RAW client name and returns it. q must be >= 6 chars. Requires role wallet.ops.read when JWT enabled."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 400',()=>pm.expect(pm.response.code).to.be.oneOf([200,400]));",
+                  "if(pm.response.code===200){const d=pm.response.json().data;pm.test('items[]',()=>pm.expect(d.items).to.be.an('array'));}"
+                ]
+              }
+            }
+          ]
         }
       ]
     },

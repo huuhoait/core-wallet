@@ -1694,8 +1694,13 @@ BEGIN
 
   v_no := '9701' || LPAD(nextval('seq_acct_no')::text, 10, '0');
 
-  INSERT INTO WLT_ACCT(acct_no, client_no, acct_type, ccy, acct_status, actual_bal, acct_role)
-  VALUES (v_no, p_client_no, p_acct_type, v_ccy, 'A', 0, 'STANDALONE')
+  -- acct_desc defaults to the owning client's full name (denormalised for display
+  -- / account search). NOTE: this is the RAW name — readable by wallet_app, unlike
+  -- the masked v_client_masked path.
+  INSERT INTO WLT_ACCT(acct_no, client_no, acct_desc, acct_type, ccy, acct_status, actual_bal, acct_role)
+  VALUES (v_no, p_client_no,
+          (SELECT client_name FROM FM_CLIENT WHERE client_no = p_client_no),
+          p_acct_type, v_ccy, 'A', 0, 'STANDALONE')
   RETURNING internal_key INTO v_key;
 
   RETURN QUERY SELECT v_no, v_key, 'A'::varchar;
@@ -4522,6 +4527,7 @@ CREATE TABLE public.wlt_acct (
     internal_key bigint NOT NULL,
     acct_no character varying(20) NOT NULL,
     client_no character varying(48) NOT NULL,
+    acct_desc character varying(200),
     acct_type character varying(12) NOT NULL,
     ccy character varying(4) DEFAULT 'VND'::character varying NOT NULL,
     acct_status character varying(4) DEFAULT 'A'::character varying NOT NULL,

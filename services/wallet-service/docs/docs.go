@@ -2509,6 +2509,65 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/ops/accounts/search": {
+            "get": {
+                "description": "Like /v1/accounts/search but also matches the RAW client name and returns it (wallet_pii_ro). Query must be at least 6 characters. Privileged P1/PII read.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Search accounts (unmasked, ops)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search term (min 6 chars) — matched against acct_no / client_no / client name",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max results (1..200, default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/dto.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.AccountSearchResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Missing or too-short query (\u003c 6 chars)",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.ProblemDetails"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/ops/accounts/{acct_no}/balance": {
             "get": {
                 "description": "Ops/internal full balance view incl. ledger/calc/restrained breakdown and active restraints (§9.3.2).",
@@ -3070,6 +3129,10 @@ const docTemplate = `{
         "dto.AccountResponse": {
             "type": "object",
             "properties": {
+                "acct_desc": {
+                    "description": "account-holder full name (denormalised)",
+                    "type": "string"
+                },
                 "acct_no": {
                     "type": "string"
                 },
@@ -3419,6 +3482,9 @@ const docTemplate = `{
         "dto.Client360Account": {
             "type": "object",
             "properties": {
+                "acct_desc": {
+                    "type": "string"
+                },
                 "acct_no": {
                     "type": "string"
                 },

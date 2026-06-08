@@ -46,22 +46,9 @@ func (h *Wallet) ListAccountsByClient(c *gin.Context) {
 //	@Failure		500		{object}	dto.ProblemDetails	"Internal error"
 //	@Router			/v1/accounts/search [get]
 func (h *Wallet) SearchAccounts(c *gin.Context) {
-	q := strings.TrimSpace(c.Query("q"))
-	if len([]rune(q)) < domain.MinAccountSearchLen {
-		renderError(c, domain.InvalidRequest("q must be at least 6 characters", nil))
+	q, limit, ok := parseAccountSearch(c)
+	if !ok {
 		return
-	}
-	limit := domain.DefaultAccountSearchSize
-	if v := c.Query("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			renderError(c, domain.InvalidRequest("invalid limit (positive integer)", nil))
-			return
-		}
-		limit = n
-	}
-	if limit > domain.MaxAccountSearchSize {
-		limit = domain.MaxAccountSearchSize
 	}
 	res, err := h.svc.SearchAccounts(c.Request.Context(), q, limit)
 	if err != nil {
@@ -69,6 +56,54 @@ func (h *Wallet) SearchAccounts(c *gin.Context) {
 		return
 	}
 	writeOK(c, http.StatusOK, dto.AccountSearchRespFrom(q, res))
+}
+
+// SearchAccountsFull godoc
+//
+//	@Summary		Search accounts (unmasked, ops)
+//	@Description	Like /v1/accounts/search but also matches the RAW client name and returns it (wallet_pii_ro). Query must be at least 6 characters. Privileged P1/PII read.
+//	@Tags			ops
+//	@Produce		json
+//	@Param			q		query		string	true	"Search term (min 6 chars) — matched against acct_no / client_no / client name"
+//	@Param			limit	query		int		false	"Max results (1..200, default 50)"
+//	@Success		200		{object}	dto.SuccessEnvelope{data=dto.AccountSearchResponse}	"OK"
+//	@Failure		400		{object}	dto.ProblemDetails	"Missing or too-short query (< 6 chars)"
+//	@Failure		500		{object}	dto.ProblemDetails	"Internal error"
+//	@Router			/v1/ops/accounts/search [get]
+func (h *Wallet) SearchAccountsFull(c *gin.Context) {
+	q, limit, ok := parseAccountSearch(c)
+	if !ok {
+		return
+	}
+	res, err := h.svc.SearchAccountsFull(c.Request.Context(), q, limit)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	writeOK(c, http.StatusOK, dto.AccountSearchRespFrom(q, res))
+}
+
+// parseAccountSearch parses ?q=&limit= for the account-search endpoints, enforcing
+// the >= MinAccountSearchLen guard. On a bad value it renders 400 and returns ok=false.
+func parseAccountSearch(c *gin.Context) (string, int, bool) {
+	q := strings.TrimSpace(c.Query("q"))
+	if len([]rune(q)) < domain.MinAccountSearchLen {
+		renderError(c, domain.InvalidRequest("q must be at least 6 characters", nil))
+		return "", 0, false
+	}
+	limit := domain.DefaultAccountSearchSize
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			renderError(c, domain.InvalidRequest("invalid limit (positive integer)", nil))
+			return "", 0, false
+		}
+		limit = n
+	}
+	if limit > domain.MaxAccountSearchSize {
+		limit = domain.MaxAccountSearchSize
+	}
+	return q, limit, true
 }
 
 // OpenAccount godoc

@@ -29,6 +29,18 @@ func (s *WalletService) SearchAccounts(ctx context.Context, query string, limit 
 	return s.repo.SearchAccounts(ctx, query, limit)
 }
 
+// SearchAccountsFull is the unmasked account search (also matches the raw client
+// name, returns it). wallet_pii_ro path, ops only. Limit clamped like the masked one.
+func (s *WalletService) SearchAccountsFull(ctx context.Context, query string, limit int) ([]domain.AccountSearchItem, error) {
+	if limit <= 0 {
+		limit = domain.DefaultAccountSearchSize
+	}
+	if limit > domain.MaxAccountSearchSize {
+		limit = domain.MaxAccountSearchSize
+	}
+	return s.repo.SearchAccountsFull(ctx, query, limit)
+}
+
 // ListTransactions returns an account statement page. Limit is clamped to
 // [1, MaxTxPageSize] with a default of DefaultTxPageSize (200).
 func (s *WalletService) ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error) {

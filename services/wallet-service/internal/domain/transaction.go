@@ -77,6 +77,7 @@ type AccountSearchItem struct {
 type AccountView struct {
 	AcctNo           string
 	ClientNo         string
+	AcctDesc         *string // denormalised account-holder full name (WLT_ACCT.acct_desc)
 	AcctType         string
 	Ccy              string
 	AcctStatus       string

@@ -12,6 +12,7 @@ import (
 type AccountResponse struct {
 	AcctNo           string     `json:"acct_no"`
 	ClientNo         string     `json:"client_no"`
+	AcctDesc         *string    `json:"acct_desc,omitempty"` // account-holder full name (denormalised)
 	AcctType         string     `json:"acct_type"`
 	Ccy              string     `json:"ccy"`
 	AcctStatus       string     `json:"acct_status"`
@@ -31,7 +32,7 @@ type AccountResponse struct {
 
 func AccountRespFrom(a *domain.AccountView) AccountResponse {
 	return AccountResponse{
-		AcctNo: a.AcctNo, ClientNo: a.ClientNo, AcctType: a.AcctType, Ccy: a.Ccy,
+		AcctNo: a.AcctNo, ClientNo: a.ClientNo, AcctDesc: a.AcctDesc, AcctType: a.AcctType, Ccy: a.Ccy,
 		AcctStatus: a.AcctStatus, AcctRole: a.AcctRole,
 		ActualBal: a.ActualBal, RestrainedAmt: a.RestrainedAmt, AvailableBal: a.CalcBal,
 		PrevDayBal: a.PrevDayBal, AcctOpenDate: a.AcctOpenDate.Format("2006-01-02"),

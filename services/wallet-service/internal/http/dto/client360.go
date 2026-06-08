@@ -63,6 +63,7 @@ type Client360Profile struct {
 // Client360Account is the wallet summary in a 360 view (subset of AccountResponse).
 type Client360Account struct {
 	AcctNo           string     `json:"acct_no"`
+	AcctDesc         *string    `json:"acct_desc,omitempty"`
 	AcctType         string     `json:"acct_type"`
 	Ccy              string     `json:"ccy"`
 	AcctStatus       string     `json:"acct_status"`
@@ -155,7 +156,7 @@ func Client360RespFrom(v *domain.Client360) Client360Response {
 	for i := range v.Accounts {
 		a := &v.Accounts[i]
 		out.Accounts = append(out.Accounts, Client360Account{
-			AcctNo: a.AcctNo, AcctType: a.AcctType, Ccy: a.Ccy, AcctStatus: a.AcctStatus,
+			AcctNo: a.AcctNo, AcctDesc: a.AcctDesc, AcctType: a.AcctType, Ccy: a.Ccy, AcctStatus: a.AcctStatus,
 			AcctRole: a.AcctRole, ActualBal: a.ActualBal, AvailableBal: a.CalcBal,
 			RestrainedAmt: a.RestrainedAmt, PrevDayBal: a.PrevDayBal,
 			AcctOpenDate: a.AcctOpenDate.Format("2006-01-02"), LastTranDate: a.LastTranDate,

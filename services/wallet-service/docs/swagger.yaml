@@ -28,6 +28,9 @@ definitions:
     type: object
   dto.AccountResponse:
     properties:
+      acct_desc:
+        description: account-holder full name (denormalised)
+        type: string
       acct_no:
         type: string
       acct_open_date:
@@ -260,6 +263,8 @@ definitions:
     type: object
   dto.Client360Account:
     properties:
+      acct_desc:
+        type: string
       acct_no:
         type: string
       acct_open_date:
@@ -3158,6 +3163,45 @@ paths:
           schema:
             $ref: '#/definitions/dto.ProblemDetails'
       summary: Batch balance query
+      tags:
+      - ops
+  /v1/ops/accounts/search:
+    get:
+      description: Like /v1/accounts/search but also matches the RAW client name and
+        returns it (wallet_pii_ro). Query must be at least 6 characters. Privileged
+        P1/PII read.
+      parameters:
+      - description: Search term (min 6 chars) — matched against acct_no / client_no
+          / client name
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Max results (1..200, default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/dto.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.AccountSearchResponse'
+              type: object
+        "400":
+          description: Missing or too-short query (< 6 chars)
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/dto.ProblemDetails'
+      summary: Search accounts (unmasked, ops)
       tags:
       - ops
   /v1/ops/clients:

@@ -42,6 +42,9 @@ type WalletRepository interface {
 	ListAccountsByClient(ctx context.Context, clientNo string) ([]domain.AccountView, error)
 	// SearchAccounts finds accounts by acct_no/client_no substring → masked name.
 	SearchAccounts(ctx context.Context, query string, limit int) ([]domain.AccountSearchItem, error)
+	// SearchAccountsFull also matches the RAW client name and returns it
+	// (wallet_pii_ro, /v1/ops only).
+	SearchAccountsFull(ctx context.Context, query string, limit int) ([]domain.AccountSearchItem, error)
 	ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error)
 	GetTransaction(ctx context.Context, tranKey int64) ([]domain.TxLeg, error)
 
