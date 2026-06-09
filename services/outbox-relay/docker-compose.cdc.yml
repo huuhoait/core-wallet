@@ -44,8 +44,9 @@ services:
   # Outbox relay in CDC mode
   outbox-relay-cdc:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # Context is .. (services/) so the shared module (../shared) is in scope.
+      context: ..
+      dockerfile: outbox-relay/Dockerfile
     image: core-wallet/outbox-relay:dev
     container_name: wallet-outbox-relay-cdc
     restart: unless-stopped

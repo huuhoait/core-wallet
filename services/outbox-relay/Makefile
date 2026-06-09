@@ -53,7 +53,7 @@ lint:
 # Docker build
 docker-build:
 	@echo "Building Docker image..."
-	@docker build -t $(DOCKER_IMAGE) .
+	@docker build -f Dockerfile -t $(DOCKER_IMAGE) ..
 	@echo "Docker image built: $(DOCKER_IMAGE)"
 
 # Docker run

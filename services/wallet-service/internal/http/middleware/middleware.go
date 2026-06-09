@@ -10,6 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
@@ -42,12 +44,13 @@ func RequestID() gin.HandlerFunc {
 func AuditContext() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		audit := domain.AuditContext{
-			Actor:     resolveActor(c),
-			Channel:   resolveChannel(c),
-			RequestID: c.GetString(CtxKeyRequestID),
-			TraceID:   spanIDFromGin(c),
-			IPAddress: c.ClientIP(),
-			UserAgent: c.Request.UserAgent(),
+			Actor:       resolveActor(c),
+			Channel:     resolveChannel(c),
+			RequestID:   c.GetString(CtxKeyRequestID),
+			TraceID:     spanIDFromGin(c),
+			TraceParent: traceparentFromGin(c),
+			IPAddress:   c.ClientIP(),
+			UserAgent:   c.Request.UserAgent(),
 		}
 		c.Set(CtxKeyAudit, audit)
 		c.Next()
@@ -113,13 +116,26 @@ func parseChannel(s string) domain.Channel {
 }
 
 func spanIDFromGin(c *gin.Context) string {
-	// otelgin sets the span on the request context. Extract the trace_id
-	// (W3C traceparent) so the SP can put it into the outbox HEADERS.
+	// otelgin sets the span on the request context. Extract the bare trace-id
+	// (32 hex) for the response envelope / logs / audit.request_id.
 	sc := trace.SpanContextFromContext(c.Request.Context())
 	if !sc.IsValid() {
 		return ""
 	}
 	return sc.TraceID().String()
+}
+
+// traceparentFromGin serialises the active span into a full W3C `traceparent`
+// (00-<trace-id>-<span-id>-<flags>) using the globally-installed propagator.
+// This — not the bare trace-id — is what gets stamped into the outbox HEADERS
+// so the outbox-relay (and the Kafka consumer after it) can EXTRACT a valid
+// parent and continue the same distributed trace. Returns "" when there is no
+// valid span (OTel disabled / unsampled), in which case the outbox header is
+// simply omitted.
+func traceparentFromGin(c *gin.Context) string {
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(c.Request.Context(), carrier)
+	return carrier.Get("traceparent")
 }
 
 // WithTimeout wraps the incoming request's context with a hard deadline.

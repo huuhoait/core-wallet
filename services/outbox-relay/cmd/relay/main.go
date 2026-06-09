@@ -19,12 +19,14 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/ewallet-pg/shared/pgxdb"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/config"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/debezium"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/kafka"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/metrics"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/ops"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/repo"
+	"github.com/huuhoait/core-wallet/outbox-relay/internal/telemetry"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
 )
 
@@ -50,6 +52,22 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// OpenTelemetry: install the propagator + tracer provider so the producer can
+	// continue the trace the posting SP stamped into each outbox row. No-op (and
+	// no collector needed) when OTEL_ENABLED=false.
+	shutdownOtel, err := telemetry.Setup(ctx, cfg.Otel, cfg.Env)
+	if err != nil {
+		fatal(logger, "Failed to initialize OpenTelemetry", err)
+	}
+	defer func() {
+		shCtx, cancelSh := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelSh()
+		_ = shutdownOtel(shCtx)
+	}()
+	logger.Info("OpenTelemetry initialized",
+		slog.Bool("enabled", cfg.Otel.Enabled),
+		slog.String("endpoint", cfg.Otel.Endpoint))
+
 	// Operational HTTP endpoints (metrics/health/config).
 	go startOpsServer(cfg, m, logger)
 
@@ -68,7 +86,7 @@ func main() {
 func runPolling(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, m *metrics.Metrics, logger *slog.Logger) {
 	logger.Info("Starting in POLLING mode", slog.Int("workers", cfg.WorkerCount))
 
-	outboxRepo, err := repo.New(ctx, cfg.DSN(), cfg.DBName, cfg.DBHost, logger)
+	outboxRepo, err := repo.New(ctx, poolConfig(cfg), cfg.DBName, cfg.DBHost, logger)
 	if err != nil {
 		fatal(logger, "Failed to initialize repository", err)
 	}
@@ -100,7 +118,7 @@ func runCDC(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, 
 		slog.String("cdc_topic", cfg.CDC.CDCTopic),
 		slog.Bool("auto_register", cfg.CDC.AutoRegister))
 
-	outboxRepo, err := repo.New(ctx, cfg.DSN(), cfg.DBName, cfg.DBHost, logger)
+	outboxRepo, err := repo.New(ctx, poolConfig(cfg), cfg.DBName, cfg.DBHost, logger)
 	if err != nil {
 		fatal(logger, "CDC: failed to initialize repository", err)
 	}
@@ -150,6 +168,23 @@ func monitorConnector(ctx context.Context, mgr usecase.ConnectorController, logg
 				}
 			}
 		}
+	}
+}
+
+// poolConfig projects the relay config onto the shared pgxdb pool builder,
+// giving the relay the same PgBouncer-safe, OTel-traced, timeout-bounded pool
+// the wallet API uses.
+func poolConfig(cfg *config.Config) pgxdb.Config {
+	return pgxdb.Config{
+		DSN:              cfg.DSN(),
+		ApplicationName:  "outbox-relay",
+		MaxConns:         cfg.DBMaxConns,
+		MinConns:         cfg.DBMinConns,
+		MaxConnLifetime:  cfg.DBMaxConnLifetime,
+		MaxConnIdleTime:  cfg.DBMaxConnIdleTime,
+		ConnectTimeout:   cfg.DBConnectTimeout,
+		StatementTimeout: cfg.DBStatementTimeout,
+		LockTimeout:      cfg.DBLockTimeout,
 	}
 }
 

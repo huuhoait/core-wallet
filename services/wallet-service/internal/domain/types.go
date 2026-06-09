@@ -24,12 +24,13 @@ const (
 // Repository layer fans this out to the audit.* PG GUCs at TX start so the
 // trg_audit_cols trigger and trg_audit_wlt_kyc trigger attribute changes.
 type AuditContext struct {
-	Actor     string  // user_id / system_id; required
-	Channel   Channel // required
-	RequestID string  // correlation id
-	TraceID   string  // W3C traceparent
-	IPAddress string  // optional, used by client-info audit log
-	UserAgent string  // optional
+	Actor       string  // user_id / system_id; required
+	Channel     Channel // required
+	RequestID   string  // correlation id
+	TraceID     string  // bare W3C trace-id (32 hex) — for responses/logs/audit
+	TraceParent string  // full W3C traceparent (00-trace-span-flags) — stamped into the outbox so the relay/consumer can continue the trace
+	IPAddress   string  // optional, used by client-info audit log
+	UserAgent   string  // optional
 }
 
 // Money is a non-negative amount in the smallest unit of the currency.
@@ -71,7 +72,7 @@ type WithdrawResult struct {
 
 // ReversalResult is what post_withdraw_reversal SP returns.
 type ReversalResult struct {
-	ReversalTranKey     int64
+	ReversalTranKey    int64
 	WasAlreadyReversed bool
 	EventUUID          uuid.UUID
 }
@@ -91,7 +92,7 @@ type MerchantWithdrawResult struct {
 // MarkResult is what mark_withdraw_* SPs return.
 type MarkResult struct {
 	AcctNo    string
-	Status    string // 'ACKED' | 'DISBURSING' | 'COMPLETED'
+	Status    string    // 'ACKED' | 'DISBURSING' | 'COMPLETED'
 	EventUUID uuid.UUID // nil if state was already terminal (idempotent no-op)
 }
 
@@ -119,15 +120,15 @@ type TransferInput struct {
 
 // WithdrawInput is a withdraw to an external bank.
 type WithdrawInput struct {
-	AcctNo           string
-	Amount           string
-	Reference        string
-	ExtPayoutRef     string
-	BeneficiaryBank  string
-	BeneficiaryAcct  string // plaintext; SP encrypts via pgcrypto + KMS DEK
-	Narrative        string // free-text memo → WLT_TRAN_HIST.NARRATIVE
-	Metadata         map[string]any
-	Audit            AuditContext
+	AcctNo          string
+	Amount          string
+	Reference       string
+	ExtPayoutRef    string
+	BeneficiaryBank string
+	BeneficiaryAcct string // plaintext; SP encrypts via pgcrypto + KMS DEK
+	Narrative       string // free-text memo → WLT_TRAN_HIST.NARRATIVE
+	Metadata        map[string]any
+	Audit           AuditContext
 }
 
 // MerchantWithdrawInput withdraws from a merchant group's settlement account,
@@ -152,9 +153,9 @@ type ReversalInput struct {
 
 // AckInput / DisbursingInput / CompletedInput drive the Treasury state machine.
 type AckInput struct {
-	ExtPayoutRef     string
-	TreasuryBatchID  string
-	Audit            AuditContext
+	ExtPayoutRef    string
+	TreasuryBatchID string
+	Audit           AuditContext
 }
 
 type DisbursingInput struct {

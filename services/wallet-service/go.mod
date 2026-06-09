@@ -6,7 +6,6 @@ toolchain go1.26.4
 
 require (
 	github.com/caarlos0/env/v11 v11.4.1
-	github.com/exaring/otelpgx v0.11.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -23,6 +22,8 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0
 )
 
+require github.com/exaring/otelpgx v0.11.1 // indirect
+
 require (
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
@@ -31,6 +32,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
+	github.com/ewallet-pg/shared v0.0.0
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/gin-contrib/sse v1.1.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -82,3 +84,5 @@ require (
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+replace github.com/ewallet-pg/shared => ../shared

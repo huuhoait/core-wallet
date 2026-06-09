@@ -4,12 +4,20 @@
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 WORKDIR /src
 
-# Cache modules first
-COPY go.mod go.sum* ./
+# Build context is ./services. Cache modules first: the service module plus the
+# shared module it replaces (../shared) — go mod download needs the latter's
+# go.mod to resolve the build list.
+COPY wallet-service/go.mod wallet-service/go.sum* ./wallet-service/
+COPY shared/go.mod shared/go.sum* ./shared/
+WORKDIR /src/wallet-service
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-COPY . .
+# Copy both module sources (shared sits beside the service so `../shared` resolves).
+WORKDIR /src
+COPY shared/ ./shared/
+COPY wallet-service/ ./wallet-service/
+WORKDIR /src/wallet-service
 ARG VERSION=dev
 # Predefined BuildKit platform args — MUST be declared with ARG to enter scope.
 # Without these, ${TARGETARCH} is empty and falls back to amd64; the resulting
