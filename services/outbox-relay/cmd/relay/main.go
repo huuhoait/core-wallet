@@ -25,6 +25,7 @@ import (
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/metrics"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/ops"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/repo"
+	"github.com/huuhoait/core-wallet/outbox-relay/internal/telemetry"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
 )
 
@@ -49,6 +50,22 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// OpenTelemetry: install the propagator + tracer provider so the producer can
+	// continue the trace the posting SP stamped into each outbox row. No-op (and
+	// no collector needed) when OTEL_ENABLED=false.
+	shutdownOtel, err := telemetry.Setup(ctx, cfg.Otel, cfg.Env)
+	if err != nil {
+		fatal(logger, "Failed to initialize OpenTelemetry", err)
+	}
+	defer func() {
+		shCtx, cancelSh := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelSh()
+		_ = shutdownOtel(shCtx)
+	}()
+	logger.Info("OpenTelemetry initialized",
+		slog.Bool("enabled", cfg.Otel.Enabled),
+		slog.String("endpoint", cfg.Otel.Endpoint))
 
 	// Operational HTTP endpoints (metrics/health/config).
 	go startOpsServer(cfg, m, logger)

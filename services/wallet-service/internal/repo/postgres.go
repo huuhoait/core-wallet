@@ -25,9 +25,9 @@ import (
 // because consecutive TXs may be routed to different server connections;
 // SET LOCAL is scoped to the current TX so it always takes effect.
 type PgWalletRepo struct {
-	pool             *pgxpool.Pool
-	readPool         *pgxpool.Pool // replica for lag-tolerant reads (no TX, no retry); == pool when no DB_READ_DSN
-	piiPool          *pgxpool.Pool // wallet_pii_ro conn for unmasked PII reads; == pool when no DB_PII_DSN
+	pool               *pgxpool.Pool
+	readPool           *pgxpool.Pool // replica for lag-tolerant reads (no TX, no retry); == pool when no DB_READ_DSN
+	piiPool            *pgxpool.Pool // wallet_pii_ro conn for unmasked PII reads; == pool when no DB_PII_DSN
 	statementTimeoutMs int64
 	lockTimeoutMs      int64
 	txMaxRetries       int // retries of a RETRYABLE write conflict; 0 = no retry
@@ -168,8 +168,16 @@ func setAuditGUCs(ctx context.Context, tx pgx.Tx, a domain.AuditContext) error {
 		  set_config('audit.user_agent', $5, true),
 		  set_config('app.trace_id',     $6, true)
 	`
+	// app.trace_id carries the FULL W3C traceparent (the posting SPs copy it into
+	// WLT_OUTBOX.HEADERS->>'traceparent'), so a downstream relay/consumer can
+	// EXTRACT a valid parent and continue the trace. Fall back to the bare
+	// trace-id when no traceparent is available (OTel off / unsampled).
+	traceparent := a.TraceParent
+	if traceparent == "" {
+		traceparent = a.TraceID
+	}
 	_, err := tx.Exec(ctx, q,
-		a.Actor, string(a.Channel), a.RequestID, a.IPAddress, a.UserAgent, a.TraceID)
+		a.Actor, string(a.Channel), a.RequestID, a.IPAddress, a.UserAgent, traceparent)
 	return err
 }
 
