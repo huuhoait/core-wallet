@@ -27,3 +27,6 @@ loadtest/*.tmp
 # Generated run reports (run.sh / k6.sh write here) — keep the dir, ignore outputs
 deploy/loadtest/reports/*.md
 !deploy/loadtest/reports/.gitkeep
+
+# Claude Code session lock (local, must not be committed)
+.claude/scheduled_tasks.lock
