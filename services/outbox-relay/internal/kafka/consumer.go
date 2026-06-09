@@ -11,6 +11,7 @@ import (
 
 	"github.com/IBM/sarama"
 
+	"github.com/ewallet-pg/shared/kafkax"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/domain"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
 )
@@ -33,15 +34,9 @@ type CDCConsumer struct {
 
 // NewCDCConsumer creates a consumer group bound to the CDC topic.
 func NewCDCConsumer(brokers []string, groupID, topic string, updater *usecase.CDCStatusUpdater, metrics usecase.MetricsRecorder, logger *slog.Logger) (*CDCConsumer, error) {
-	sc := sarama.NewConfig()
-	sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()}
-	sc.Consumer.Offsets.Initial = sarama.OffsetOldest
-	sc.Consumer.Offsets.AutoCommit.Enable = true
-	sc.Consumer.Offsets.AutoCommit.Interval = 1 * time.Second
-
-	cg, err := sarama.NewConsumerGroup(brokers, groupID, sc)
+	cg, err := kafkax.NewConsumerGroup(brokers, groupID)
 	if err != nil {
-		return nil, fmt.Errorf("kafka: create consumer group: %w", err)
+		return nil, err
 	}
 
 	return &CDCConsumer{

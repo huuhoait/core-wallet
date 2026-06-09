@@ -1,0 +1,13 @@
+# Build context is ./services (shared by the wallet-service and outbox-relay
+# image builds so the shared module sits beside each service). Keep it lean.
+**/.git
+**/.gitignore
+**/.DS_Store
+**/bin/
+**/*.test
+**/*.out
+**/coverage.*
+**/.env
+**/.env.*
+!**/.env.example
+**/postman/

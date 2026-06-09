@@ -45,8 +45,8 @@ vet: ## go vet
 	go vet ./...
 
 .PHONY: docker-build
-docker-build: ## Build the docker image
-	docker build -t ewallet-pg/$(BIN):$(VERSION) .
+docker-build: ## Build the docker image (context = ../ so the shared module is in scope)
+	docker build -f Dockerfile -t ewallet-pg/$(BIN):$(VERSION) ..
 
 .PHONY: smoke
 smoke: ## Quick smoke test (requires running stack — wallet_schema.sql + wallet_sp.sql deployed)

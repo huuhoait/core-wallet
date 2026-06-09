@@ -11,10 +11,11 @@ import (
 	"github.com/IBM/sarama"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/ewallet-pg/shared/kafkax"
+	"github.com/ewallet-pg/shared/otelx"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/domain"
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/usecase"
 )
@@ -35,17 +36,9 @@ var _ usecase.EventPublisher = (*SyncProducer)(nil)
 // NewSyncProducer builds a SyncProducer against brokers with idempotent,
 // all-replicas-ack delivery. maxRetries bounds the per-send retry budget.
 func NewSyncProducer(brokers []string, maxRetries int, logger *slog.Logger) (*SyncProducer, error) {
-	sc := sarama.NewConfig()
-	sc.Producer.RequiredAcks = sarama.WaitForAll
-	sc.Producer.Retry.Max = maxRetries
-	sc.Producer.Return.Successes = true // required by SyncProducer
-	sc.Producer.Idempotent = true
-	sc.Net.MaxOpenRequests = 1 // required when Idempotent = true
-	sc.Producer.Partitioner = sarama.NewHashPartitioner
-
-	sp, err := sarama.NewSyncProducer(brokers, sc)
+	sp, err := kafkax.NewSyncProducer(brokers, maxRetries)
 	if err != nil {
-		return nil, fmt.Errorf("kafka: connect to %v: %w", brokers, err)
+		return nil, err
 	}
 	logger.Info("Kafka producer ready", slog.Any("brokers", brokers))
 	return &SyncProducer{
@@ -82,8 +75,7 @@ func (p *SyncProducer) Publish(msg domain.KafkaMessage) (int32, int64, error) {
 		Headers: headers,
 	})
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "kafka publish failed")
+		otelx.FailSpan(span, err)
 		return 0, 0, fmt.Errorf("kafka: send to %s: %w", msg.Topic, err)
 	}
 	span.SetAttributes(

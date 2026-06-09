@@ -36,6 +36,17 @@ type Config struct {
 	DBPassword string
 	DBName     string
 
+	// Database connection pool — mirrors the wallet-service DB_* env contract so
+	// the relay's pool gets the same PgBouncer-safe, OTel-traced wiring (shared
+	// github.com/ewallet-pg/pgxdb builder).
+	DBMaxConns         int32
+	DBMinConns         int32
+	DBMaxConnLifetime  time.Duration
+	DBMaxConnIdleTime  time.Duration
+	DBConnectTimeout   time.Duration
+	DBStatementTimeout time.Duration
+	DBLockTimeout      time.Duration
+
 	// Kafka
 	KafkaBrokers     []string
 	KafkaTopicPrefix string
@@ -133,6 +144,29 @@ func LoadConfig() (*Config, error) {
 
 	var err error
 	if c.DBPort, err = getEnvInt("DB_PORT", 5432); err != nil {
+		return nil, err
+	}
+	var maxConns, minConns int
+	if maxConns, err = getEnvInt("DB_MAX_CONNS", 50); err != nil {
+		return nil, err
+	}
+	if minConns, err = getEnvInt("DB_MIN_CONNS", 5); err != nil {
+		return nil, err
+	}
+	c.DBMaxConns, c.DBMinConns = int32(maxConns), int32(minConns)
+	if c.DBMaxConnLifetime, err = getEnvDuration("DB_MAX_CONN_LIFETIME", 30*time.Minute); err != nil {
+		return nil, err
+	}
+	if c.DBMaxConnIdleTime, err = getEnvDuration("DB_MAX_CONN_IDLE", 5*time.Minute); err != nil {
+		return nil, err
+	}
+	if c.DBConnectTimeout, err = getEnvDuration("DB_CONNECT_TIMEOUT", 5*time.Second); err != nil {
+		return nil, err
+	}
+	if c.DBStatementTimeout, err = getEnvDuration("DB_STATEMENT_TIMEOUT", 2500*time.Millisecond); err != nil {
+		return nil, err
+	}
+	if c.DBLockTimeout, err = getEnvDuration("DB_LOCK_TIMEOUT", 1500*time.Millisecond); err != nil {
 		return nil, err
 	}
 	if c.BatchSize, err = getEnvInt("BATCH_SIZE", 100); err != nil {

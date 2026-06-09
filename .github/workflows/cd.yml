@@ -32,10 +32,10 @@ jobs:
       matrix:
         service:
           - name: wallet-service
-            context: services/wallet-service
+            context: services
             dockerfile: services/wallet-service/Dockerfile
           - name: outbox-relay
-            context: services/outbox-relay
+            context: services
             dockerfile: services/outbox-relay/Dockerfile
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}

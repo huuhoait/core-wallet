@@ -11,12 +11,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
 	"github.com/ewallet-pg/wallet-service/internal/http/dto"
 	"github.com/ewallet-pg/wallet-service/internal/http/middleware"
 	"github.com/ewallet-pg/wallet-service/internal/usecase"
 )
+
+// tracer is the handler-package tracer. Spans started here nest under the
+// otelgin server span and continue the W3C trace propagated into the outbox.
+var tracer = otel.Tracer("wallet-service/http/handler")
 
 type Wallet struct {
 	svc *usecase.WalletService
@@ -44,7 +50,18 @@ func (h *Wallet) Topup(c *gin.Context) {
 		renderValidationError(c, err)
 		return
 	}
-	res, err := h.svc.Topup(c.Request.Context(), domain.TopupInput{
+
+	// Explicit span for the topup so the operation is traceable end-to-end
+	// (handler → usecase → repo SP → outbox). Nests under the otelgin server
+	// span and carries the same trace propagated into WLT_OUTBOX HEADERS.
+	ctx, span := startSpan(c, "finance.topup",
+		attribute.String("wallet.acct_no", req.AcctNo),
+		attribute.String("wallet.reference", req.Reference),
+		attribute.String("wallet.amount", req.Amount),
+	)
+	defer span.End()
+
+	res, err := h.svc.Topup(ctx, domain.TopupInput{
 		AcctNo:    req.AcctNo,
 		Amount:    req.Amount,
 		Reference: req.Reference,
@@ -53,9 +70,15 @@ func (h *Wallet) Topup(c *gin.Context) {
 		Audit:     middleware.FromGin(c),
 	})
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(
+		attribute.Int64("wallet.tran_internal_key", res.TranInternalID),
+		attribute.String("wallet.event_uuid", res.EventUUID.String()),
+		attribute.String("wallet.status", res.Status),
+	)
 	writeOK(c, statusFor(res.Status), dto.TopupRespFrom(res))
 }
 
@@ -80,7 +103,16 @@ func (h *Wallet) Transfer(c *gin.Context) {
 		renderValidationError(c, err)
 		return
 	}
-	res, err := h.svc.Transfer(c.Request.Context(), domain.TransferInput{
+	ctx, span := startSpan(c, "finance.transfer",
+		attribute.String("wallet.from_acct_no", req.FromAcctNo),
+		attribute.String("wallet.to_acct_no", req.ToAcctNo),
+		attribute.String("wallet.reference", req.Reference),
+		attribute.String("wallet.amount", req.Amount),
+		attribute.String("wallet.tran_type", req.TranType),
+	)
+	defer span.End()
+
+	res, err := h.svc.Transfer(ctx, domain.TransferInput{
 		FromAcctNo: req.FromAcctNo,
 		ToAcctNo:   req.ToAcctNo,
 		Amount:     req.Amount,
@@ -91,9 +123,15 @@ func (h *Wallet) Transfer(c *gin.Context) {
 		Audit:      middleware.FromGin(c),
 	})
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(
+		attribute.Int64("wallet.tran_internal_key", res.TranInternalID),
+		attribute.String("wallet.event_uuid", res.EventUUID.String()),
+		attribute.String("wallet.status", res.Status),
+	)
 	writeOK(c, statusFor(res.Status), dto.TransferRespFrom(res))
 }
 
@@ -118,7 +156,15 @@ func (h *Wallet) Withdraw(c *gin.Context) {
 		renderValidationError(c, err)
 		return
 	}
-	res, err := h.svc.Withdraw(c.Request.Context(), domain.WithdrawInput{
+	ctx, span := startSpan(c, "finance.withdraw",
+		attribute.String("wallet.acct_no", req.AcctNo),
+		attribute.String("wallet.reference", req.Reference),
+		attribute.String("wallet.amount", req.Amount),
+		attribute.String("wallet.ext_payout_ref", req.ExtPayoutRef),
+	)
+	defer span.End()
+
+	res, err := h.svc.Withdraw(ctx, domain.WithdrawInput{
 		AcctNo:          req.AcctNo,
 		Amount:          req.Amount,
 		Reference:       req.Reference,
@@ -130,9 +176,15 @@ func (h *Wallet) Withdraw(c *gin.Context) {
 		Audit:           middleware.FromGin(c),
 	})
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(
+		attribute.Int64("wallet.tran_internal_key", res.TranInternalID),
+		attribute.String("wallet.event_uuid", res.EventUUID.String()),
+		attribute.String("wallet.status", res.Status),
+	)
 	writeOK(c, statusFor(res.Status), dto.WithdrawRespFrom(res))
 }
 
@@ -161,7 +213,16 @@ func (h *Wallet) MerchantWithdraw(c *gin.Context) {
 	if req.AutoSweep != nil {
 		autoSweep = *req.AutoSweep
 	}
-	res, err := h.svc.MerchantWithdraw(c.Request.Context(), domain.MerchantWithdrawInput{
+	ctx, span := startSpan(c, "finance.merchant_withdraw",
+		attribute.String("wallet.group_id", req.GroupID),
+		attribute.String("wallet.reference", req.Reference),
+		attribute.String("wallet.amount", req.Amount),
+		attribute.String("wallet.ext_payout_ref", req.ExtPayoutRef),
+		attribute.Bool("wallet.auto_sweep", autoSweep),
+	)
+	defer span.End()
+
+	res, err := h.svc.MerchantWithdraw(ctx, domain.MerchantWithdrawInput{
 		GroupID:      req.GroupID,
 		Amount:       req.Amount,
 		Reference:    req.Reference,
@@ -170,9 +231,15 @@ func (h *Wallet) MerchantWithdraw(c *gin.Context) {
 		Audit:        middleware.FromGin(c),
 	})
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(
+		attribute.Int64("wallet.tran_internal_key", res.TranInternalID),
+		attribute.String("wallet.event_uuid", res.EventUUID.String()),
+		attribute.String("wallet.status", res.Status),
+	)
 	writeOK(c, statusFor(res.Status), dto.MerchantWithdrawRespFrom(res))
 }
 
@@ -198,15 +265,23 @@ func (h *Wallet) MarkAcked(c *gin.Context) {
 		renderValidationError(c, err)
 		return
 	}
-	res, err := h.svc.MarkAcked(c.Request.Context(), domain.AckInput{
+	ctx, span := startSpan(c, "treasury.mark_acked",
+		attribute.String("wallet.ext_payout_ref", ref),
+		attribute.String("wallet.treasury_batch_id", req.TreasuryBatchID),
+	)
+	defer span.End()
+
+	res, err := h.svc.MarkAcked(ctx, domain.AckInput{
 		ExtPayoutRef:    ref,
 		TreasuryBatchID: req.TreasuryBatchID,
 		Audit:           middleware.FromGin(c),
 	})
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(attribute.String("wallet.status", res.Status))
 	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
@@ -223,14 +298,22 @@ func (h *Wallet) MarkAcked(c *gin.Context) {
 //	@Failure		500				{object}	dto.ProblemDetails	"Internal error"
 //	@Router			/v1/treasury/withdrawals/{ext_payout_ref}/disbursing [post]
 func (h *Wallet) MarkDisbursing(c *gin.Context) {
-	res, err := h.svc.MarkDisbursing(c.Request.Context(), domain.DisbursingInput{
-		ExtPayoutRef: c.Param("ext_payout_ref"),
+	ref := c.Param("ext_payout_ref")
+	ctx, span := startSpan(c, "treasury.mark_disbursing",
+		attribute.String("wallet.ext_payout_ref", ref),
+	)
+	defer span.End()
+
+	res, err := h.svc.MarkDisbursing(ctx, domain.DisbursingInput{
+		ExtPayoutRef: ref,
 		Audit:        middleware.FromGin(c),
 	})
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(attribute.String("wallet.status", res.Status))
 	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
@@ -256,15 +339,23 @@ func (h *Wallet) MarkCompleted(c *gin.Context) {
 		renderValidationError(c, err)
 		return
 	}
-	res, err := h.svc.MarkCompleted(c.Request.Context(), domain.CompletedInput{
+	ctx, span := startSpan(c, "treasury.mark_completed",
+		attribute.String("wallet.ext_payout_ref", ref),
+		attribute.String("wallet.napas_ref", req.NapasRef),
+	)
+	defer span.End()
+
+	res, err := h.svc.MarkCompleted(ctx, domain.CompletedInput{
 		ExtPayoutRef: ref,
 		NapasRef:     req.NapasRef,
 		Audit:        middleware.FromGin(c),
 	})
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(attribute.String("wallet.status", res.Status))
 	writeOK(c, http.StatusOK, dto.MarkRespFrom(res))
 }
 
@@ -290,7 +381,14 @@ func (h *Wallet) Reverse(c *gin.Context) {
 		renderValidationError(c, err)
 		return
 	}
-	res, err := h.svc.Reverse(c.Request.Context(), domain.ReversalInput{
+	ctx, span := startSpan(c, "treasury.reverse",
+		attribute.String("wallet.ext_payout_ref", ref),
+		attribute.String("wallet.fail_code", req.FailCode),
+		attribute.String("wallet.initiator", req.Initiator),
+	)
+	defer span.End()
+
+	res, err := h.svc.Reverse(ctx, domain.ReversalInput{
 		ExtPayoutRef: ref,
 		FailCode:     req.FailCode,
 		FailReason:   req.FailReason,
@@ -298,9 +396,15 @@ func (h *Wallet) Reverse(c *gin.Context) {
 		Audit:        middleware.FromGin(c),
 	})
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(
+		attribute.Int64("wallet.reversal_tran_key", res.ReversalTranKey),
+		attribute.Bool("wallet.was_already_reversed", res.WasAlreadyReversed),
+		attribute.String("wallet.event_uuid", res.EventUUID.String()),
+	)
 	writeOK(c, http.StatusOK, dto.ReversalRespFrom(res))
 }
 

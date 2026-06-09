@@ -134,8 +134,10 @@ services:
   # Built from services/wallet-service/Dockerfile (distroless static binary).
   wallet-service:
     build:
-      context: ./services/wallet-service
-      dockerfile: Dockerfile
+      # Context is ./services (parent of both the service and the shared module)
+      # so the `replace => ../shared` directive resolves inside the build tree.
+      context: ./services
+      dockerfile: wallet-service/Dockerfile
       args:
         VERSION: ${WALLET_SERVICE_VERSION:-dev}
     image: core-wallet/wallet-service:dev
@@ -162,7 +164,7 @@ services:
       DB_MIN_CONNS: ${DB_MIN_CONNS:-5}
       # Tracing → Jaeger (see the `jaeger` service, profile `tracing`). Opt in with
       # OTEL_ENABLED=true and start the tracing profile; default off needs no backend.
-      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-jaeger:4317}
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: wallet-service
@@ -252,8 +254,9 @@ services:
 
   outbox-relay:
     build:
-      context: ./services/outbox-relay
-      dockerfile: Dockerfile
+      # Context is ./services so the shared module (../shared) is in the build tree.
+      context: ./services
+      dockerfile: outbox-relay/Dockerfile
     image: core-wallet/outbox-relay:dev
     container_name: wallet-outbox-relay
     restart: unless-stopped
@@ -280,7 +283,7 @@ services:
       # Tracing → Jaeger. Continues the trace the posting SP stamped into the
       # outbox row across the publish to Kafka. Opt in with OTEL_ENABLED=true +
       # the `tracing` profile; default off so no backend is required.
-      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-jaeger:4317}
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: outbox-relay
@@ -306,8 +309,19 @@ services:
     image: jaegertracing/all-in-one:1.60
     container_name: wallet-jaeger
     restart: unless-stopped
+    # all-in-one defaults to in-memory storage (traces lost on restart). Use the
+    # embedded Badger key-value store backed by a named volume so traces persist
+    # across `docker compose down/up`. Runs as root so the nonroot image user can
+    # write the freshly-created volume dir.
+    user: "0"
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: badger
+      BADGER_EPHEMERAL: "false"
+      BADGER_DIRECTORY_VALUE: /badger/data
+      BADGER_DIRECTORY_KEY: /badger/key
+    volumes:
+      - jaeger_data:/badger
     ports:
       - "${JAEGER_UI_PORT:-16686}:16686"   # web UI
       - "${OTLP_GRPC_PORT:-4317}:4317"     # OTLP gRPC receiver
@@ -325,6 +339,9 @@ services:
 volumes:
   pg_data:
     name: wallet_pg_data
+    driver: local
+  jaeger_data:
+    name: wallet_jaeger_data
     driver: local
 
 networks:
