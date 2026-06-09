@@ -106,7 +106,7 @@ func runPolling(ctx context.Context, cancel context.CancelFunc, cfg *config.Conf
 	}, logger)
 	relay.Start(ctx)
 
-	waitForSignal(cancel, relay.Stop, logger)
+	waitForSignal(cancel, relay.Stop, cfg.ShutdownTimeout, logger)
 }
 
 // runCDC wires and runs the Debezium CDC relay: it ensures the connector, starts
@@ -143,7 +143,7 @@ func runCDC(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, 
 		// Pause (not delete) the connector on graceful shutdown so it resumes
 		// cleanly next time.
 		_ = connMgr.Pause(context.Background())
-	}, logger)
+	}, cfg.ShutdownTimeout, logger)
 }
 
 // monitorConnector periodically checks the Debezium connector health, resuming
@@ -223,16 +223,36 @@ func startOpsServer(cfg *config.Config, m *metrics.Metrics, logger *slog.Logger)
 }
 
 // waitForSignal blocks until SIGINT/SIGTERM, then runs cleanup and cancels ctx.
-func waitForSignal(cancel context.CancelFunc, cleanup func(), logger *slog.Logger) {
-	sigChan := make(chan os.Signal, 1)
+// waitForSignal blocks until SIGINT/SIGTERM, then drains in-flight work via
+// cleanup() under a bounded deadline. If cleanup outlasts timeout — or a second
+// signal arrives (an impatient operator) — it forces a non-zero exit rather than
+// hanging termination. The buffered channel (cap 2) keeps the second signal even
+// while we're mid-drain.
+func waitForSignal(cancel context.CancelFunc, cleanup func(), timeout time.Duration, logger *slog.Logger) {
+	sigChan := make(chan os.Signal, 2)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-sigChan
-	logger.Info("Received shutdown signal", slog.String("signal", sig.String()))
+	logger.Info("Received shutdown signal, draining",
+		slog.String("signal", sig.String()), slog.Duration("timeout", timeout))
 
-	cleanup()
-	cancel()
-	logger.Info("Outbox relay service stopped")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cleanup()
+		cancel()
+	}()
+
+	select {
+	case <-done:
+		logger.Info("Outbox relay service stopped cleanly")
+	case <-time.After(timeout):
+		logger.Error("Graceful shutdown timed out; forcing exit", slog.Duration("timeout", timeout))
+		os.Exit(1)
+	case sig := <-sigChan:
+		logger.Warn("Second signal received; forcing exit", slog.String("signal", sig.String()))
+		os.Exit(1)
+	}
 }
 
 // initLogger builds the JSON slog logger. The JSON handler stamps time + level;

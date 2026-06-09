@@ -58,6 +58,11 @@ type Config struct {
 	RetryDelay   time.Duration
 	WorkerCount  int
 
+	// ShutdownTimeout bounds graceful shutdown: how long to let in-flight work
+	// drain (workers / consumer / connector pause) before forcing exit, so a
+	// stuck worker or unreachable broker can't hang termination indefinitely.
+	ShutdownTimeout time.Duration
+
 	// CDC mode (Debezium)
 	CDC CDCConfig
 
@@ -185,6 +190,9 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	if c.RetryDelay, err = getEnvDuration("RETRY_DELAY", 5*time.Second); err != nil {
+		return nil, err
+	}
+	if c.ShutdownTimeout, err = getEnvDuration("SHUTDOWN_TIMEOUT", 15*time.Second); err != nil {
 		return nil, err
 	}
 	if c.Otel.SamplingRatio, err = getEnvFloat("OTEL_TRACES_SAMPLER_ARG", 1.0); err != nil {
