@@ -10,12 +10,13 @@ import (
 )
 
 type Config struct {
-	HTTP HTTP
-	DB   DB
-	Otel Otel
-	EOD  EOD
-	JWT  JWT
-	Env  string `env:"APP_ENV" envDefault:"dev"` // dev | staging | prod
+	HTTP      HTTP
+	DB        DB
+	Otel      Otel
+	EOD       EOD
+	WDJanitor WDJanitor
+	JWT       JWT
+	Env       string `env:"APP_ENV" envDefault:"dev"` // dev | staging | prod
 }
 
 type HTTP struct {
@@ -114,6 +115,22 @@ type EOD struct {
 	GLCutoff   string        `env:"EOD_GL_CUTOFF"   envDefault:"18:00:00"` // HH:MM:SS local; GL close (run_gl_close) fires at the accounting cutoff → seals today's accounting day. Must match WLT_GL_CONFIG.cutoff_time
 	Timezone   string        `env:"EOD_TIMEZONE"    envDefault:"Asia/Ho_Chi_Minh"`
 	RunTimeout time.Duration `env:"EOD_RUN_TIMEOUT" envDefault:"30m"` // hard cap on one close
+}
+
+// WDJanitor configures the in-process withdrawal SLA-timeout janitor (US-5.3):
+// it CALLs reverse_stuck_withdrawals on an interval to auto-reverse withdrawals
+// stuck past their FINAL_DEADLINE (default SUBMITTED_AT + 24h). Disabled by
+// default; exactly ONE service replica should enable it (SKIP LOCKED makes
+// extra runners harmless, just wasteful).
+//
+// Unlike EOD this is a single-statement function call (no internal COMMIT), so
+// it runs on the ORDINARY app pool (PgBouncer transaction-mode safe) as
+// wallet_app — no dedicated DSN needed.
+type WDJanitor struct {
+	Enabled    bool          `env:"WD_JANITOR_ENABLED"     envDefault:"false"`
+	Interval   time.Duration `env:"WD_JANITOR_INTERVAL"    envDefault:"15m"` // how often to sweep
+	BatchSize  int           `env:"WD_JANITOR_BATCH_SIZE"  envDefault:"100"` // max rows reversed per tick
+	RunTimeout time.Duration `env:"WD_JANITOR_RUN_TIMEOUT" envDefault:"60s"` // hard cap on one sweep
 }
 
 // Load reads the env into Config. Required vars without defaults cause an error.

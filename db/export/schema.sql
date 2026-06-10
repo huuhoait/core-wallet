@@ -3719,6 +3719,69 @@ END $$;
 
 
 --
+-- Name: reverse_stuck_withdrawals(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reverse_stuck_withdrawals(p_limit integer DEFAULT 100) RETURNS TABLE(reversed_count integer, failed_count integer, expired_count integer)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+-- SLA-timeout janitor (US-5.3): auto-reverse withdrawals that never reached a
+-- terminal state before their FINAL_DEADLINE (default SUBMITTED_AT + 24h). A
+-- batch worker (internal/janitor, or pg_cron) CALLs this on an interval. It is a
+-- THIN orchestrator: each reversal is delegated to post_withdraw_reversal so the
+-- ledger/GL/outbox/audit semantics are identical to a Treasury-initiated reverse
+-- (US-3.3) — the only difference is fail_code='SLA_TIMEOUT', initiator='JANITOR'.
+--
+-- Candidate rows are taken FOR UPDATE SKIP LOCKED so overlapping janitor ticks
+-- (or a Treasury reverse racing the same row) never double-process: a row locked
+-- elsewhere is simply skipped this tick. Each reversal runs inside its own
+-- BEGIN/EXCEPTION subtransaction so one bad row can't abort the whole batch —
+-- a row already past WDRAW's reversal window (P0060, US-3.6) is counted as
+-- expired (operator must reverse it manually), anything else as failed; both
+-- raise a WARNING. The whole batch commits as one TX (no internal COMMIT), so it
+-- is PgBouncer-transaction-mode safe and can run on the ordinary app pool.
+DECLARE
+  v_rec      RECORD;
+  v_reversed INT := 0;
+  v_failed   INT := 0;
+  v_expired  INT := 0;
+BEGIN
+  IF p_limit IS NULL OR p_limit <= 0 THEN
+    p_limit := 100;
+  END IF;
+
+  FOR v_rec IN
+    SELECT ext_payout_ref
+      FROM WLT_WITHDRAW_TRACK
+     WHERE STATUS IN ('SUBMITTED', 'ACKED', 'DISBURSING')
+       AND FINAL_DEADLINE < now()
+     ORDER BY FINAL_DEADLINE
+     LIMIT p_limit
+     FOR UPDATE SKIP LOCKED
+  LOOP
+    BEGIN
+      PERFORM post_withdraw_reversal(
+        v_rec.ext_payout_ref,
+        'SLA_TIMEOUT',
+        'Auto-reversed: disbursement not finalised before final_deadline (SLA)',
+        'JANITOR', 'SYS', 'JANITOR');
+      v_reversed := v_reversed + 1;
+    EXCEPTION
+      WHEN sqlstate 'P0060' THEN   -- REVERSAL_WINDOW_EXPIRED: too old to auto-reverse
+        v_expired := v_expired + 1;
+        RAISE WARNING 'reverse_stuck_withdrawals: % past reversal window, needs manual handling', v_rec.ext_payout_ref;
+      WHEN OTHERS THEN
+        v_failed := v_failed + 1;
+        RAISE WARNING 'reverse_stuck_withdrawals: % failed: % (%)', v_rec.ext_payout_ref, SQLERRM, SQLSTATE;
+    END;
+  END LOOP;
+
+  RETURN QUERY SELECT v_reversed, v_failed, v_expired;
+END $$;
+
+
+--
 -- Name: provision_acct_group(character varying, character varying, character varying, character varying, character varying, numeric, numeric, smallint, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -5823,7 +5886,7 @@ CREATE INDEX idx_wd_ack_overdue ON public.wlt_withdraw_track USING btree (ack_de
 -- Name: idx_wd_final_overdue; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_wd_final_overdue ON public.wlt_withdraw_track USING btree (final_deadline) WHERE ((status)::text = ANY (ARRAY[('ACKED'::character varying)::text, ('DISBURSING'::character varying)::text]));
+CREATE INDEX idx_wd_final_overdue ON public.wlt_withdraw_track USING btree (final_deadline) WHERE ((status)::text = ANY (ARRAY[('SUBMITTED'::character varying)::text, ('ACKED'::character varying)::text, ('DISBURSING'::character varying)::text]));
 
 
 --
@@ -6454,6 +6517,13 @@ GRANT ALL ON FUNCTION public.post_withdraw(p_acct_no character varying, p_amount
 --
 
 GRANT ALL ON FUNCTION public.post_withdraw_reversal(p_ext_payout_ref character varying, p_fail_code character varying, p_fail_reason character varying, p_initiator character varying, p_channel character varying, p_actor character varying) TO wallet_app;
+
+
+--
+-- Name: FUNCTION reverse_stuck_withdrawals(p_limit integer); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.reverse_stuck_withdrawals(p_limit integer) TO wallet_app;
 
 
 --

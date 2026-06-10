@@ -26,13 +26,13 @@ docs alone).
 | 2. Transactions — Posting | 7 | 0 | 0 |
 | 3. Reversals & Refunds | 7 | 0 | 0 |
 | 4. Balance & Statements | 7 | 0 | 0 |
-| 5. Withdrawal Disbursement | 2 | 0 | 1 |
+| 5. Withdrawal Disbursement | 3 | 0 | 0 |
 | 6. Accounting & GL Operations | 6 | 1 | 3 |
 | 7. Eventing & Integration | 2 | 0 | 2 |
 | 8. Audit, PII & Compliance | 2 | 1 | 2 |
 | 9. Platform / Infra / Observability | 17 | 0 | 2 |
 | 10. Quality — Testing & Load | 9 | 1 | 0 |
-| **Total** | **71** | **5** | **11** |
+| **Total** | **72** | **5** | **10** |
 
 ---
 
@@ -126,7 +126,7 @@ docs alone).
 |----|-----------|:------:|------------------|
 | US-5.1 | Track withdrawal lifecycle SUBMITTED→ACKED→DISBURSING→COMPLETED/FAILED→REVERSED | ✅ | `WLT_WITHDRAW_TRACK`; SPs `mark_withdraw_acked/disbursing/completed`. |
 | US-5.2 | As Treasury, I push disbursement state transitions | ✅ | `POST /v1/treasury/withdrawals/:ref/{acked,disbursing,completed}`. |
-| US-5.3 | Auto-reverse withdrawals stuck > 24h (SLA-timeout janitor) | ⬜ | Designed (HLD v1.9). No janitor SP / worker. |
+| US-5.3 | Auto-reverse withdrawals stuck > 24h (SLA-timeout janitor) | ✅ | **Done (2026-06-10).** SP `reverse_stuck_withdrawals(p_limit)` (SECURITY DEFINER) sweeps `WLT_WITHDRAW_TRACK` rows still in `SUBMITTED`/`ACKED`/`DISBURSING` past `FINAL_DEADLINE` (default `SUBMITTED_AT + 24h`), taken `FOR UPDATE SKIP LOCKED` (multi-runner safe), and delegates each to `post_withdraw_reversal` (`fail_code=SLA_TIMEOUT`, `initiator=JANITOR`) so ledger/GL/outbox/audit semantics match a Treasury reverse (US-3.3). Each reversal runs in its own `BEGIN/EXCEPTION` subtx → one bad row can't abort the batch; returns `(reversed, failed, expired)` where `expired` counts rows already past WDRAW's 168h reversal window (US-3.6, P0060 → needs manual handling, RAISE WARNING). Index `idx_wd_final_overdue` extended to include `SUBMITTED` so the sweep is index-driven. Driver: in-process Go scheduler `internal/janitor` (interval ticker, opt-in `WD_JANITOR_ENABLED` + `WD_JANITOR_INTERVAL`/`BATCH_SIZE`/`RUN_TIMEOUT`), runs on the ordinary app pool (single bounded statement, PgBouncer-safe — no dedicated DSN like EOD), wired in `cmd/server/main.go` (one replica; SKIP LOCKED makes extras harmless). Tests: `db/tests/wallet_withdraw_sla_janitor_test.sql` 9/9 (fresh-not-candidate, SUBMITTED+ACKED reversed, balance credited back, idempotent replay, batch-limit oldest-first, 168h-window expired) + Go `internal/janitor/withdraw_test.go`. |
 
 ## Epic 6 — Accounting & GL Operations / Kế toán & vận hành sổ cái
 
@@ -235,11 +235,9 @@ docs alone).
 
 ### Phase 1 — Production-ready (blocker cho go-live)
 
-| # | Story | Task | Effort |
-|---|-------|------|:------:|
-| 1 | US-5.3 | **SLA-timeout janitor** — auto-reverse withdrawals stuck > 24h (Go scheduler or pg_cron) | 3d |
-
-> ✅ US-9.12 (Prometheus `/metrics`) shipped 2026-06-10 — Phase 1 now has only the SLA-timeout janitor left.
+> ✅ **Phase 1 complete (2026-06-10).** US-9.12 (Prometheus `/metrics`) and US-5.3
+> (withdrawal SLA-timeout janitor) both shipped — no go-live blockers remain.
+> Next focus is Phase 2 (compliance & quality).
 
 ### Phase 2 — Compliance & quality
 
@@ -267,5 +265,5 @@ docs alone).
 - US-6.5 (maker-checker JE) — when ops needs manual adjustments
 - US-7.3 (downstream consumers) — Treasury Service scope
 
-> Phase 1 còn lại ~3 ngày (chỉ US-5.3 — SLA-timeout janitor) sau khi US-9.12 (Prometheus `/metrics`) shipped 2026-06-10.
+> Phase 1 đã xong (US-9.12 + US-5.3 shipped 2026-06-10) — không còn blocker go-live. Tiếp theo là Phase 2 (compliance & quality).
 > Phase 2 cần cho internal audit pass. Phase 3 là nice-to-have, lên kế hoạch theo roadmap.
