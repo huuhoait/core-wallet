@@ -132,6 +132,7 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 			clients.GET("/:client_no/360", h.GetClient360)              // MASKED 360 (profile + wallets + banks + restraints)
 			clients.PATCH("/:client_no", h.UpdateClient)
 			clients.POST("/:client_no/kyc", h.UpdateKYC)                              // submit/update eKYC + raise tier
+			clients.POST("/:client_no/documents", h.AttachClientDocument)             // attach/update related document (US-1.13)
 			clients.POST("/:client_no/banks", h.LinkClientBank)                       // link a bank account
 			clients.PUT("/:client_no/banks/:link_id/default", h.SetDefaultClientBank) // set default bank
 		}

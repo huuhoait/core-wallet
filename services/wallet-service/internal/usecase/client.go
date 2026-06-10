@@ -96,6 +96,17 @@ func (s *WalletService) LinkClientBank(ctx context.Context, in domain.BankLinkIn
 	return res, nil
 }
 
+// AttachClientDocument attaches/updates a related document on a client's KYC
+// (onboarding step 3 / US-1.13).
+func (s *WalletService) AttachClientDocument(ctx context.Context, in domain.AttachDocumentInput) (*domain.AttachDocumentResult, error) {
+	res, err := s.repo.AttachClientDocument(ctx, in)
+	if err != nil {
+		s.logFailure(ctx, "attach_client_document", in.ClientNo, err)
+		return nil, err
+	}
+	return res, nil
+}
+
 // SetDefaultClientBank makes an existing linked bank the client's default.
 func (s *WalletService) SetDefaultClientBank(ctx context.Context, in domain.SetDefaultBankInput) (*domain.BankLinkResult, error) {
 	res, err := s.repo.SetDefaultClientBank(ctx, in)

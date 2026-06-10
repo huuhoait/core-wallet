@@ -116,6 +116,24 @@ func (r *PgWalletRepo) LinkClientBank(ctx context.Context, in domain.BankLinkInp
 	return &out, nil
 }
 
+func (r *PgWalletRepo) AttachClientDocument(ctx context.Context, in domain.AttachDocumentInput) (*domain.AttachDocumentResult, error) {
+	var out domain.AttachDocumentResult
+	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
+		const q = `
+			SELECT client_no, doc_count, related_docs
+			  FROM attach_client_document($1, $2, $3, $4, $5)
+		`
+		// Empty Status → NULL so the SP applies its DEFAULT 'PENDING'.
+		row := tx.QueryRow(ctx, q,
+			in.ClientNo, in.DocType, in.Link, nullStr(in.Status), in.Audit.Actor)
+		return row.Scan(&out.ClientNo, &out.DocCount, &out.RelatedDocs)
+	})
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return &out, nil
+}
+
 func (r *PgWalletRepo) SetDefaultClientBank(ctx context.Context, in domain.SetDefaultBankInput) (*domain.BankLinkResult, error) {
 	var out domain.BankLinkResult
 	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
