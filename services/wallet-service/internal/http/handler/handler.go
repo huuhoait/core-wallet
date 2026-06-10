@@ -447,6 +447,10 @@ func renderError(c *gin.Context, err error) {
 	if !errors.As(err, &de) {
 		de = domain.Internal(err)
 	}
+	// wallet_errors_total{code=<canonical>} — keyed on the stable domain code
+	// (BATCH_UNBALANCED / TIMEOUT / VERSION_CONFLICT / …) the Prometheus alert
+	// rules watch, not the client-facing SQLSTATE/E#### in the envelope.
+	middleware.RecordError(c.Request.Context(), de.Code)
 	p := dto.NewProblemFromError(de, c.Request.URL.Path,
 		c.GetString(middleware.CtxKeyRequestID))
 	abortProblem(c, p)

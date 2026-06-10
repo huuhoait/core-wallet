@@ -35,6 +35,11 @@ type HTTP struct {
 	// Defaults on for dev/staging discoverability; set SWAGGER_ENABLED=false in
 	// production so the API surface is not publicly enumerable.
 	SwaggerEnabled bool `env:"SWAGGER_ENABLED"       envDefault:"true"`
+	// MetricsEnabled mounts the Prometheus scrape endpoint at /metrics and
+	// installs the metrics-recording middleware. Defaults on so Prometheus can
+	// always scrape; independent of OTEL_ENABLED (traces) — a deployment can run
+	// metrics without an OTLP collector. Set METRICS_ENABLED=false to disable.
+	MetricsEnabled bool `env:"METRICS_ENABLED"       envDefault:"true"`
 }
 
 type DB struct {

@@ -145,6 +145,7 @@ func run(logger *slog.Logger) error {
 		slog.String("env", cfg.Env),
 		slog.String("http.addr", cfg.HTTP.Addr),
 		slog.Bool("otel.enabled", cfg.Otel.Enabled),
+		slog.Bool("metrics.enabled", cfg.HTTP.MetricsEnabled),
 		slog.Bool("jwt.enabled", cfg.JWT.Enabled),
 		slog.String("jwt.algorithm", cfg.JWT.Algorithm))
 
@@ -157,6 +158,17 @@ func run(logger *slog.Logger) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = shutdownOtel(ctx)
+	}()
+
+	// ---- Prometheus metrics (independent of tracing) -----------------------
+	shutdownMetrics, err := telemetry.SetupMetrics(rootCtx, cfg.HTTP.MetricsEnabled, cfg.HTTP.ServiceName, cfg.Env)
+	if err != nil {
+		return fmt.Errorf("metrics setup: %w", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownMetrics(ctx)
 	}()
 
 	// ---- PostgreSQL pool ---------------------------------------------------
