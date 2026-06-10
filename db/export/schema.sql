@@ -6107,6 +6107,27 @@ CREATE TRIGGER trg_audit_fm_kyc AFTER DELETE OR UPDATE ON public.fm_client_kyc F
 
 
 --
+-- Name: fm_client trg_audit_fm_client; Type: TRIGGER; Schema: public; Owner: -
+--
+
+-- US-8.5: write an OLD→NEW diff row for every UPDATE to the client-master record
+-- itself (e.g. update_client → FM_CLIENT), closing the gap behind US-8.1. UPDATE
+-- ONLY (not INSERT — a create has no before→after diff and is already attributed
+-- by created_by/created_at; not DELETE — core client rows are never hard-deleted,
+-- soft-delete is an UPDATE status='C', which this captures). The BEFORE
+-- trg_audit_cols still stamps created_by/updated_by.
+CREATE TRIGGER trg_audit_fm_client AFTER UPDATE ON public.fm_client FOR EACH ROW EXECUTE FUNCTION public.fn_audit_client_change();
+
+
+--
+-- Name: fm_client_contact trg_audit_fm_client_ct; Type: TRIGGER; Schema: public; Owner: -
+--
+
+-- US-8.5: same policy for the client's contact rows (UPDATE-only diff).
+CREATE TRIGGER trg_audit_fm_client_ct AFTER UPDATE ON public.fm_client_contact FOR EACH ROW EXECUTE FUNCTION public.fn_audit_client_change();
+
+
+--
 -- Name: wlt_gl_batch trg_batch_balanced; Type: TRIGGER; Schema: public; Owner: -
 --
 

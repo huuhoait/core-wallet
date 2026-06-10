@@ -29,10 +29,10 @@ docs alone).
 | 5. Withdrawal Disbursement | 3 | 0 | 0 |
 | 6. Accounting & GL Operations | 6 | 1 | 3 |
 | 7. Eventing & Integration | 2 | 0 | 2 |
-| 8. Audit, PII & Compliance | 2 | 1 | 2 |
+| 8. Audit, PII & Compliance | 3 | 1 | 1 |
 | 9. Platform / Infra / Observability | 17 | 0 | 2 |
 | 10. Quality — Testing & Load | 9 | 1 | 0 |
-| **Total** | **72** | **5** | **10** |
+| **Total** | **73** | **5** | **9** |
 
 ---
 
@@ -168,7 +168,7 @@ docs alone).
 | US-8.1 | Capture client changes (OLD/NEW diff, maker-checker) in an audit log | ✅ | `FM_CLIENT_AUDIT_LOG`; trigger fns `fn_audit_client_change`, `fn_set_audit_columns`. Coverage today: `FM_CLIENT_BANKS` (`trg_audit_fm_client_bk`) + `FM_CLIENT_KYC` (`trg_audit_fm_kyc`) only — UPDATE diffs on the four **core** client tables are tracked in US-8.5. |
 | US-8.2 | Apply holds/restraints (add/release) that block debits/credits | ✅ | SP `add_restraint`/`release_restraint`; `POST /v1/finance/restraints` (+ `/:id/release`); rolls up `TOTAL_RESTRAINED_AMT`/`CR_BLOCKED`, enforced in posting. Maker-checker/idempotency = gateway (deferred). |
 | US-8.3 | Record reconciliation breaks | ⬜ | No `WLT_RECON_BREAK` table or live recon engine in the current schema (`db/export/schema.sql`) — verified absent. Only artifact is the read-only assertion script `db/tests/wallet_reconciliation_check.sql`, which *detects* breaks but does not record them. |
-| US-8.5 | Audit **UPDATEs** to the core client-master tables (`FM_CLIENT`, `FM_CLIENT_INDVL`, `FM_CLIENT_CONTACT`, `FM_CLIENT_IDENTIFIERS`) as OLD→NEW diff rows | ⬜ | Closes the gap behind US-8.1: `fn_audit_client_change` fires today only on `FM_CLIENT_BANKS` + `FM_CLIENT_KYC`; the four core tables only stamp `created_by`/`updated_by` via the BEFORE `trg_audit_cols`, so `update_client` writes **no** diff row. Add an **`AFTER UPDATE`** trigger (mirror `trg_audit_fm_client_bk`) on each — **UPDATE only, not INSERT** (a create has no before→after diff and is already captured by `created_by`/`created_at`). Soft-delete is an `UPDATE status='C'`, so it's covered; client-master rows are never hard-deleted. Satisfies the "Client-master change auditing" HARD RULE in `CLAUDE.md`. Design-only. |
+| US-8.5 | Audit **UPDATEs** to the core client-master tables as OLD→NEW diff rows | ✅ | **Done (2026-06-10).** Closes the gap behind US-8.1 and satisfies the "Client-master change auditing" HARD RULE in `CLAUDE.md`. Added `fn_audit_client_change` as an **`AFTER UPDATE`** trigger on the two surviving core tables: `trg_audit_fm_client` on **`FM_CLIENT`** and `trg_audit_fm_client_ct` on **`FM_CLIENT_CONTACT`** — so `update_client` (which mutates `FM_CLIENT`) now writes an attributed OLD→NEW diff into `FM_CLIENT_AUDIT_LOG`. **UPDATE only, not INSERT** (a create has no before→after diff, already attributed by `created_by`/`created_at`) and **not DELETE** (core client rows are never hard-deleted; soft-delete is an `UPDATE status='C'`, captured). **Scope note:** the originally-listed `FM_CLIENT_INDVL` and `FM_CLIENT_IDENTIFIERS` no longer exist — US-1.15 folded them into `FM_CLIENT_KYC.extra_data` (which already carries `trg_audit_fm_kyc`), so the two remaining `client_no`-bearing core tables are the full scope. The shared `fn_audit_client_change` was left unchanged (it already diffs generically by `TG_TABLE_NAME`/`CLIENT_NO`); note `updated_at` is stamped by the BEFORE `trg_audit_cols` so it always appears in `changed_fields` alongside the real business change. Test: `db/tests/wallet_client_audit_test.sql` 5/5 (INSERT silent, UPDATE writes one attributed diff, precise changed-fields, FM_CLIENT_CONTACT parity). |
 | US-8.4 | PII protection: classification, encryption, masking, retention, access log | 🟡 | **Encryption + masking done**: `FM_CLIENT_KYC.PHONE_NO_ENC`/`EMAIL_ENC` via `pgcrypto` `pgp_sym_encrypt` (DEK from `app.pii_dek`), `PHONE_NO_HASH` for unique lookup, + masked read views (`v_kyc_masked` etc.). Remaining (HLD §8.3): data classification, retention policy, and the `WLT_PII_ACCESS_LOG` access trail. |
 
 ## Epic 9 — Platform / Infra / Observability
@@ -243,10 +243,11 @@ docs alone).
 
 | # | Story | Task | Effort |
 |---|-------|------|:------:|
-| 3 | US-8.5 | **Client audit triggers** — AFTER UPDATE on FM_CLIENT/FM_CLIENT_CONTACT/FM_CLIENT_IDENTIFIERS | 2d |
 | 4 | US-7.4 | **Outbox event envelope** — standardize payload shape (reference, tran_type, channel, actor) across all SPs | 3d |
 | 5 | US-10.7 | **Go integration tests** — testcontainers + real PG for posting paths | 5d |
 | 6 | US-1.13 | **Related-doc attachment** — SP + endpoint for `FM_CLIENT_KYC.related_docs` | 2d |
+
+> ✅ US-8.5 (client-master UPDATE audit triggers) shipped 2026-06-10 — the "Client-master change auditing" HARD RULE is now satisfied for the surviving core tables (`FM_CLIENT`, `FM_CLIENT_CONTACT`).
 
 ### Phase 3 — Scale & polish (backlog)
 
