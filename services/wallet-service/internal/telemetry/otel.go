@@ -52,7 +52,12 @@ func Setup(ctx context.Context, cfg config.Otel, serviceName, env string) (func(
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exp),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SamplingRatio)),
+		// ParentBased so an incoming W3C sampled flag is honored (root decides
+		// once, every hop respects it); TraceIDRatioBased only applies when this
+		// service is the trace root (no upstream traceparent). Without ParentBased
+		// a continuation would re-decide and could flip a sampled 01 to 00,
+		// breaking the distributed trace through the outbox → Kafka.
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SamplingRatio))),
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
