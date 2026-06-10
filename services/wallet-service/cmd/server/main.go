@@ -17,6 +17,7 @@ import (
 	"github.com/ewallet-pg/wallet-service/internal/db"
 	"github.com/ewallet-pg/wallet-service/internal/eod"
 	netHTTP "github.com/ewallet-pg/wallet-service/internal/http"
+	"github.com/ewallet-pg/wallet-service/internal/janitor"
 	"github.com/ewallet-pg/wallet-service/internal/repo"
 	"github.com/ewallet-pg/wallet-service/internal/telemetry"
 	"github.com/ewallet-pg/wallet-service/internal/usecase"
@@ -269,6 +270,26 @@ func run(logger *slog.Logger) error {
 			slog.String("tz", cfg.EOD.Timezone))
 	} else {
 		logger.Info("eod scheduler disabled (EOD_ENABLED unset)")
+	}
+
+	// ---- withdrawal SLA-timeout janitor (opt-in; one replica) --------------
+	// Auto-reverses withdrawals stuck past FINAL_DEADLINE (US-5.3). Runs on the
+	// ordinary app pool (single bounded statement, PgBouncer-safe). Deferred so
+	// the sweeper drains (janitorDone) before main returns.
+	if cfg.WDJanitor.Enabled {
+		wj, err := janitor.NewWithdraw(pool, cfg.WDJanitor.Interval, cfg.WDJanitor.BatchSize,
+			cfg.WDJanitor.RunTimeout, logger)
+		if err != nil {
+			return fmt.Errorf("withdraw janitor: %w", err)
+		}
+		janitorDone := make(chan struct{})
+		go func() { defer close(janitorDone); _ = wj.Start(rootCtx) }()
+		defer func() { <-janitorDone }()
+		logger.Info("withdraw janitor enabled",
+			slog.Duration("interval", cfg.WDJanitor.Interval),
+			slog.Int("batch_size", cfg.WDJanitor.BatchSize))
+	} else {
+		logger.Info("withdraw janitor disabled (WD_JANITOR_ENABLED unset)")
 	}
 
 	// ---- block until signal -----------------------------------------------
