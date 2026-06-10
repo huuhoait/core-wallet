@@ -29,10 +29,10 @@ docs alone).
 | 5. Withdrawal Disbursement | 3 | 0 | 0 |
 | 6. Accounting & GL Operations | 6 | 1 | 3 |
 | 7. Eventing & Integration | 3 | 0 | 1 |
-| 8. Audit, PII & Compliance | 3 | 1 | 1 |
+| 8. Audit, PII & Compliance | 5 | 0 | 0 |
 | 9. Platform / Infra / Observability | 17 | 0 | 2 |
 | 10. Quality — Testing & Load | 9 | 1 | 0 |
-| **Total** | **75** | **4** | **8** |
+| **Total** | **77** | **3** | **6** |
 
 ---
 
@@ -168,9 +168,9 @@ docs alone).
 |----|-----------|:------:|------------------|
 | US-8.1 | Capture client changes (OLD/NEW diff, maker-checker) in an audit log | ✅ | `FM_CLIENT_AUDIT_LOG`; trigger fns `fn_audit_client_change`, `fn_set_audit_columns`. Coverage today: `FM_CLIENT_BANKS` (`trg_audit_fm_client_bk`) + `FM_CLIENT_KYC` (`trg_audit_fm_kyc`) only — UPDATE diffs on the four **core** client tables are tracked in US-8.5. |
 | US-8.2 | Apply holds/restraints (add/release) that block debits/credits | ✅ | SP `add_restraint`/`release_restraint`; `POST /v1/finance/restraints` (+ `/:id/release`); rolls up `TOTAL_RESTRAINED_AMT`/`CR_BLOCKED`, enforced in posting. Maker-checker/idempotency = gateway (deferred). |
-| US-8.3 | Record reconciliation breaks | ⬜ | No `WLT_RECON_BREAK` table or live recon engine in the current schema (`db/export/schema.sql`) — verified absent. Only artifact is the read-only assertion script `db/tests/wallet_reconciliation_check.sql`, which *detects* breaks but does not record them. |
+| US-8.3 | Record reconciliation breaks | ✅ | **Done** (verified 2026-06-10; doc was stale). SP `fn_record_recon_breaks(p_biz_date)` runs the accounting invariants A–M (same logic as the read-only `wallet_reconciliation_check.sql`) and **persists** one `WLT_RECON_BREAK` row per FAILED invariant, tagged with a single `run_id`; returns `(run_id, biz_date, breaks_recorded)`. Table `WLT_RECON_BREAK` (severity ERROR/WARN, status OPEN/RESOLVED/IGNORED, `idx`/PK, audit cols) + `statement_timeout=0` for the full-history scans. Batch-driven (pg_cron / EOD-style, no HTTP route by design). Test `db/tests/wallet_recon_break_test.sql` PASS. |
 | US-8.5 | Audit **UPDATEs** to the core client-master tables as OLD→NEW diff rows | ✅ | **Done (2026-06-10).** Closes the gap behind US-8.1 and satisfies the "Client-master change auditing" HARD RULE in `CLAUDE.md`. Added `fn_audit_client_change` as an **`AFTER UPDATE`** trigger on the two surviving core tables: `trg_audit_fm_client` on **`FM_CLIENT`** and `trg_audit_fm_client_ct` on **`FM_CLIENT_CONTACT`** — so `update_client` (which mutates `FM_CLIENT`) now writes an attributed OLD→NEW diff into `FM_CLIENT_AUDIT_LOG`. **UPDATE only, not INSERT** (a create has no before→after diff, already attributed by `created_by`/`created_at`) and **not DELETE** (core client rows are never hard-deleted; soft-delete is an `UPDATE status='C'`, captured). **Scope note:** the originally-listed `FM_CLIENT_INDVL` and `FM_CLIENT_IDENTIFIERS` no longer exist — US-1.15 folded them into `FM_CLIENT_KYC.extra_data` (which already carries `trg_audit_fm_kyc`), so the two remaining `client_no`-bearing core tables are the full scope. The shared `fn_audit_client_change` was left unchanged (it already diffs generically by `TG_TABLE_NAME`/`CLIENT_NO`); note `updated_at` is stamped by the BEFORE `trg_audit_cols` so it always appears in `changed_fields` alongside the real business change. Test: `db/tests/wallet_client_audit_test.sql` 5/5 (INSERT silent, UPDATE writes one attributed diff, precise changed-fields, FM_CLIENT_CONTACT parity). |
-| US-8.4 | PII protection: classification, encryption, masking, retention, access log | 🟡 | **Encryption + masking done**: `FM_CLIENT_KYC.PHONE_NO_ENC`/`EMAIL_ENC` via `pgcrypto` `pgp_sym_encrypt` (DEK from `app.pii_dek`), `PHONE_NO_HASH` for unique lookup, + masked read views (`v_kyc_masked` etc.). Remaining (HLD §8.3): data classification, retention policy, and the `WLT_PII_ACCESS_LOG` access trail. |
+| US-8.4 | PII protection: classification, encryption, masking, retention, access log | ✅ | **Encryption + masking + access log done.** Encryption/masking: `FM_CLIENT_KYC.PHONE_NO_ENC`/`EMAIL_ENC` via `pgcrypto` `pgp_sym_encrypt` (DEK from `app.pii_dek`), `PHONE_NO_HASH` for unique lookup, masked read views (`v_kyc_masked`, `v_client_masked`, `v_client_banks_masked`). **Access trail (2026-06-10):** `WLT_PII_ACCESS_LOG` (append-only) + SECURITY DEFINER `log_pii_access(...)` records every RAW-PII disclosure via the privileged `wallet_pii_ro` path — the 4 unmasked endpoints (`GET /v1/ops/clients`, `/:client_no`, `/:client_no/360`, `/v1/ops/search`) log WHO (`audit.actor`), WHAT (`access_type` + `client_no`/query detail), WHEN, channel/request/trace/ip; the Go handlers call it best-effort after a successful read (masked `wallet_app` reads disclose no PII → not logged). Test `db/tests/wallet_pii_access_log_test.sql` 4/4. **Residual = ops policy (no wallet-service code):** formal data-classification catalogue + a retention/purge schedule (HLD §8.3) are operational deferrals. |
 
 ## Epic 9 — Platform / Infra / Observability
 
@@ -254,11 +254,11 @@ docs alone).
 
 | # | Story | Task | Effort |
 |---|-------|------|:------:|
-| 7 | US-8.3 | Record reconciliation breaks (`WLT_RECON_BREAK` table + SP) | 3d |
-| 8 | US-8.4 | PII access log (`WLT_PII_ACCESS_LOG`) | 2d |
 | 9 | US-1.6 | KYC downgrade & 12-month re-KYC | 3d |
 | 10 | US-6.10 | Branch/legal-entity label on GL config | 1d |
 | 11 | US-9.15 | Rename TRAN_TYPE codes (high blast radius, schedule in quiet sprint) | 5d |
+
+> ✅ US-8.3 (recon-break recording) was already implemented — doc corrected 2026-06-10. ✅ US-8.4 PII access log (`WLT_PII_ACCESS_LOG` + `log_pii_access`) shipped 2026-06-10.
 
 ### Deferred (not MVP)
 

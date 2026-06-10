@@ -33,6 +33,26 @@ type AuditContext struct {
 	UserAgent   string  // optional
 }
 
+// PII access types (US-8.4) — the privileged unmasked-read endpoints whose
+// disclosure of RAW client PII is recorded in WLT_PII_ACCESS_LOG. Values mirror
+// the chk_pii_access_type CHECK in db/export/schema.sql.
+const (
+	PIIAccessClientProfile = "CLIENT_PROFILE" // GET /v1/ops/clients/:client_no
+	PIIAccessClient360     = "CLIENT_360"     // GET /v1/ops/clients/:client_no/360
+	PIIAccessClientList    = "CLIENT_LIST"    // GET /v1/ops/clients
+	PIIAccessAccountSearch = "ACCOUNT_SEARCH" // GET /v1/ops/search
+)
+
+// PIIAccessEntry is one row appended to WLT_PII_ACCESS_LOG after a privileged
+// unmasked read succeeds. ClientNo is empty for list/search; Detail carries
+// non-PII context (counts, filters, query) and is marshalled to jsonb.
+type PIIAccessEntry struct {
+	AccessType string
+	ClientNo   string
+	Detail     map[string]any
+	Audit      AuditContext
+}
+
 // Money is a non-negative amount in the smallest unit of the currency.
 // For VND we keep 2 decimals server-side (matches WLT_ACCT.ACTUAL_BAL); the
 // product treats VND as round-to-đồng at the display layer.

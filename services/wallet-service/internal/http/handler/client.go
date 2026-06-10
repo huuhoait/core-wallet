@@ -186,6 +186,11 @@ func (h *Wallet) ListClientsFull(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
+	h.svc.LogPIIAccess(c.Request.Context(), domain.PIIAccessEntry{
+		AccessType: domain.PIIAccessClientList,
+		Detail:     map[string]any{"count": len(res), "status": q.Status, "client_type": q.ClientType},
+		Audit:      middleware.FromGin(c),
+	})
 	writeOK(c, http.StatusOK, dto.ClientFullListRespFrom(q, res))
 }
 
@@ -274,6 +279,11 @@ func (h *Wallet) GetClientFull(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
+	h.svc.LogPIIAccess(c.Request.Context(), domain.PIIAccessEntry{
+		AccessType: domain.PIIAccessClientProfile,
+		ClientNo:   c.Param("client_no"),
+		Audit:      middleware.FromGin(c),
+	})
 	writeOK(c, http.StatusOK, dto.ClientFullRespFrom(res))
 }
 
@@ -294,6 +304,11 @@ func (h *Wallet) GetClientFull360(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
+	h.svc.LogPIIAccess(c.Request.Context(), domain.PIIAccessEntry{
+		AccessType: domain.PIIAccessClient360,
+		ClientNo:   c.Param("client_no"),
+		Audit:      middleware.FromGin(c),
+	})
 	writeOK(c, http.StatusOK, dto.Client360RespFrom(res))
 }
 
