@@ -60,9 +60,10 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 
 	r := gin.New()
 	r.Use(
-		gin.Logger(),          // simple access log
-		middleware.Recovery(), // panic → 500 envelope
+		gin.Logger(),                    // simple access log
+		middleware.Recovery(),           // panic → 500 envelope
 		middleware.RequestID(),
+		middleware.FlowID(), // FlowId header/?flowId= → traceparent (before otelgin)
 		otelgin.Middleware(cfg.ServiceName),
 		middleware.AuditContext(),
 	)

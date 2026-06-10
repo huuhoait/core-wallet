@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
 	"github.com/ewallet-pg/wallet-service/internal/http/dto"
@@ -48,6 +49,11 @@ func (h *Wallet) GetAccount(c *gin.Context) {
 //	@Failure		500			{object}	dto.ProblemDetails	"Internal error"
 //	@Router			/v1/finance/transactions [get]
 func (h *Wallet) ListTransactions(c *gin.Context) {
+	ctx, span := startSpan(c, "ListTransactions",
+		attribute.String("wallet.acct_no", c.Query("acct_no")),
+		attribute.String("wallet.limit", c.Query("limit")),
+	)
+	defer span.End()
 	acctNo := c.Query("acct_no")
 	if acctNo == "" {
 		renderError(c, domain.InvalidRequest("acct_no query parameter is required", nil))
@@ -97,11 +103,13 @@ func (h *Wallet) ListTransactions(c *gin.Context) {
 		return
 	}
 
-	entries, err := h.svc.ListTransactions(c.Request.Context(), q)
+	entries, err := h.svc.ListTransactions(ctx, q)
 	if err != nil {
+		failSpan(span, err)
 		renderError(c, err)
 		return
 	}
+	span.SetAttributes(attribute.Int("wallet.result_count", len(entries)))
 	writeOK(c, http.StatusOK, dto.TxListRespFrom(q, entries))
 }
 
