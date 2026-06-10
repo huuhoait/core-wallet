@@ -15,7 +15,7 @@ separate Treasury Service.
 > ngoài (NAPAS, ngân hàng đối tác, 3DS thẻ, đối soát MT940) **không thuộc phạm
 > vi** — thuộc về Treasury Service riêng.
 
-- **Tech stack:** Go 1.23 (Gin) + PostgreSQL 17 (plpgsql stored procedures) + PgBouncer (transaction mode) + OpenTelemetry
+- **Tech stack:** Go 1.26 (Gin) + PostgreSQL 17 (plpgsql stored procedures) + PgBouncer (transaction mode) + Kafka (transactional outbox relay) + OpenTelemetry → Jaeger
 - **Design pattern:** thin Go RPC layer; **all posting logic lives in PostgreSQL stored functions** (atomic, deferred-locking)
 - **Design targets (not yet verified):** 2,000 TPS sustained / 5,000 TPS peak; p99 < 300 ms for in-wallet transfer
 - **Compliance scope:** Decree 52/2024, Circular 23/2019 (SBV), Decree 13/2023 (PII)
@@ -32,7 +32,7 @@ Core/
 ├── README.md                 # this file
 ├── USER_STORIES.md           # user-story backlog with done / not-done status
 ├── CHANGELOG.md              # version history
-├── docker-compose.yml        # local dev stack (PG17 + PgBouncer + Adminer)
+├── docker-compose.yml        # local dev stack (PG17 + PgBouncer + Adminer; +Kafka/relay/Jaeger via profiles)
 ├── .env.example              # infra env template (copy to .env)
 │
 ├── .github/workflows/        # CI/CD pipelines
@@ -56,7 +56,8 @@ Core/
 │   │   ├── cmd/server/       #   main entrypoint
 │   │   ├── internal/         #   domain / usecase / repo / http (clean architecture)
 │   │   └── postman/          #   Postman collection + environment
-│   └── outbox-relay/         # Outbox → Kafka relay worker
+│   ├── outbox-relay/         # Outbox → Kafka relay worker (polling + Debezium CDC modes)
+│   └── shared/               # shared Go module: otelx (tracing) · pgxdb (pool) · kafkax
 │
 └── deploy/
     ├── docker/               # postgres + pgbouncer config & init scripts
@@ -102,12 +103,25 @@ Customer App / Ops Console
 │  WLT_ACCT · WLT_TRAN_HIST · WLT_ACCT_BAL │
 │  WLT_OUTBOX (transactional outbox)       │
 │  WLT_WITHDRAW_TRACK · WLT_CLIENT_AUDIT…  │
-└─────────────────────────────────────────┘
+└───────────────┬─────────────────────────┘
+                │  WLT_OUTBOX (status PENDING)
+                ▼
+┌─────────────────────────────────────────┐
+│  outbox-relay (Go)                       │   ← polling or Debezium CDC
+│  poll → publish → stamp SENT             │
+└───────────────┬─────────────────────────┘
+                ▼
+              Kafka  (downstream consumers)
 ```
 
 **Timeout layering:** Go context 3 s → PG `statement_timeout` 2.5 s → PG
 `lock_timeout` 1.5 s. **Posting** uses a deferred-locking pattern (Phase 1
 no-lock validate → Phase 2 atomic UPDATE).
+
+**Tracing:** wallet-service and outbox-relay emit OpenTelemetry spans. The W3C
+trace context is propagated end-to-end — HTTP request → DB stored function →
+`WLT_OUTBOX` row → relay publish → Kafka — so one trace renders as a single
+waterfall in Jaeger. Disabled by default; opt in with `OTEL_ENABLED=true`.
 
 ---
 
@@ -149,6 +163,22 @@ make run                             # connects to PgBouncer on :6432, listens :
 cd services/wallet-service && make smoke      # POSTs a top-up via curl
 # or import postman/wallet-service.postman_collection.json
 ```
+
+### 4. Optional: outbox relay + distributed tracing
+
+The base stack is the ledger only. Kafka + the outbox-relay live behind the
+`relay` profile, and Jaeger behind the `tracing` profile — both opt-in:
+
+```bash
+# Outbox → Kafka relay (Zookeeper + Kafka + outbox-relay)
+docker compose --profile relay up -d
+
+# Add end-to-end tracing into Jaeger (UI at http://localhost:16686)
+OTEL_ENABLED=true docker compose --profile relay --profile tracing up -d
+```
+
+> 🇻🇳 Stack mặc định chỉ gồm sổ cái. Relay (Kafka) và tracing (Jaeger) là tuỳ
+> chọn, bật qua profile `relay` / `tracing`.
 
 ---
 

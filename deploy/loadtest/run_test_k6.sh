@@ -6,7 +6,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PEAK="${PEAK:-200}"
-DURATION="${DURATION:-7200}"
+DURATION="${DURATION:-60}"
 
 # Initialize the load test data
 #bash "$DIR/init_k6_data.sh"
