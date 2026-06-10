@@ -31,6 +31,7 @@ Catalogue of all design documents. Status of the features they describe lives in
 | [specs/wallet_gl_coa_spec.md](specs/wallet_gl_coa_spec.md) | GL chart-of-accounts specification (source for `db/seeds/coa/`). |
 | [specs/t24_transaction_posting.md](specs/t24_transaction_posting.md) | T24 core-banking transaction-posting reference. |
 | [specs/k6_sweep.md](specs/k6_sweep.md) | k6 load-test sweep results / notes. |
+| [specs/outbox_event_envelope.md](specs/outbox_event_envelope.md) | Canonical versioned `WLT_OUTBOX` event envelope (`payload.meta` + enriched headers) stamped by `fn_outbox_envelope` — US-7.4. |
 
 ## Where the implementation lives / Nơi chứa phần triển khai
 

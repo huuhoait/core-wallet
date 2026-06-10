@@ -28,11 +28,11 @@ docs alone).
 | 4. Balance & Statements | 7 | 0 | 0 |
 | 5. Withdrawal Disbursement | 3 | 0 | 0 |
 | 6. Accounting & GL Operations | 6 | 1 | 3 |
-| 7. Eventing & Integration | 2 | 0 | 2 |
+| 7. Eventing & Integration | 3 | 0 | 1 |
 | 8. Audit, PII & Compliance | 3 | 1 | 1 |
 | 9. Platform / Infra / Observability | 17 | 0 | 2 |
 | 10. Quality — Testing & Load | 9 | 1 | 0 |
-| **Total** | **73** | **5** | **9** |
+| **Total** | **74** | **5** | **8** |
 
 ---
 
@@ -159,7 +159,7 @@ docs alone).
 | US-7.1 | Every posting writes a Kafka event row atomically (transactional outbox) | ✅ | `WLT_OUTBOX`; `INSERT INTO WLT_OUTBOX` inside every posting SP. |
 | US-7.2 | Relay outbox → Kafka (Debezium CDC primary, Go polling worker fallback) | ✅ | **Dual-mode implemented (2026-06-05).** `services/outbox-relay`: switchable via `RELAY_MODE` env: (1) **polling** (default) — 4 Go workers poll `WLT_OUTBOX` with `FOR UPDATE SKIP LOCKED`, publish via Sarama SyncProducer (idempotent, acks=all), mark SENT with kafka_partition/offset; (2) **cdc** — Debezium CDC via Kafka Connect EventRouter, relay manages connector lifecycle (auto-register/pause/resume) + CDC consumer marks rows SENT. `docker-compose.cdc.yml` adds Kafka Connect (debezium/connect:2.6). Config: `debezium/config.json` (EventRouter transform routes each row to its `topic` column). Both modes proven at-least-once; `SKIP LOCKED` guarantees no duplicate publish across workers. **Hardened (PRs #44/#45 2026-06-09/10):** the relay now **continues the distributed trace across the async outbox→Kafka hop** — extracts the W3C `traceparent` from `WLT_OUTBOX.HEADERS` (stamped by the posting SP, see US-9.5) and emits a child Kafka PRODUCER span, so a request is followable REST → DB SP → relay → Kafka → consumer (`internal/telemetry` OTLP exporter; `OTEL_ENABLED=false` → no-op tracer). Connection/producer wiring extracted into the shared `pgxdb`/`kafkax`/`otelx` module. Graceful shutdown is now **bounded by a timeout with force-quit** (PR #45) so a worker stuck mid-publish or an unreachable broker can no longer hang termination. |
 | US-7.3 | Downstream consumers react to `withdraw.posted` etc. | ⬜ | Out of scope here (Treasury Service). |
-| US-7.4 | As a downstream consumer, every outbox event carries a **consistent transaction-metadata envelope** (reference, tran_type, channel, actor, occurred_at, client/counterparty, schema version) so events are self-describing and routable **without joining back to the ledger** | ⬜ | **Enrichment of US-7.1**, not greenfield: the `INSERT INTO WLT_OUTBOX` in every posting/reversal SP (`db/export/schema.sql`) already emits *some* business fields (`tran_internal_id`, `amount`, `fee_gross`/`vat_amount`, `ext_payout_ref`, `ccy`, `group_id`), but the shape **varies per SP** and key meta is missing: most payloads omit the client **`reference`** (idempotency/external ref) and **`tran_type`**; `HEADERS` carries only `traceparent`; the `WLT_OUTBOX.CHANNEL` column is left **NULL** (posting INSERTs don't pass it) and `CREATED_BY` falls back to `SYSTEM` instead of `audit.actor`; `EVENT_VERSION` is a flat `'v1'` with no documented schema. Scope: define one canonical event envelope (meta keys + headers), populate it uniformly across all emitters (incl. the `CHANNEL`/`CREATED_BY`/`occurred_at` columns from the per-TX audit GUCs that `withTx` already sets), and pin a versioned JSON schema. Prerequisite for clean relay (US-7.2) and consumer routing/replay (US-7.3). Design-only. |
+| US-7.4 | As a downstream consumer, every outbox event carries a **consistent transaction-metadata envelope** (reference, tran_type, channel, actor, occurred_at, schema version) so events are self-describing and routable **without joining back to the ledger** | ✅ | **Done (2026-06-10).** Implemented as a DB trigger, not 14 hand-edited INSERTs: `fn_outbox_envelope` / `trg_outbox_envelope` (`BEFORE INSERT` on `WLT_OUTBOX`, runs **after** `trg_audit_cols`) stamps every row with a uniform **`payload.meta`** block — `schema_version`, `event_type`, `aggregate_type`/`aggregate_id`/`partition_key`, `reference`, `tran_type`, `channel`, `actor`, `occurred_at` (ISO-8601 UTC), `trace_id` — and enriches **`headers`** with `schema_version`+`event_type`+`content_type` (preserving `traceparent`). Business payload fields stay top-level (backward compatible); emitting SPs don't know the contract. `channel`/`actor` come from the per-TX audit GUCs (the BEFORE `trg_audit_cols` already copies them into `CHANNEL`/`CREATED_BY` — so the story's "CHANNEL NULL / CREATED_BY SYSTEM" note was already moot). `reference` is lifted from the payload (`reference`\|`orig_reference`\|`ext_payout_ref`); the 6 forward posting SPs now also emit an explicit `reference`. `tran_type` is mapped from `event_type` in one place (the trigger). Versioned JSON schema documented in [docs/specs/outbox_event_envelope.md](docs/specs/outbox_event_envelope.md). Tests: `db/tests/wallet_outbox_envelope_test.sql` 7/7 (end-to-end topup meta+headers, business fields preserved, reference-from-orig_reference, tran_type map, headers built when emitter passed none); existing fee-charge/transfer-reversal suites still green. Unblocks clean relay (US-7.2) + consumer routing (US-7.3). |
 
 ## Epic 8 — Audit, PII & Compliance / Audit, PII & tuân thủ
 
@@ -243,11 +243,11 @@ docs alone).
 
 | # | Story | Task | Effort |
 |---|-------|------|:------:|
-| 4 | US-7.4 | **Outbox event envelope** — standardize payload shape (reference, tran_type, channel, actor) across all SPs | 3d |
 | 5 | US-10.7 | **Go integration tests** — testcontainers + real PG for posting paths | 5d |
 | 6 | US-1.13 | **Related-doc attachment** — SP + endpoint for `FM_CLIENT_KYC.related_docs` | 2d |
 
 > ✅ US-8.5 (client-master UPDATE audit triggers) shipped 2026-06-10 — the "Client-master change auditing" HARD RULE is now satisfied for the surviving core tables (`FM_CLIENT`, `FM_CLIENT_CONTACT`).
+> ✅ US-7.4 (canonical outbox event envelope) shipped 2026-06-10 — uniform `payload.meta` + enriched headers via the `trg_outbox_envelope` trigger; versioned schema in `docs/specs/outbox_event_envelope.md`.
 
 ### Phase 3 — Scale & polish (backlog)
 

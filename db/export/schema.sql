@@ -1052,6 +1052,88 @@ END $$;
 
 
 --
+-- Name: fn_outbox_envelope(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- US-7.4: stamp every WLT_OUTBOX row with one canonical, self-describing event
+-- envelope so downstream consumers can route/replay without joining back to the
+-- ledger. Runs BEFORE INSERT, AFTER trg_audit_cols (alphabetical: 'a' < 'o'),
+-- which has already populated NEW.CHANNEL / CREATED_BY / CREATED_AT from the
+-- per-TX audit GUCs — so this trigger only has to assemble those plus the row's
+-- own columns into a uniform shape. It edits NEW in place (no extra write) and
+-- is emitter-agnostic: posting/reversal SPs keep their own business PAYLOAD and
+-- need not know the envelope contract.
+--
+-- payload.meta — the canonical metadata block, ADDED alongside the existing
+-- business keys (non-destructive: business fields stay top-level for backward
+-- compatibility). headers — enriched with schema_version + event_type +
+-- content_type for broker-level routing, preserving any traceparent.
+--
+-- reference is lifted from the business payload (reference | orig_reference |
+-- ext_payout_ref — the idempotency / external ref under whatever key the SP
+-- used). tran_type is mapped from event_type in ONE place here rather than
+-- duplicated across 14 emitters (cf. US-9.15: if the TRAN_TYPE codes are
+-- renamed, update this map too).
+CREATE FUNCTION public.fn_outbox_envelope() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_ref       TEXT;
+  v_tran_type TEXT;
+  v_trace     TEXT;
+BEGIN
+  v_ref := COALESCE(NEW.PAYLOAD->>'reference',
+                    NEW.PAYLOAD->>'orig_reference',
+                    NEW.PAYLOAD->>'ext_payout_ref');
+
+  v_tran_type := CASE NEW.EVENT_TYPE
+    WHEN 'wallet.topup.posted.v1'              THEN 'TOPUP'
+    WHEN 'wallet.topup.reversed.v1'            THEN 'RVTPUP'
+    WHEN 'wallet.transfer.posted.v1'           THEN 'TRFOUT'
+    WHEN 'wallet.transfer.reversed.v1'         THEN 'RVTRF'
+    WHEN 'wallet.withdraw.posted.v1'           THEN 'WDRAW'
+    WHEN 'wallet.withdraw.acked.v1'            THEN 'WDRAW'
+    WHEN 'wallet.withdraw.disbursing.v1'       THEN 'WDRAW'
+    WHEN 'wallet.withdraw.completed.v1'        THEN 'WDRAW'
+    WHEN 'wallet.withdraw.reversed.v1'         THEN 'RVWD'
+    WHEN 'wallet.fee.charged.v1'               THEN 'FEECHG'
+    WHEN 'wallet.fee.reversed.v1'              THEN 'RVFEE'
+    WHEN 'wallet.merchant.deposit.posted.v1'   THEN 'MERCHDEP'
+    WHEN 'wallet.merchant_withdraw.posted.v1'  THEN 'MERCHWD'
+    WHEN 'wallet.merchant_withdraw.reversed.v1' THEN 'RVMWD'
+    ELSE NULL
+  END;
+
+  v_trace := COALESCE(NEW.HEADERS->>'traceparent',
+                      NULLIF(current_setting('app.trace_id', TRUE), ''));
+
+  NEW.PAYLOAD := NEW.PAYLOAD || jsonb_build_object(
+    'meta', jsonb_build_object(
+      'schema_version', NEW.EVENT_VERSION,
+      'event_type',     NEW.EVENT_TYPE,
+      'aggregate_type', NEW.AGGREGATE_TYPE,
+      'aggregate_id',   NEW.AGGREGATE_ID,
+      'partition_key',  NEW.PARTITION_KEY,
+      'reference',      v_ref,
+      'tran_type',      v_tran_type,
+      'channel',        NEW.CHANNEL,
+      'actor',          NEW.CREATED_BY,
+      'occurred_at',    to_char(NEW.CREATED_AT AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'trace_id',       v_trace
+    )
+  );
+
+  NEW.HEADERS := COALESCE(NEW.HEADERS, '{}'::jsonb) || jsonb_build_object(
+    'schema_version', NEW.EVENT_VERSION,
+    'event_type',     NEW.EVENT_TYPE,
+    'content_type',   'application/json'
+  );
+
+  RETURN NEW;
+END $$;
+
+
+--
 -- Name: fn_record_recon_breaks(date); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1853,7 +1935,8 @@ BEGIN
                           PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('TRANSACTION', v_tran_key::text, 'wallet.fee.charged.v1',
           p_acct_no, 'wallet.transactions',
-          jsonb_build_object('tran_internal_id', v_tran_key, 'acct_no', p_acct_no,
+          jsonb_build_object('reference', p_reference,
+                             'tran_internal_id', v_tran_key, 'acct_no', p_acct_no,
                              'client_no', v_acct.CLIENT_NO, 'fee_code', p_fee_code,
                              'fee_gross', v_fee, 'vat_amount', v_vat, 'ccy', v_acct.CCY,
                              'value_date', CURRENT_DATE),
@@ -2152,7 +2235,8 @@ BEGIN
                           PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('TRANSACTION', v_tran_key::text, 'wallet.merchant.deposit.posted.v1',
           p_group_id, 'wallet.transactions',
-          jsonb_build_object('tran_internal_id', v_tran_key, 'group_id', p_group_id,
+          jsonb_build_object('reference', p_reference,
+                             'tran_internal_id', v_tran_key, 'group_id', p_group_id,
                              'target_acct_no', v_acct.ACCT_NO, 'shard_index', v_acct.SHARD_INDEX,
                              'client_no', v_acct.CLIENT_NO, 'amount', p_amount,
                              'ccy', v_acct.CCY, 'value_date', CURRENT_DATE),
@@ -2326,7 +2410,8 @@ BEGIN
   -- Outbox: Treasury consumes for batch disbursement (MWD-09)
   INSERT INTO WLT_OUTBOX (AGGREGATE_TYPE, AGGREGATE_ID, EVENT_TYPE, PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('MERCHANT_WITHDRAW', v_tran::text, 'wallet.merchant_withdraw.posted.v1', p_group_id, 'wallet.withdrawals',
-          jsonb_build_object('tran_internal_id', v_tran, 'group_id', p_group_id, 'settlement_acct', v_settle.ACCT_NO,
+          jsonb_build_object('reference', p_reference,
+                             'tran_internal_id', v_tran, 'group_id', p_group_id, 'settlement_acct', v_settle.ACCT_NO,
                              'amount', p_amount, 'fee_gross', v_fee, 'vat_amount', v_vat,
                              'ext_payout_ref', p_ext_payout_ref, 'ccy', v_settle.CCY),
           jsonb_build_object('traceparent', current_setting('app.trace_id', TRUE)))
@@ -2683,7 +2768,8 @@ BEGIN
                           PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('TRANSACTION', v_tran_key::text, 'wallet.topup.posted.v1',
           p_acct_no, 'wallet.transactions',
-          jsonb_build_object('tran_internal_id', v_tran_key, 'acct_no', p_acct_no,
+          jsonb_build_object('reference', p_reference,
+                             'tran_internal_id', v_tran_key, 'acct_no', p_acct_no,
                              'client_no', v_acct.CLIENT_NO, 'amount', p_amount,
                              'ccy', v_acct.CCY, 'value_date', CURRENT_DATE),
           jsonb_build_object('traceparent', current_setting('app.trace_id', TRUE)))
@@ -3097,7 +3183,8 @@ BEGIN
                           PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('TRANSACTION', v_tran_key::text, 'wallet.transfer.posted.v1',
           v_tran_key::text, 'wallet.transactions',
-          jsonb_build_object('tran_internal_id', v_tran_key,
+          jsonb_build_object('reference', p_reference,
+                             'tran_internal_id', v_tran_key,
                              'from_acct', p_from_acct_no, 'to_acct', p_to_acct_no,
                              'from_client', v_acct_a.CLIENT_NO, 'to_client', v_acct_b.CLIENT_NO,
                              'amount', p_amount, 'fee_gross', v_fee_gross, 'vat_amount', v_vat_amt,
@@ -3519,7 +3606,8 @@ BEGIN
                           PARTITION_KEY, TOPIC, PAYLOAD, HEADERS)
   VALUES ('WITHDRAW', v_tran_key::text, 'wallet.withdraw.posted.v1',
           p_acct_no, 'wallet.withdrawals',
-          jsonb_build_object('tran_internal_id', v_tran_key,
+          jsonb_build_object('reference', p_reference,
+                             'tran_internal_id', v_tran_key,
                              'acct_no', p_acct_no, 'client_no', v_acct.CLIENT_NO,
                              'amount', p_amount, 'fee_gross', v_fee_gross,
                              'vat_amount', v_vat_amt, 'ccy', v_acct.CCY,
@@ -6048,6 +6136,15 @@ CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.wlt_nostro_link 
 --
 
 CREATE TRIGGER trg_audit_cols BEFORE INSERT OR UPDATE ON public.wlt_outbox FOR EACH ROW EXECUTE FUNCTION public.fn_set_audit_columns();
+
+
+--
+-- Name: wlt_outbox trg_outbox_envelope; Type: TRIGGER; Schema: public; Owner: -
+--
+
+-- US-7.4: stamp the canonical event envelope (payload.meta + enriched headers).
+-- Name sorts AFTER trg_audit_cols so CHANNEL/CREATED_BY/CREATED_AT are already set.
+CREATE TRIGGER trg_outbox_envelope BEFORE INSERT ON public.wlt_outbox FOR EACH ROW EXECUTE FUNCTION public.fn_outbox_envelope();
 
 
 --
