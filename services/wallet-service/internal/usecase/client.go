@@ -96,6 +96,17 @@ func (s *WalletService) LinkClientBank(ctx context.Context, in domain.BankLinkIn
 	return res, nil
 }
 
+// LogPIIAccess records a privileged unmasked-PII read in WLT_PII_ACCESS_LOG
+// (US-8.4). Best-effort and fire-and-forget: a logging failure is logged at WARN
+// but never fails the read the caller already served. Call it AFTER a successful
+// unmasked read so only actual disclosures are recorded.
+func (s *WalletService) LogPIIAccess(ctx context.Context, e domain.PIIAccessEntry) {
+	if err := s.repo.LogPIIAccess(ctx, e); err != nil {
+		s.log.WarnContext(ctx, "pii access log failed",
+			"access_type", e.AccessType, "client_no", e.ClientNo, "error", err)
+	}
+}
+
 // AttachClientDocument attaches/updates a related document on a client's KYC
 // (onboarding step 3 / US-1.13).
 func (s *WalletService) AttachClientDocument(ctx context.Context, in domain.AttachDocumentInput) (*domain.AttachDocumentResult, error) {

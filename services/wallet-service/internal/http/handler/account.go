@@ -80,6 +80,11 @@ func (h *Wallet) SearchAccountsFull(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
+	h.svc.LogPIIAccess(c.Request.Context(), domain.PIIAccessEntry{
+		AccessType: domain.PIIAccessAccountSearch,
+		Detail:     map[string]any{"query": q, "count": len(res)},
+		Audit:      middleware.FromGin(c),
+	})
 	writeOK(c, http.StatusOK, dto.AccountSearchRespFrom(q, res))
 }
 

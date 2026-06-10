@@ -97,6 +97,10 @@ type WalletRepository interface {
 	// (attach_client_document, onboarding step 3 / US-1.13).
 	AttachClientDocument(ctx context.Context, in domain.AttachDocumentInput) (*domain.AttachDocumentResult, error)
 
+	// LogPIIAccess appends one row to WLT_PII_ACCESS_LOG (US-8.4) after a
+	// privileged unmasked PII read. Called best-effort on the primary pool.
+	LogPIIAccess(ctx context.Context, e domain.PIIAccessEntry) error
+
 	// Account (wallet) lifecycle (open_account / update_account_status).
 	OpenAccount(ctx context.Context, in domain.AccountOpenInput) (*domain.AccountOpenResult, error)
 	UpdateAccountStatus(ctx context.Context, in domain.AccountStatusInput) (*domain.AccountStatusResult, error)
