@@ -4290,6 +4290,70 @@ END;
 $$;
 
 
+--
+-- Name: attach_client_document(character varying, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- US-1.13 (onboarding step 3): attach / update a related document on a client's
+-- KYC record. The file bytes live in object storage; FM_CLIENT_KYC.related_docs
+-- holds only the link + metadata as a JSONB array of
+-- {doc_type, link, status, uploaded_at} (spec wallet_onboarding.md §2.3).
+--
+-- UPSERT by doc_type: a second attach of the same doc_type REPLACES the prior
+-- entry (so "update" — e.g. re-upload, or flip PENDING→VERIFIED — is the same
+-- call), otherwise the doc is appended. SECURITY DEFINER because wallet_app holds
+-- only SELECT on FM_CLIENT_KYC; the write runs through repo.withTx so the audit
+-- GUCs are set and trg_audit_fm_kyc records the OLD→NEW diff (US-8.1).
+CREATE FUNCTION public.attach_client_document(p_client_no character varying, p_doc_type character varying, p_link character varying, p_status character varying DEFAULT 'PENDING'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(client_no character varying, doc_count integer, related_docs jsonb)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+#variable_conflict use_column
+DECLARE
+  v_actor VARCHAR(64) := COALESCE(p_actor, session_user);
+  v_doc   JSONB;
+  v_docs  JSONB;
+BEGIN
+  PERFORM set_config('audit.actor', v_actor, TRUE);
+
+  IF NOT EXISTS (SELECT 1 FROM FM_CLIENT WHERE client_no = p_client_no) THEN
+    RAISE EXCEPTION 'CLIENT_NOT_FOUND: %', p_client_no USING ERRCODE = 'P0073';
+  END IF;
+  IF p_doc_type IS NULL OR length(btrim(p_doc_type)) = 0 THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: doc_type required' USING ERRCODE = 'P0071';
+  END IF;
+  IF p_link IS NULL OR length(btrim(p_link)) = 0 THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: link required' USING ERRCODE = 'P0071';
+  END IF;
+  IF p_status NOT IN ('PENDING','VERIFIED','REJECTED') THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: status must be PENDING|VERIFIED|REJECTED' USING ERRCODE = 'P0071';
+  END IF;
+
+  v_doc := jsonb_build_object(
+    'doc_type',    p_doc_type,
+    'link',        p_link,
+    'status',      p_status,
+    'uploaded_at', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+  -- UPSERT by doc_type: drop any existing entry of this type, then append.
+  UPDATE FM_CLIENT_KYC k
+     SET related_docs = COALESCE(
+           (SELECT jsonb_agg(e)
+              FROM jsonb_array_elements(k.related_docs) e
+             WHERE e->>'doc_type' IS DISTINCT FROM p_doc_type),
+           '[]'::jsonb) || jsonb_build_array(v_doc)
+   WHERE k.client_no = p_client_no
+  RETURNING k.related_docs INTO v_docs;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'KYC_NOT_FOUND: %', p_client_no USING ERRCODE = 'P0078';
+  END IF;
+
+  RETURN QUERY SELECT p_client_no, jsonb_array_length(v_docs), v_docs;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -6691,6 +6755,13 @@ GRANT ALL ON FUNCTION public.update_client(p_client_no character varying, p_clie
 --
 
 GRANT ALL ON FUNCTION public.update_kyc(p_client_no character varying, p_kyc_tier character varying, p_status character varying, p_risk_level character varying, p_ekyc_provider character varying, p_ekyc_ref character varying, p_face_match_score numeric, p_liveness_result character varying, p_extra_data jsonb, p_actor character varying) TO wallet_app;
+
+
+--
+-- Name: FUNCTION attach_client_document(p_client_no character varying, p_doc_type character varying, p_link character varying, p_status character varying, p_actor character varying); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.attach_client_document(p_client_no character varying, p_doc_type character varying, p_link character varying, p_status character varying, p_actor character varying) TO wallet_app;
 
 
 --

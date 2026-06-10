@@ -93,6 +93,10 @@ type WalletRepository interface {
 	LinkClientBank(ctx context.Context, in domain.BankLinkInput) (*domain.BankLinkResult, error)
 	SetDefaultClientBank(ctx context.Context, in domain.SetDefaultBankInput) (*domain.BankLinkResult, error)
 
+	// AttachClientDocument attaches/updates a related document on a client's KYC
+	// (attach_client_document, onboarding step 3 / US-1.13).
+	AttachClientDocument(ctx context.Context, in domain.AttachDocumentInput) (*domain.AttachDocumentResult, error)
+
 	// Account (wallet) lifecycle (open_account / update_account_status).
 	OpenAccount(ctx context.Context, in domain.AccountOpenInput) (*domain.AccountOpenResult, error)
 	UpdateAccountStatus(ctx context.Context, in domain.AccountStatusInput) (*domain.AccountStatusResult, error)
