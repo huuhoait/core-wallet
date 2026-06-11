@@ -142,4 +142,15 @@ FROM _t ORDER BY id;
 SELECT count(*) AS total, count(*) FILTER (WHERE ok) AS passed, count(*) FILTER (WHERE NOT ok) AS failed
 FROM _t;
 
+-- Hard-fail (non-zero exit under ON_ERROR_STOP) if any assertion failed, so CI
+-- gates on the result rather than just on "no SQL exception thrown".
+DO $$
+DECLARE v_fail int;
+BEGIN
+  SELECT count(*) INTO v_fail FROM _t WHERE NOT ok;
+  IF v_fail > 0 THEN
+    RAISE EXCEPTION 'wallet_manual_je_test: % assertion(s) FAILED', v_fail;
+  END IF;
+END $$;
+
 ROLLBACK;
