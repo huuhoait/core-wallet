@@ -7053,3 +7053,225 @@ GRANT SELECT ON TABLE public.wlt_withdraw_track TO wallet_pii_ro;
 
 \unrestrict ekVoqaffjA0iF5heKEfv3OZg2Tw51QeRlJjsaj3TcoeHIqafqc8dgSO8YGdfRcO
 
+-- ============================================================================
+-- US-6.5 — Maker-checker manual journal entry (MJE) workflow
+-- ----------------------------------------------------------------------------
+-- An ops "maker" drafts a balanced GL adjusting entry (suspense/clearing/
+-- corrections); a different "checker" approves it, which posts the lines into
+-- WLT_GL_BATCH (joining the normal GL feed), or rejects it. GL-only — it never
+-- touches customer wallet balances (those stay correction-via-reversal).
+--
+-- Invariants:
+--   * balanced: ΣDR = ΣCR (enforced at create; the GL constraint trigger
+--     fn_assert_batch_balanced re-checks per tran_key/ccy at post, P0091).
+--   * maker ≠ checker on approve (P00B6, mirrors RESTRAINT_MAKER_CANNOT_CHECK).
+--   * period-open: posting a closed accounting_date is rejected by the
+--     WLT_GL_BATCH freeze trigger fn_freeze_closed_period (P0092 PERIOD_CLOSED).
+--   * idempotent on reference (UNIQUE → 23505 DUPLICATE_REFERENCE).
+-- ============================================================================
+
+CREATE SEQUENCE public.seq_manual_je START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+
+CREATE TABLE public.wlt_manual_je (
+    je_id           bigint NOT NULL DEFAULT nextval('public.seq_manual_je'),
+    reference       character varying(64) NOT NULL,
+    accounting_date date NOT NULL DEFAULT public.fn_accounting_date(),
+    ccy             character varying(4) NOT NULL,
+    narrative       character varying(200),
+    reason          character varying(200) NOT NULL,
+    status          character varying(12) NOT NULL DEFAULT 'PENDING',
+    total_dr        numeric(18,2) NOT NULL DEFAULT 0,
+    total_cr        numeric(18,2) NOT NULL DEFAULT 0,
+    gl_tran_key     bigint,
+    maker_id        character varying(64) NOT NULL,
+    made_at         timestamp with time zone NOT NULL DEFAULT now(),
+    checker_id      character varying(64),
+    checked_at      timestamp with time zone,
+    check_reason    character varying(200),
+    version         integer NOT NULL DEFAULT 1,
+    created_at      timestamp with time zone NOT NULL DEFAULT now(),
+    created_by      character varying(64) NOT NULL DEFAULT 'SYSTEM',
+    updated_at      timestamp with time zone NOT NULL DEFAULT now(),
+    updated_by      character varying(64) NOT NULL DEFAULT 'SYSTEM',
+    CONSTRAINT pk_manual_je PRIMARY KEY (je_id),
+    CONSTRAINT uq_manual_je_reference UNIQUE (reference),
+    CONSTRAINT chk_mje_status CHECK ((status)::text = ANY (ARRAY['PENDING'::text, 'POSTED'::text, 'REJECTED'::text])),
+    CONSTRAINT chk_mje_balanced CHECK (total_dr = total_cr),
+    CONSTRAINT chk_mje_maker_ne_checker CHECK (checker_id IS NULL OR checker_id <> maker_id)
+);
+
+CREATE TABLE public.wlt_manual_je_line (
+    je_id       bigint NOT NULL,
+    line_no     integer NOT NULL,
+    gl_code     character varying(32) NOT NULL,
+    tran_nature character varying(4) NOT NULL,
+    amount      numeric(18,2) NOT NULL,
+    client_no   character varying(48),
+    narrative   character varying(200),
+    CONSTRAINT pk_manual_je_line PRIMARY KEY (je_id, line_no),
+    CONSTRAINT fk_manual_je_line FOREIGN KEY (je_id) REFERENCES public.wlt_manual_je(je_id),
+    CONSTRAINT chk_mje_line_nat CHECK ((tran_nature)::text = ANY (ARRAY['DR'::text, 'CR'::text])),
+    CONSTRAINT chk_mje_line_amt CHECK (amount > (0)::numeric)
+);
+
+CREATE INDEX idx_mje_status ON public.wlt_manual_je (status, je_id DESC);
+CREATE INDEX idx_mje_acct_date ON public.wlt_manual_je (accounting_date);
+
+--
+-- create_manual_je: maker drafts a balanced JE (status PENDING). Validates the
+-- reason, each line's GL code (must exist + be active) and nature/amount, and
+-- ΣDR=ΣCR. Lines arrive as a JSON array:
+--   [{"gl_code":"203.01","tran_nature":"CR","amount":"100.00",
+--     "client_no":null,"narrative":"..."}, ...]
+--
+CREATE FUNCTION public.create_manual_je(p_reference character varying, p_ccy character varying, p_reason character varying, p_lines jsonb, p_narrative character varying DEFAULT NULL::character varying, p_accounting_date date DEFAULT NULL::date, p_maker character varying DEFAULT NULL::character varying) RETURNS TABLE(je_id bigint, status character varying, total_dr numeric, total_cr numeric, line_count integer)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+#variable_conflict use_column
+DECLARE
+  v_maker  character varying(64) := COALESCE(p_maker, session_user);
+  v_acctd  date := COALESCE(p_accounting_date, fn_accounting_date());
+  v_je_id  bigint;
+  v_dr     numeric(18,2) := 0;
+  v_cr     numeric(18,2) := 0;
+  v_idx    integer := 0;
+  v_elem   jsonb;
+  v_gl     character varying(32);
+  v_nat    character varying(4);
+  v_amt    numeric(18,2);
+BEGIN
+  IF p_reference IS NULL OR length(btrim(p_reference)) = 0 THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: reference is required' USING ERRCODE = 'P0071';
+  END IF;
+  IF p_reason IS NULL OR length(btrim(p_reason)) = 0 THEN
+    RAISE EXCEPTION 'MJE_REASON_REQUIRED: a reason is mandatory for a manual journal entry' USING ERRCODE = 'P00B0';
+  END IF;
+  IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) < 2 THEN
+    RAISE EXCEPTION 'MJE_INVALID_LINES: at least two journal lines are required' USING ERRCODE = 'P00B1';
+  END IF;
+
+  v_je_id := nextval('seq_manual_je');
+  INSERT INTO WLT_MANUAL_JE (je_id, reference, accounting_date, ccy, narrative, reason,
+       status, total_dr, total_cr, maker_id, created_by, updated_by)
+  VALUES (v_je_id, p_reference, v_acctd, p_ccy, p_narrative, p_reason,
+       'PENDING', 0, 0, v_maker, v_maker, v_maker);
+
+  FOR v_elem IN SELECT * FROM jsonb_array_elements(p_lines) LOOP
+    v_idx := v_idx + 1;
+    v_gl  := v_elem->>'gl_code';
+    v_nat := upper(v_elem->>'tran_nature');
+    v_amt := (v_elem->>'amount')::numeric;
+
+    IF v_nat NOT IN ('DR','CR') THEN
+      RAISE EXCEPTION 'MJE_INVALID_LINES: line % tran_nature must be DR or CR', v_idx USING ERRCODE = 'P00B1';
+    END IF;
+    IF v_amt IS NULL OR v_amt <= 0 THEN
+      RAISE EXCEPTION 'MJE_INVALID_LINES: line % amount must be > 0', v_idx USING ERRCODE = 'P00B1';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM FM_GL_MAST WHERE gl_code = v_gl AND status = 'A') THEN
+      RAISE EXCEPTION 'MJE_GL_INVALID: line % gl_code % is unknown or inactive', v_idx, v_gl USING ERRCODE = 'P00B2';
+    END IF;
+
+    INSERT INTO WLT_MANUAL_JE_LINE (je_id, line_no, gl_code, tran_nature, amount, client_no, narrative)
+    VALUES (v_je_id, v_idx, v_gl, v_nat, v_amt, v_elem->>'client_no', v_elem->>'narrative');
+
+    IF v_nat = 'DR' THEN v_dr := v_dr + v_amt; ELSE v_cr := v_cr + v_amt; END IF;
+  END LOOP;
+
+  IF v_dr <> v_cr THEN
+    RAISE EXCEPTION 'MJE_UNBALANCED: total DR % <> total CR %', v_dr, v_cr USING ERRCODE = 'P00B3';
+  END IF;
+
+  UPDATE WLT_MANUAL_JE SET total_dr = v_dr, total_cr = v_cr WHERE je_id = v_je_id;
+
+  RETURN QUERY SELECT v_je_id, 'PENDING'::varchar, v_dr, v_cr, v_idx;
+END;
+$$;
+
+--
+-- approve_manual_je: a different checker posts the JE. Maker≠checker enforced;
+-- must be PENDING. Posts each line into WLT_GL_BATCH under one fresh tran_key
+-- for the JE's accounting_date (freeze trigger guards closed periods; balanced
+-- trigger re-asserts ΣDR=ΣCR). Flips the JE to POSTED.
+--
+CREATE FUNCTION public.approve_manual_je(p_je_id bigint, p_checker character varying DEFAULT NULL::character varying, p_reason character varying DEFAULT NULL::character varying) RETURNS TABLE(je_id bigint, status character varying, gl_tran_key bigint, posted_lines integer)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+#variable_conflict use_column
+DECLARE
+  v_checker character varying(64) := COALESCE(p_checker, session_user);
+  v_je      WLT_MANUAL_JE%ROWTYPE;
+  v_tran    bigint;
+  v_n       integer := 0;
+  v_line    RECORD;
+BEGIN
+  SELECT * INTO v_je FROM WLT_MANUAL_JE WHERE je_id = p_je_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'MJE_NOT_FOUND: %', p_je_id USING ERRCODE = 'P00B4';
+  END IF;
+  IF v_je.status <> 'PENDING' THEN
+    RAISE EXCEPTION 'MJE_INVALID_STATE: je % is % (expected PENDING)', p_je_id, v_je.status USING ERRCODE = 'P00B5';
+  END IF;
+  IF v_checker = v_je.maker_id THEN
+    RAISE EXCEPTION 'MJE_MAKER_CANNOT_CHECK: maker % cannot approve their own JE', v_checker USING ERRCODE = 'P00B6';
+  END IF;
+
+  v_tran := nextval('seq_tran');
+  FOR v_line IN SELECT * FROM WLT_MANUAL_JE_LINE WHERE je_id = p_je_id ORDER BY line_no LOOP
+    v_n := v_n + 1;
+    INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, CLIENT_NO, AMOUNT, TRAN_NATURE,
+         CCY, REFERENCE, NARRATIVE, POST_DATE, VALUE_DATE, SOURCE_MODULE,
+         ACCOUNTING_DATE, CREATED_BY, UPDATED_BY)
+    VALUES (v_tran, v_line.line_no, v_line.gl_code, v_line.client_no, v_line.amount, v_line.tran_nature,
+         v_je.ccy, v_je.reference, COALESCE(v_line.narrative, v_je.narrative), v_je.accounting_date, v_je.accounting_date, 'MJE',
+         v_je.accounting_date, v_checker, v_checker);
+  END LOOP;
+
+  UPDATE WLT_MANUAL_JE
+     SET status = 'POSTED', checker_id = v_checker, checked_at = now(), check_reason = p_reason,
+         gl_tran_key = v_tran, version = version + 1, updated_by = v_checker, updated_at = now()
+   WHERE je_id = p_je_id;
+
+  RETURN QUERY SELECT p_je_id, 'POSTED'::varchar, v_tran, v_n;
+END;
+$$;
+
+--
+-- reject_manual_je: decline a PENDING JE (no GL posting). The maker may cancel
+-- their own draft; a checker may reject another maker's — so no maker≠checker
+-- rule here (unlike approve).
+--
+CREATE FUNCTION public.reject_manual_je(p_je_id bigint, p_checker character varying DEFAULT NULL::character varying, p_reason character varying DEFAULT NULL::character varying) RETURNS TABLE(je_id bigint, status character varying)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+#variable_conflict use_column
+DECLARE
+  v_checker character varying(64) := COALESCE(p_checker, session_user);
+  v_je      WLT_MANUAL_JE%ROWTYPE;
+BEGIN
+  SELECT * INTO v_je FROM WLT_MANUAL_JE WHERE je_id = p_je_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'MJE_NOT_FOUND: %', p_je_id USING ERRCODE = 'P00B4';
+  END IF;
+  IF v_je.status <> 'PENDING' THEN
+    RAISE EXCEPTION 'MJE_INVALID_STATE: je % is % (expected PENDING)', p_je_id, v_je.status USING ERRCODE = 'P00B5';
+  END IF;
+
+  UPDATE WLT_MANUAL_JE
+     SET status = 'REJECTED', checker_id = v_checker, checked_at = now(), check_reason = p_reason,
+         version = version + 1, updated_by = v_checker, updated_at = now()
+   WHERE je_id = p_je_id;
+
+  RETURN QUERY SELECT p_je_id, 'REJECTED'::varchar;
+END;
+$$;
+
+GRANT SELECT ON TABLE public.wlt_manual_je TO wallet_app;
+GRANT SELECT ON TABLE public.wlt_manual_je_line TO wallet_app;
+GRANT ALL ON FUNCTION public.create_manual_je(p_reference character varying, p_ccy character varying, p_reason character varying, p_lines jsonb, p_narrative character varying, p_accounting_date date, p_maker character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.approve_manual_je(p_je_id bigint, p_checker character varying, p_reason character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.reject_manual_je(p_je_id bigint, p_checker character varying, p_reason character varying) TO wallet_app;
+

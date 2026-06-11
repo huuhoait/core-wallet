@@ -66,6 +66,15 @@ type WalletRepository interface {
 	ListRestraints(ctx context.Context, q domain.RestraintListQuery) ([]domain.RestraintView, error)
 	GetRestraint(ctx context.Context, id int64) (*domain.RestraintView, error)
 
+	// Manual journal entry — maker-checker (US-6.5). create/approve/reject SPs
+	// post balanced GL adjusting entries into WLT_GL_BATCH.
+	CreateManualJE(ctx context.Context, in domain.ManualJEInput) (*domain.ManualJECreateResult, error)
+	ApproveManualJE(ctx context.Context, in domain.ManualJEDecisionInput) (*domain.ManualJEApproveResult, error)
+	RejectManualJE(ctx context.Context, in domain.ManualJEDecisionInput) (*domain.ManualJERejectResult, error)
+	// Manual JE reads (read-only, direct SELECT). List → headers; Get → header + lines.
+	ListManualJE(ctx context.Context, q domain.ManualJEListQuery) ([]domain.ManualJEView, error)
+	GetManualJE(ctx context.Context, id int64) (*domain.ManualJEView, error)
+
 	// Client master CRUD (create_client / update_client).
 	CreateClient(ctx context.Context, in domain.ClientCreateInput) (*domain.ClientResult, error)
 	UpdateClient(ctx context.Context, in domain.ClientUpdateInput) (*domain.ClientResult, error)

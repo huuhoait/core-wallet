@@ -166,6 +166,19 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 			opsClients.GET("/:client_no/360", h.GetClientFull360) // UNMASKED 360 (raw + decrypted PII)
 		}
 
+		// ── Accounting: maker-checker manual journal entries (US-6.5) ──
+		// Maker drafts (wallet.gl.je.maker), a different checker posts/rejects
+		// (wallet.gl.je.checker). Reads open to maker/checker/ops.read.
+		readJE := middleware.RequireAnyRole(middleware.RoleGLJEMaker, middleware.RoleGLJEChecker, middleware.RoleOpsRead)
+		je := v1.Group("/ops/gl/journal-entries")
+		{
+			je.POST("", middleware.RequireAnyRole(middleware.RoleGLJEMaker), h.CreateManualJE)
+			je.POST("/:je_id/approve", middleware.RequireAnyRole(middleware.RoleGLJEChecker), h.ApproveManualJE)
+			je.POST("/:je_id/reject", middleware.RequireAnyRole(middleware.RoleGLJEMaker, middleware.RoleGLJEChecker), h.RejectManualJE)
+			je.GET("", readJE, h.ListManualJE)
+			je.GET("/:je_id", readJE, h.GetManualJE)
+		}
+
 		// ── Treasury: withdrawal disbursement state machine (S2S callbacks) ──
 		// wallet.treasury role required (US-9.10) — only the Treasury Service S2S
 		// identity should hit these.

@@ -124,8 +124,13 @@ func httpStatusFor(code string) int {
 		domain.CodeAmountOutOfRange,
 		domain.CodeTranTypeInactive,
 		domain.CodeInvalidPhoneFormat,
+		domain.CodeMJEReasonRequired,
+		domain.CodeMJEInvalidLines,
 		domain.CodeInvalidRequest:
 		return http.StatusBadRequest
+	case domain.CodeMJEMakerCannotCheck:
+		// Maker may not approve their own JE — a permission/authorization failure.
+		return http.StatusForbidden
 	case domain.CodeTierInsufficient:
 		// KYC tier too low — auth/permission failure.
 		return http.StatusForbidden
@@ -152,9 +157,11 @@ func httpStatusFor(code string) int {
 		domain.CodeMaxWalletExceeded,
 		domain.CodeGroupAlreadyActivated,
 		domain.CodeGroupAlreadyExists,
-		domain.CodeGroupNotActivated:
+		domain.CodeGroupNotActivated,
+		domain.CodeMJEInvalidState:
 		// Group lifecycle state conflicts: already hot / group_id taken / still
 		// cold when a rescale needs it hot — all conflict with current state.
+		// MJE_INVALID_STATE: approve/reject hit a JE that isn't PENDING.
 		return http.StatusConflict
 	case domain.CodeRestraintTypeInvalid,
 		domain.CodeRestraintPurposeInvalid,
@@ -167,9 +174,12 @@ func httpStatusFor(code string) int {
 		domain.CodeAcctCloseNonzeroBal,
 		domain.CodeOrgFieldsRequired,
 		domain.CodeInvalidShardCount,
-		domain.CodeInvalidGroupType:
+		domain.CodeInvalidGroupType,
+		domain.CodeMJEGLInvalid,
+		domain.CodeMJEUnbalanced:
 		// Schema-valid request but a business rule fails (e.g. shard count not a
-		// supported hot tier, or group_type not in the allowed set).
+		// supported hot tier, group_type not in the allowed set, or a JE references
+		// an unknown GL code / doesn't balance).
 		return http.StatusUnprocessableEntity
 	case domain.CodePIIDekNotSet,
 		domain.CodeBatchUnbalanced:

@@ -117,6 +117,15 @@ const (
 	// EOD period locking (US-6.1) — a posting/reversal dated into a closed
 	// business period is rejected by the write-freeze trigger (SQLSTATE P0092).
 	CodePeriodClosed = "PERIOD_CLOSED"
+	// Manual journal entry — maker-checker (US-6.5). create/approve/reject SPs
+	// raise these (P00B0–P00B6). MJE_NOT_FOUND → 404 via the _NOT_FOUND family.
+	CodeMJEReasonRequired   = "MJE_REASON_REQUIRED"    // create: reason mandatory (P00B0)
+	CodeMJEInvalidLines     = "MJE_INVALID_LINES"      // create: <2 lines / bad nature / amount ≤ 0 (P00B1)
+	CodeMJEGLInvalid        = "MJE_GL_INVALID"         // create: gl_code unknown/inactive (P00B2)
+	CodeMJEUnbalanced       = "MJE_UNBALANCED"         // create: ΣDR ≠ ΣCR (P00B3)
+	CodeMJENotFound         = "MJE_NOT_FOUND"          // approve/reject: unknown je_id (P00B4)
+	CodeMJEInvalidState     = "MJE_INVALID_STATE"      // approve/reject: not PENDING (P00B5)
+	CodeMJEMakerCannotCheck = "MJE_MAKER_CANNOT_CHECK" // approve: checker == maker (P00B6)
 )
 
 // Helpers for constructing errors at boundaries. SQLState + RawMessage are
