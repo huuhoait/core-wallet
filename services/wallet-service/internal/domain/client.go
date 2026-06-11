@@ -132,6 +132,26 @@ type BankLinkResult struct {
 	Timestamp time.Time // created_at (link) | updated_at (set-default)
 }
 
+// AttachDocumentInput attaches/updates a related document on a client's KYC
+// (attach_client_document SP, onboarding step 3 / US-1.13). Link is an
+// object-store URL/handle; the file bytes are never stored in the DB. Upsert is
+// by DocType — re-attaching the same DocType replaces the prior entry.
+type AttachDocumentInput struct {
+	ClientNo string
+	DocType  string
+	Link     string
+	Status   string // PENDING | VERIFIED | REJECTED (defaults to PENDING)
+	Audit    AuditContext
+}
+
+// AttachDocumentResult is returned by attach_client_document: the client, the
+// new document count, and the full related_docs array (raw JSON).
+type AttachDocumentResult struct {
+	ClientNo    string
+	DocCount    int
+	RelatedDocs []byte // jsonb array, passed through verbatim
+}
+
 // ClientView is the MASKED client profile (GET /v1/clients/:client_no), read
 // from v_client_masked via wallet_app. Name and CCCD/passport are masked; raw
 // PII is never exposed on this path. Nullable columns are pointers.

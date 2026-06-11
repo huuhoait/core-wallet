@@ -38,6 +38,60 @@ func RequestID() gin.HandlerFunc {
 	}
 }
 
+// FlowID lets a caller correlate a request to a distributed trace by sending a
+// simple `FlowId` — a 32-hex trace-id — instead of crafting a full W3C
+// traceparent. The value is read from the `FlowId` header or, as a fallback
+// (handy from a browser/URL), a `?flowId=` query parameter. When present, the
+// FlowId becomes the OTel trace-id: it's expanded to the minimal valid
+// traceparent `00-<flow-id>-0000000000000001-01` (placeholder span-id, sampled)
+// and written to the request's traceparent header so otelgin's propagator picks
+// it up.
+//
+// A genuine upstream W3C `traceparent` ALWAYS takes precedence and is left
+// untouched — real service-to-service propagation (and the outbox → Kafka trace)
+// is unaffected; FlowId is only the convenience entry point for manual callers.
+// A FlowId that isn't a valid 32-hex id is ignored. MUST be registered BEFORE
+// otelgin.Middleware.
+func FlowID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// A real propagated trace wins — never override an upstream traceparent.
+		if strings.TrimSpace(c.GetHeader("traceparent")) != "" {
+			c.Next()
+			return
+		}
+		flow := strings.TrimSpace(c.GetHeader("FlowId"))
+		if flow == "" {
+			flow = strings.TrimSpace(c.Query("flowId"))
+		}
+		if isBareTraceID(flow) {
+			c.Request.Header.Set("traceparent", "00-"+strings.ToLower(flow)+"-0000000000000001-01")
+		}
+		c.Next()
+	}
+}
+
+// isBareTraceID reports whether s is a 32-char hex trace-id on its own (no
+// dashes / other traceparent fields) and not the all-zero id (which W3C deems
+// invalid).
+func isBareTraceID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	allZero := true
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case ch >= '0' && ch <= '9', ch >= 'a' && ch <= 'f', ch >= 'A' && ch <= 'F':
+		default:
+			return false
+		}
+		if ch != '0' {
+			allZero = false
+		}
+	}
+	return !allZero
+}
+
 // AuditContext extracts the per-request audit context from headers + JWT
 // claims (TODO: real JWT lookup), stashes it on the gin context. Repository
 // layer reads it via FromGin() and writes to PG GUCs.

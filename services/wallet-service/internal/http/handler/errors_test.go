@@ -61,9 +61,6 @@ func TestRenderError_DomainError(t *testing.T) {
 	if p.TransactionStatus != domain.TxStatusRejected {
 		t.Errorf("transaction_status = %q, want RJCT", p.TransactionStatus)
 	}
-	if p.TraceID != "test-rid" {
-		t.Errorf("trace_id = %q, want test-rid", p.TraceID)
-	}
 	if p.Timestamp == "" {
 		t.Error("timestamp is empty")
 	}

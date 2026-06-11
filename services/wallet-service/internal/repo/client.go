@@ -116,6 +116,46 @@ func (r *PgWalletRepo) LinkClientBank(ctx context.Context, in domain.BankLinkInp
 	return &out, nil
 }
 
+// LogPIIAccess appends a PII-access row via the SECURITY DEFINER log_pii_access
+// SP. It runs on the PRIMARY pool (wallet_app) — not the read-only pii pool — so
+// the write is reliable, and outside withTx (no audit GUCs / no business TX): a
+// privileged read is not a ledger mutation, and the actor is passed explicitly.
+func (r *PgWalletRepo) LogPIIAccess(ctx context.Context, e domain.PIIAccessEntry) error {
+	detail := []byte("{}")
+	if len(e.Detail) > 0 {
+		if b, err := json.Marshal(e.Detail); err == nil {
+			detail = b
+		}
+	}
+	const q = `SELECT log_pii_access($1, $2, $3, $4, $5, $6, $7, $8)`
+	_, err := r.pool.Exec(ctx, q,
+		e.Audit.Actor, e.AccessType, nullStr(e.ClientNo), detail,
+		nullStr(string(e.Audit.Channel)), nullStr(e.Audit.RequestID),
+		nullStr(e.Audit.TraceID), nullStr(e.Audit.IPAddress))
+	if err != nil {
+		return mapErrIfPg(err)
+	}
+	return nil
+}
+
+func (r *PgWalletRepo) AttachClientDocument(ctx context.Context, in domain.AttachDocumentInput) (*domain.AttachDocumentResult, error) {
+	var out domain.AttachDocumentResult
+	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {
+		const q = `
+			SELECT client_no, doc_count, related_docs
+			  FROM attach_client_document($1, $2, $3, $4, $5)
+		`
+		// Empty Status → NULL so the SP applies its DEFAULT 'PENDING'.
+		row := tx.QueryRow(ctx, q,
+			in.ClientNo, in.DocType, in.Link, nullStr(in.Status), in.Audit.Actor)
+		return row.Scan(&out.ClientNo, &out.DocCount, &out.RelatedDocs)
+	})
+	if err != nil {
+		return nil, mapErrIfPg(err)
+	}
+	return &out, nil
+}
+
 func (r *PgWalletRepo) SetDefaultClientBank(ctx context.Context, in domain.SetDefaultBankInput) (*domain.BankLinkResult, error) {
 	var out domain.BankLinkResult
 	err := r.withTx(ctx, in.Audit, func(tx pgx.Tx) error {

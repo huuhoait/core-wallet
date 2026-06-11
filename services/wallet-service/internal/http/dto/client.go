@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
@@ -144,6 +145,35 @@ func BankLinkRespFrom(r *domain.BankLinkResult) BankLinkResponse {
 		IsDefault: r.IsDefault != 0,
 		Status:    r.Status,
 		Timestamp: r.Timestamp,
+	}
+}
+
+// AttachDocumentRequest — POST /v1/clients/:client_no/documents (US-1.13).
+// link is an object-store URL/handle; file bytes are never sent to or stored by
+// the wallet service. Re-attaching the same doc_type replaces the prior entry.
+type AttachDocumentRequest struct {
+	DocType string `json:"doc_type"          binding:"required,max=40"`
+	Link    string `json:"link"              binding:"required,max=512"`
+	Status  string `json:"status,omitempty"  binding:"omitempty,oneof=PENDING VERIFIED REJECTED"`
+}
+
+// AttachDocumentResponse — attach_client_document result. related_docs is the
+// full array echoed back as raw JSON.
+type AttachDocumentResponse struct {
+	ClientNo    string          `json:"client_no"`
+	DocCount    int             `json:"doc_count"`
+	RelatedDocs json.RawMessage `json:"related_docs"`
+}
+
+func AttachDocumentRespFrom(r *domain.AttachDocumentResult) AttachDocumentResponse {
+	docs := json.RawMessage(r.RelatedDocs)
+	if len(docs) == 0 {
+		docs = json.RawMessage("[]")
+	}
+	return AttachDocumentResponse{
+		ClientNo:    r.ClientNo,
+		DocCount:    r.DocCount,
+		RelatedDocs: docs,
 	}
 }
 

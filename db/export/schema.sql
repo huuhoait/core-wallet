@@ -4290,6 +4290,70 @@ END;
 $$;
 
 
+--
+-- Name: attach_client_document(character varying, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- US-1.13 (onboarding step 3): attach / update a related document on a client's
+-- KYC record. The file bytes live in object storage; FM_CLIENT_KYC.related_docs
+-- holds only the link + metadata as a JSONB array of
+-- {doc_type, link, status, uploaded_at} (spec wallet_onboarding.md §2.3).
+--
+-- UPSERT by doc_type: a second attach of the same doc_type REPLACES the prior
+-- entry (so "update" — e.g. re-upload, or flip PENDING→VERIFIED — is the same
+-- call), otherwise the doc is appended. SECURITY DEFINER because wallet_app holds
+-- only SELECT on FM_CLIENT_KYC; the write runs through repo.withTx so the audit
+-- GUCs are set and trg_audit_fm_kyc records the OLD→NEW diff (US-8.1).
+CREATE FUNCTION public.attach_client_document(p_client_no character varying, p_doc_type character varying, p_link character varying, p_status character varying DEFAULT 'PENDING'::character varying, p_actor character varying DEFAULT NULL::character varying) RETURNS TABLE(client_no character varying, doc_count integer, related_docs jsonb)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+#variable_conflict use_column
+DECLARE
+  v_actor VARCHAR(64) := COALESCE(p_actor, session_user);
+  v_doc   JSONB;
+  v_docs  JSONB;
+BEGIN
+  PERFORM set_config('audit.actor', v_actor, TRUE);
+
+  IF NOT EXISTS (SELECT 1 FROM FM_CLIENT WHERE client_no = p_client_no) THEN
+    RAISE EXCEPTION 'CLIENT_NOT_FOUND: %', p_client_no USING ERRCODE = 'P0073';
+  END IF;
+  IF p_doc_type IS NULL OR length(btrim(p_doc_type)) = 0 THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: doc_type required' USING ERRCODE = 'P0071';
+  END IF;
+  IF p_link IS NULL OR length(btrim(p_link)) = 0 THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: link required' USING ERRCODE = 'P0071';
+  END IF;
+  IF p_status NOT IN ('PENDING','VERIFIED','REJECTED') THEN
+    RAISE EXCEPTION 'INVALID_REQUEST: status must be PENDING|VERIFIED|REJECTED' USING ERRCODE = 'P0071';
+  END IF;
+
+  v_doc := jsonb_build_object(
+    'doc_type',    p_doc_type,
+    'link',        p_link,
+    'status',      p_status,
+    'uploaded_at', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+  -- UPSERT by doc_type: drop any existing entry of this type, then append.
+  UPDATE FM_CLIENT_KYC k
+     SET related_docs = COALESCE(
+           (SELECT jsonb_agg(e)
+              FROM jsonb_array_elements(k.related_docs) e
+             WHERE e->>'doc_type' IS DISTINCT FROM p_doc_type),
+           '[]'::jsonb) || jsonb_build_array(v_doc)
+   WHERE k.client_no = p_client_no
+  RETURNING k.related_docs INTO v_docs;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'KYC_NOT_FOUND: %', p_client_no USING ERRCODE = 'P0078';
+  END IF;
+
+  RETURN QUERY SELECT p_client_no, jsonb_array_length(v_docs), v_docs;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -5220,6 +5284,74 @@ ALTER TABLE public.wlt_recon_break ALTER COLUMN break_id ADD GENERATED ALWAYS AS
     NO MAXVALUE
     CACHE 1
 );
+
+
+--
+-- Name: wlt_pii_access_log; Type: TABLE; Schema: public; Owner: -
+--
+
+-- US-8.4: append-only access trail for every read of RAW (decrypted/unmasked)
+-- client PII via the privileged wallet_pii_ro path (/v1/ops/clients*, /v1/ops/
+-- search). Records WHO (accessed_by ← audit.actor), WHAT (access_type +
+-- client_no / query detail), WHEN, and the correlation ids — so a compliance
+-- reviewer can answer "who looked at this customer's data". Masked reads
+-- (wallet_app) are NOT logged here (no PII is disclosed). This is the access
+-- trail half of HLD §8.3; classification + retention are documented policy.
+CREATE TABLE public.wlt_pii_access_log (
+    access_id bigint NOT NULL,
+    accessed_by character varying(64) NOT NULL,
+    access_type character varying(20) NOT NULL,
+    client_no character varying(48),
+    detail jsonb DEFAULT '{}'::jsonb NOT NULL,
+    channel character varying(20),
+    request_id character varying(64),
+    trace_id character varying(64),
+    ip_address inet,
+    accessed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_pii_access_detail_obj CHECK ((jsonb_typeof(detail) = 'object'::text)),
+    CONSTRAINT chk_pii_access_type CHECK (((access_type)::text = ANY (ARRAY[('CLIENT_PROFILE'::character varying)::text, ('CLIENT_360'::character varying)::text, ('CLIENT_LIST'::character varying)::text, ('ACCOUNT_SEARCH'::character varying)::text])))
+);
+
+ALTER TABLE public.wlt_pii_access_log ALTER COLUMN access_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.wlt_pii_access_log_access_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+ALTER TABLE ONLY public.wlt_pii_access_log
+    ADD CONSTRAINT wlt_pii_access_log_pkey PRIMARY KEY (access_id);
+
+CREATE INDEX idx_pii_access_client ON public.wlt_pii_access_log USING btree (client_no, accessed_at DESC);
+CREATE INDEX idx_pii_access_by ON public.wlt_pii_access_log USING btree (accessed_by, accessed_at DESC);
+
+
+--
+-- Name: log_pii_access(character varying, character varying, character varying, jsonb, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- US-8.4: record one PII-access row. SECURITY DEFINER so the read-only
+-- wallet_pii_ro role (and wallet_app) can append to the trail without holding
+-- INSERT on the table directly. Called best-effort by the repo AFTER a
+-- successful unmasked read (so only actual disclosures are logged); a logging
+-- failure must not fail the read. p_ip is text → cast to inet (NULL/'' allowed).
+CREATE FUNCTION public.log_pii_access(p_accessed_by character varying, p_access_type character varying, p_client_no character varying DEFAULT NULL::character varying, p_detail jsonb DEFAULT '{}'::jsonb, p_channel character varying DEFAULT NULL::character varying, p_request_id character varying DEFAULT NULL::character varying, p_trace_id character varying DEFAULT NULL::character varying, p_ip character varying DEFAULT NULL::character varying) RETURNS bigint
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+DECLARE
+  v_id BIGINT;
+BEGIN
+  INSERT INTO WLT_PII_ACCESS_LOG (accessed_by, access_type, client_no, detail,
+                                  channel, request_id, trace_id, ip_address)
+  VALUES (COALESCE(NULLIF(p_accessed_by, ''), 'SYSTEM'), p_access_type, p_client_no,
+          COALESCE(p_detail, '{}'::jsonb), p_channel, p_request_id, p_trace_id,
+          NULLIF(p_ip, '')::inet)
+  RETURNING access_id INTO v_id;
+  RETURN v_id;
+END $$;
 
 
 --
@@ -6575,6 +6707,17 @@ GRANT ALL ON FUNCTION public.link_client_bank(p_client_no character varying, p_b
 
 
 --
+-- Name: FUNCTION log_pii_access(...); Type: ACL; Schema: public; Owner: -
+--
+
+-- SECURITY DEFINER append-only PII access trail (US-8.4). Granted to wallet_app
+-- (the repo logs on the primary pool) and wallet_pii_ro (so the privileged read
+-- role can also append if ever called on its own connection).
+GRANT ALL ON FUNCTION public.log_pii_access(p_accessed_by character varying, p_access_type character varying, p_client_no character varying, p_detail jsonb, p_channel character varying, p_request_id character varying, p_trace_id character varying, p_ip character varying) TO wallet_app;
+GRANT ALL ON FUNCTION public.log_pii_access(p_accessed_by character varying, p_access_type character varying, p_client_no character varying, p_detail jsonb, p_channel character varying, p_request_id character varying, p_trace_id character varying, p_ip character varying) TO wallet_pii_ro;
+
+
+--
 -- Name: FUNCTION mark_withdraw_acked(p_ext_payout_ref character varying, p_treasury_batch_id character varying, p_channel character varying, p_actor character varying); Type: ACL; Schema: public; Owner: -
 --
 
@@ -6691,6 +6834,13 @@ GRANT ALL ON FUNCTION public.update_client(p_client_no character varying, p_clie
 --
 
 GRANT ALL ON FUNCTION public.update_kyc(p_client_no character varying, p_kyc_tier character varying, p_status character varying, p_risk_level character varying, p_ekyc_provider character varying, p_ekyc_ref character varying, p_face_match_score numeric, p_liveness_result character varying, p_extra_data jsonb, p_actor character varying) TO wallet_app;
+
+
+--
+-- Name: FUNCTION attach_client_document(p_client_no character varying, p_doc_type character varying, p_link character varying, p_status character varying, p_actor character varying); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.attach_client_document(p_client_no character varying, p_doc_type character varying, p_link character varying, p_status character varying, p_actor character varying) TO wallet_app;
 
 
 --

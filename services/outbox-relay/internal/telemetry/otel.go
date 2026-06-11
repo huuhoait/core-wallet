@@ -66,7 +66,14 @@ func Setup(ctx context.Context, cfg config.OtelConfig, env string) (func(context
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exp),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SamplingRatio)),
+		// ParentBased so the relay HONORS the upstream sampled flag the posting SP
+		// stamped into the outbox traceparent, instead of re-deciding on its own
+		// ratio. The relay is always a continuation (parent = outbox row), so a
+		// bare TraceIDRatioBased could flip a sampled 01 to 00 when re-injecting
+		// into the Kafka headers and silently break the trace downstream.
+		// TraceIDRatioBased applies only to the rare root span (missing/invalid
+		// upstream traceparent).
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SamplingRatio))),
 	)
 	otel.SetTracerProvider(tp)
 	return tp.Shutdown, nil

@@ -22,17 +22,17 @@ docs alone).
 
 | Epic | ✅ | 🟡 | ⬜ |
 |------|:--:|:--:|:--:|
-| 1. Onboarding & Wallet Management | 12 | 2 | 1 |
+| 1. Onboarding & Wallet Management | 13 | 1 | 1 |
 | 2. Transactions — Posting | 7 | 0 | 0 |
 | 3. Reversals & Refunds | 7 | 0 | 0 |
 | 4. Balance & Statements | 7 | 0 | 0 |
 | 5. Withdrawal Disbursement | 3 | 0 | 0 |
 | 6. Accounting & GL Operations | 7 | 1 | 1 |
 | 7. Eventing & Integration | 3 | 0 | 1 |
-| 8. Audit, PII & Compliance | 3 | 1 | 1 |
+| 8. Audit, PII & Compliance | 5 | 0 | 0 |
 | 9. Platform / Infra / Observability | 17 | 0 | 2 |
 | 10. Quality — Testing & Load | 9 | 1 | 0 |
-| **Total** | **75** | **5** | **6** |
+| **Total** | **78** | **3** | **5** |
 
 ---
 
@@ -51,8 +51,9 @@ docs alone).
 > step 1 (`onboard_client` → `POST /v1/onboard`, US-1.1, incl. ORG path US-1.7),
 > step 2 (`update_kyc` → `POST /v1/clients/:client_no/kyc`, US-1.2) and bank
 > linking (`link_client_bank`, US-1.14) are wired with integration tests;
-> centralized KYC with `extra_data` JSONB is live (US-1.15). Pending: related-doc
-> attachment writer (US-1.13, schema slot only) and the tier-progression framing.
+> centralized KYC with `extra_data` JSONB is live (US-1.15); step 3 related-doc
+> attachment (`attach_client_document` → `POST /v1/clients/:client_no/documents`,
+> US-1.13) is wired. Pending: the explicit tier-progression framing.
 > Spec: [docs/specs/wallet_onboarding.md](docs/specs/wallet_onboarding.md).
 >
 > Merchant **hot-wallet lifecycle** is now complete end-to-end: group
@@ -74,7 +75,7 @@ docs alone).
 | US-1.10 | As ops, I **provision a merchant/agent group** (group row + settlement account in one TX) | ✅ | SP `provision_acct_group` (SECURITY DEFINER); `POST /v1/merchant-groups`. Creates the `WLT_ACCT_GROUP` row **cold** (`SHARD_COUNT=0`) + its `SETTLEMENT` account atomically — solves the chicken-and-egg via the deferred `fk_group_settlement` (group inserted first, settlement acct second). Validates client/acct-type/group-type, duplicate `group_id` → `GROUP_ALREADY_EXISTS` (P0056), bad type → `INVALID_GROUP_TYPE` (P0055). Go: domain/repo/usecase/handler/dto/route. Tests: `wallet_merchant_group_lifecycle_test.sql` TC1–TC5. Prereq for US-1.9 satisfied. |
 | US-1.11 | As the platform, I **route merchant deposits** to settlement while cold (0 shards), to a shard once hot | ✅ | SP `post_merchant_deposit` (SECURITY DEFINER); `POST /v1/finance/merchant-deposit`. The settlement-vs-shard branch lives in the **caller** (the resolver `fn_resolve_shard_acct_no` stays shard-only and still raises P0050 for cold groups — `wallet_cold_merchant_test.sql` TC4 unchanged): a deposit credits the `SETTLEMENT` account while cold and a reference-hashed `SHARD` once hot. Idempotent by reference, balanced double-entry (DR payment-clearing `109.03.001` / CR merchant liability), new `MERCHDEP` tran-def. Tests: lifecycle TC6–TC11. |
 | US-1.12 | As ops, I **rescale a hot wallet** (4→8→16) and rebalance existing shards | ✅ | SP `rescale_hot_wallet` (SECURITY DEFINER); `POST /v1/merchant-groups/:group_id/rescale`. Grows an already-hot group up a tier (upscale-only; `INVALID_SHARD_COUNT` P0052 if not larger, `GROUP_NOT_ACTIVATED` P0057 if cold). **Rebalance** = drain every existing shard back to settlement via `post_sweep_shard` URGENT (shards are transient buffers, settlement is source of truth — group total conserved, verified), then materialise the new shards at the high index range. Go: domain/repo/usecase/handler/dto/route. Tests: lifecycle TC12–TC17. |
-| US-1.13 | As a user / ops, I attach & update **related documents** (CCCD images, business licence, UBO proofs) on a client's KYC | 🟡 | **Step 3** — schema slot only. `FM_CLIENT_KYC.related_docs` JSONB array + `chk_kyc_reldocs_arr` CHECK already exist (`db/export/schema.sql`), shape `[{doc_type, link, status, uploaded_at}]`. **No SP / endpoint writes it yet** — the attach/update path is not implemented. Spec §7.3, §11. |
+| US-1.13 | As a user / ops, I attach & update **related documents** (CCCD images, business licence, UBO proofs) on a client's KYC | ✅ | **Done (2026-06-10) — onboarding step 3.** SP `attach_client_document(client_no, doc_type, link, status:=PENDING, actor)` (SECURITY DEFINER) upserts `{doc_type, link, status, uploaded_at}` into `FM_CLIENT_KYC.related_docs` (JSONB array, `chk_kyc_reldocs_arr`): re-attaching the same `doc_type` **replaces** the prior entry (so attach **and** update — e.g. re-upload or PENDING→VERIFIED — is one call), else appends. `link` is an object-store URL/handle (file bytes never touch the DB). Validates client (P0073), KYC row (P0078), and `status ∈ {PENDING,VERIFIED,REJECTED}` (P0071). `POST /v1/clients/:client_no/documents` → `h.AttachClientDocument`; Go domain/repo (`withTx`)/usecase/handler/dto/route. Runs through `withTx` so the write is audited by `trg_audit_fm_kyc` (US-8.1). Tests: `db/tests/wallet_related_docs_test.sql` 8/8 (append, upsert-by-type, status default, validation, audit-trail) + Go build/vet green. Spec §2.3, §7.3. |
 | US-1.14 | As a user, I **link a bank account** during onboarding and receive a `linkId` token to reference it | 🟡 | **Step 4** — core linking done, onboarding integration pending. SP `link_client_bank` returns `link_id` + encrypts `acct_no` → `ACCT_NO_ENC`; `POST /v1/clients/:client_no/banks` (`h.LinkClientBank`) + `PUT /v1/clients/:client_no/banks/:link_id/default` (`h.SetDefaultClientBank`, SP `set_default_client_bank`). Pending: treating `link_id` as the client-facing opaque token and tying linkage to tier progression. Spec §3.2, §7.4. |
 | US-1.15 | As the platform, I centralize **individual *and* organization** KYC into one `FM_CLIENT_KYC` table with a JSONB `extra_data` key-value bag | ✅ | Implemented. `FM_CLIENT_KYC.extra_data jsonb NOT NULL` + `chk_kyc_extra_obj` on the single KYC row; `FM_CLIENT_INDVL` **folded in and removed** (no per-type child table — only referenced in comments now); INDVL fields + the ORG branch (legal_rep, business_reg_no, …) land in `extra_data`, written by `onboard_client`/`update_kyc`. Rename to `FM_CLIENT_KYC` (US-9.16) also done. Spec §2, §5. |
 
@@ -166,9 +167,9 @@ docs alone).
 |----|-----------|:------:|------------------|
 | US-8.1 | Capture client changes (OLD/NEW diff, maker-checker) in an audit log | ✅ | `FM_CLIENT_AUDIT_LOG`; trigger fns `fn_audit_client_change`, `fn_set_audit_columns`. Coverage today: `FM_CLIENT_BANKS` (`trg_audit_fm_client_bk`) + `FM_CLIENT_KYC` (`trg_audit_fm_kyc`) only — UPDATE diffs on the four **core** client tables are tracked in US-8.5. |
 | US-8.2 | Apply holds/restraints (add/release) that block debits/credits | ✅ | SP `add_restraint`/`release_restraint`; `POST /v1/finance/restraints` (+ `/:id/release`); rolls up `TOTAL_RESTRAINED_AMT`/`CR_BLOCKED`, enforced in posting. Maker-checker/idempotency = gateway (deferred). |
-| US-8.3 | Record reconciliation breaks | ⬜ | No `WLT_RECON_BREAK` table or live recon engine in the current schema (`db/export/schema.sql`) — verified absent. Only artifact is the read-only assertion script `db/tests/wallet_reconciliation_check.sql`, which *detects* breaks but does not record them. |
+| US-8.3 | Record reconciliation breaks | ✅ | **Done** (verified 2026-06-10; doc was stale). SP `fn_record_recon_breaks(p_biz_date)` runs the accounting invariants A–M (same logic as the read-only `wallet_reconciliation_check.sql`) and **persists** one `WLT_RECON_BREAK` row per FAILED invariant, tagged with a single `run_id`; returns `(run_id, biz_date, breaks_recorded)`. Table `WLT_RECON_BREAK` (severity ERROR/WARN, status OPEN/RESOLVED/IGNORED, `idx`/PK, audit cols) + `statement_timeout=0` for the full-history scans. Batch-driven (pg_cron / EOD-style, no HTTP route by design). Test `db/tests/wallet_recon_break_test.sql` PASS. |
 | US-8.5 | Audit **UPDATEs** to the core client-master tables as OLD→NEW diff rows | ✅ | **Done (2026-06-10).** Closes the gap behind US-8.1 and satisfies the "Client-master change auditing" HARD RULE in `CLAUDE.md`. Added `fn_audit_client_change` as an **`AFTER UPDATE`** trigger on the two surviving core tables: `trg_audit_fm_client` on **`FM_CLIENT`** and `trg_audit_fm_client_ct` on **`FM_CLIENT_CONTACT`** — so `update_client` (which mutates `FM_CLIENT`) now writes an attributed OLD→NEW diff into `FM_CLIENT_AUDIT_LOG`. **UPDATE only, not INSERT** (a create has no before→after diff, already attributed by `created_by`/`created_at`) and **not DELETE** (core client rows are never hard-deleted; soft-delete is an `UPDATE status='C'`, captured). **Scope note:** the originally-listed `FM_CLIENT_INDVL` and `FM_CLIENT_IDENTIFIERS` no longer exist — US-1.15 folded them into `FM_CLIENT_KYC.extra_data` (which already carries `trg_audit_fm_kyc`), so the two remaining `client_no`-bearing core tables are the full scope. The shared `fn_audit_client_change` was left unchanged (it already diffs generically by `TG_TABLE_NAME`/`CLIENT_NO`); note `updated_at` is stamped by the BEFORE `trg_audit_cols` so it always appears in `changed_fields` alongside the real business change. Test: `db/tests/wallet_client_audit_test.sql` 5/5 (INSERT silent, UPDATE writes one attributed diff, precise changed-fields, FM_CLIENT_CONTACT parity). |
-| US-8.4 | PII protection: classification, encryption, masking, retention, access log | 🟡 | **Encryption + masking done**: `FM_CLIENT_KYC.PHONE_NO_ENC`/`EMAIL_ENC` via `pgcrypto` `pgp_sym_encrypt` (DEK from `app.pii_dek`), `PHONE_NO_HASH` for unique lookup, + masked read views (`v_kyc_masked` etc.). Remaining (HLD §8.3): data classification, retention policy, and the `WLT_PII_ACCESS_LOG` access trail. |
+| US-8.4 | PII protection: classification, encryption, masking, retention, access log | ✅ | **Encryption + masking + access log done.** Encryption/masking: `FM_CLIENT_KYC.PHONE_NO_ENC`/`EMAIL_ENC` via `pgcrypto` `pgp_sym_encrypt` (DEK from `app.pii_dek`), `PHONE_NO_HASH` for unique lookup, masked read views (`v_kyc_masked`, `v_client_masked`, `v_client_banks_masked`). **Access trail (2026-06-10):** `WLT_PII_ACCESS_LOG` (append-only) + SECURITY DEFINER `log_pii_access(...)` records every RAW-PII disclosure via the privileged `wallet_pii_ro` path — the 4 unmasked endpoints (`GET /v1/ops/clients`, `/:client_no`, `/:client_no/360`, `/v1/ops/search`) log WHO (`audit.actor`), WHAT (`access_type` + `client_no`/query detail), WHEN, channel/request/trace/ip; the Go handlers call it best-effort after a successful read (masked `wallet_app` reads disclose no PII → not logged). Test `db/tests/wallet_pii_access_log_test.sql` 4/4. **Residual = ops policy (no wallet-service code):** formal data-classification catalogue + a retention/purge schedule (HLD §8.3) are operational deferrals. |
 
 ## Epic 9 — Platform / Infra / Observability
 
@@ -243,20 +244,20 @@ docs alone).
 | # | Story | Task | Effort |
 |---|-------|------|:------:|
 | 5 | US-10.7 | **Go integration tests** — testcontainers + real PG for posting paths | 5d |
-| 6 | US-1.13 | **Related-doc attachment** — SP + endpoint for `FM_CLIENT_KYC.related_docs` | 2d |
 
 > ✅ US-8.5 (client-master UPDATE audit triggers) shipped 2026-06-10 — the "Client-master change auditing" HARD RULE is now satisfied for the surviving core tables (`FM_CLIENT`, `FM_CLIENT_CONTACT`).
 > ✅ US-7.4 (canonical outbox event envelope) shipped 2026-06-10 — uniform `payload.meta` + enriched headers via the `trg_outbox_envelope` trigger; versioned schema in `docs/specs/outbox_event_envelope.md`.
+> ✅ US-1.13 (related-document attachment, onboarding step 3) shipped 2026-06-10 — `attach_client_document` + `POST /v1/clients/:client_no/documents`. Phase 2 now has only US-10.7 (Go integration tests) left.
 
 ### Phase 3 — Scale & polish (backlog)
 
 | # | Story | Task | Effort |
 |---|-------|------|:------:|
-| 7 | US-8.3 | Record reconciliation breaks (`WLT_RECON_BREAK` table + SP) | 3d |
-| 8 | US-8.4 | PII access log (`WLT_PII_ACCESS_LOG`) | 2d |
 | 9 | US-1.6 | KYC downgrade & 12-month re-KYC | 3d |
 | 10 | US-6.10 | Branch/legal-entity label on GL config | 1d |
 | 11 | US-9.15 | Rename TRAN_TYPE codes (high blast radius, schedule in quiet sprint) | 5d |
+
+> ✅ US-8.3 (recon-break recording) was already implemented — doc corrected 2026-06-10. ✅ US-8.4 PII access log (`WLT_PII_ACCESS_LOG` + `log_pii_access`) shipped 2026-06-10.
 
 ### Deferred (not MVP)
 

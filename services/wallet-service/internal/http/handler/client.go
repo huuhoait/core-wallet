@@ -186,6 +186,11 @@ func (h *Wallet) ListClientsFull(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
+	h.svc.LogPIIAccess(c.Request.Context(), domain.PIIAccessEntry{
+		AccessType: domain.PIIAccessClientList,
+		Detail:     map[string]any{"count": len(res), "status": q.Status, "client_type": q.ClientType},
+		Audit:      middleware.FromGin(c),
+	})
 	writeOK(c, http.StatusOK, dto.ClientFullListRespFrom(q, res))
 }
 
@@ -274,6 +279,11 @@ func (h *Wallet) GetClientFull(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
+	h.svc.LogPIIAccess(c.Request.Context(), domain.PIIAccessEntry{
+		AccessType: domain.PIIAccessClientProfile,
+		ClientNo:   c.Param("client_no"),
+		Audit:      middleware.FromGin(c),
+	})
 	writeOK(c, http.StatusOK, dto.ClientFullRespFrom(res))
 }
 
@@ -294,6 +304,11 @@ func (h *Wallet) GetClientFull360(c *gin.Context) {
 		renderError(c, err)
 		return
 	}
+	h.svc.LogPIIAccess(c.Request.Context(), domain.PIIAccessEntry{
+		AccessType: domain.PIIAccessClient360,
+		ClientNo:   c.Param("client_no"),
+		Audit:      middleware.FromGin(c),
+	})
 	writeOK(c, http.StatusOK, dto.Client360RespFrom(res))
 }
 
@@ -372,6 +387,40 @@ func (h *Wallet) LinkClientBank(c *gin.Context) {
 		return
 	}
 	writeOK(c, http.StatusCreated, dto.BankLinkRespFrom(res))
+}
+
+// AttachClientDocument godoc
+//
+//	@Summary		Attach or update a related document
+//	@Description	Onboarding step 3: attach a related document (CCCD images, business licence, UBO proofs) to a client's KYC. `link` is an object-store URL/handle — file bytes are never sent here. Re-attaching the same `doc_type` replaces the prior entry. Defaults `status` to PENDING.
+//	@Tags			clients
+//	@Accept			json
+//	@Produce		json
+//	@Param			client_no	path		string						true	"Client number"
+//	@Param			request		body		dto.AttachDocumentRequest	true	"Document to attach"
+//	@Success		200			{object}	dto.SuccessEnvelope{data=dto.AttachDocumentResponse}	"OK"
+//	@Failure		400			{object}	dto.ProblemDetails		"Validation error"
+//	@Failure		404			{object}	dto.ProblemDetails		"Client or KYC record not found"
+//	@Failure		500			{object}	dto.ProblemDetails		"Internal error"
+//	@Router			/v1/clients/{client_no}/documents [post]
+func (h *Wallet) AttachClientDocument(c *gin.Context) {
+	var req dto.AttachDocumentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		renderValidationError(c, err)
+		return
+	}
+	res, err := h.svc.AttachClientDocument(c.Request.Context(), domain.AttachDocumentInput{
+		ClientNo: c.Param("client_no"),
+		DocType:  req.DocType,
+		Link:     req.Link,
+		Status:   req.Status,
+		Audit:    middleware.FromGin(c),
+	})
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+	writeOK(c, http.StatusOK, dto.AttachDocumentRespFrom(res))
 }
 
 // SetDefaultClientBank godoc
