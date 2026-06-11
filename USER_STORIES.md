@@ -27,12 +27,12 @@ docs alone).
 | 3. Reversals & Refunds | 7 | 0 | 0 |
 | 4. Balance & Statements | 7 | 0 | 0 |
 | 5. Withdrawal Disbursement | 3 | 0 | 0 |
-| 6. Accounting & GL Operations | 7 | 1 | 1 |
+| 6. Accounting & GL Operations | 8 | 0 | 1 |
 | 7. Eventing & Integration | 3 | 0 | 1 |
 | 8. Audit, PII & Compliance | 5 | 0 | 0 |
 | 9. Platform / Infra / Observability | 17 | 0 | 2 |
 | 10. Quality — Testing & Load | 9 | 1 | 0 |
-| **Total** | **78** | **3** | **5** |
+| **Total** | **79** | **2** | **5** |
 
 ---
 
@@ -136,14 +136,14 @@ docs alone).
 > `db/procedures/` directory) as two orchestrators: `run_eod` (customer close:
 > T1 snapshot → T2 prev-day roll → T5 restraint expiry) and `run_gl_close` (GL
 > close: T3 gl-feed → T6 trial balance → T7 close period). Covers US-6.1 (period
-> locking) + US-6.3 + US-6.6–6.9, plus the GL-feed post of US-6.2. The full
-> suspense/clearing GL framework, e-invoice and manual-JE workflows (US-6.2
-> remainder / 6.4 / 6.5) remain HLD design only.
+> locking) + US-6.3 + US-6.6–6.9, plus US-6.2 (GL-feed post + suspense aging +
+> aged-unidentified-receipt sweep) and US-6.5 (maker-checker manual JE). E-invoice
+> (US-6.4) was dropped from scope.
 
 | ID | User story | Status | Evidence / Notes |
 |----|-----------|:------:|------------------|
 | US-6.1 | EOD close & period locking | ✅ | `db/export/schema.sql`. The GL-close chain is `run_gl_close` (T3 gl-feed → T6 trial balance → **T7 `eod_close_period`**) — *not* `run_eod` (which is the customer chain T1→T2→T5). **Period locking** done: `eod_close_period(D)` seals the accounting day in `WLT_PERIOD` (runs last, only after its tasks are DONE), advancing the high-water mark; the `fn_freeze_closed_period` trigger `trg_freeze_batch` on **`WLT_GL_BATCH`** (keys off `ACCOUNTING_DATE`) makes a closed day **immutable** (no INSERT/UPDATE/DELETE, SQLSTATE P0092 → `PERIOD_CLOSED`/409). Verified + `db/tests/wallet_eod_period_lock_test.sql`. Unblocks US-3.7. |
-| US-6.2 | Suspense / clearing GL framework | 🟡 | **GL-feed post** built: `eod_gl_feed_post(D)` (T3) finalises the day's GL journal `WLT_GL_BATCH` `'P'`→`'S'`, chunked + restart-safe. Full suspense/clearing GL framework (HLD §9b) still design only. |
+| US-6.2 | Suspense / clearing GL framework | ✅ | **GL-feed post**: `eod_gl_feed_post(D)` (T3) finalises the day's GL journal `WLT_GL_BATCH` `'P'`→`'S'`, chunked + restart-safe. **Suspense lifecycle** (`db/export/schema.sql`): `fn_suspense_aging(as_of)` — per 109.x GL/ccy net open balance (ΣCR−ΣDR) bucketed by post-date age (0-30/31-60/61-90/90+), exposed at `GET /v1/ops/gl/suspense/aging`; `eod_sweep_unidentified_receipts(biz_date, age_days)` — reclasses aged 109.04.002 (unidentified receipts) → 204.01.001 (dormant/unclaimed) via a balanced GL posting (`source 'SUSP'`), restart-safe (WLT_EOD_RUN guard + per-(date,ccy) reference idempotency), standalone (not auto-wired into `run_gl_close`). Ad-hoc/manual clearing of other suspense balances is the maker-checker manual JE (US-6.5). Tests: `db/tests/wallet_suspense_aging_test.sql` + `dto/suspense_test.go`. |
 | US-6.3 | Daily trial-balance materialization + signed proof | ✅ | SP `eod_trial_balance` (`db/export/schema.sql`, T6 in `run_gl_close`). Per-`(gl_code,ccy)` from `WLT_GL_BATCH` → `WLT_TRIAL_BALANCE` (opening carry-forward + period DR/CR + closing); proves ΣDR=ΣCR ∧ Σclosing=0; seals each day in `WLT_TRIAL_BALANCE_PROOF` via a `sha256` **hash chain** (`chain=H(totals‖content‖prev)`). `eod_verify_chain()` re-derives & detects tampering (verified: editing a sealed line flips `chain_ok`→false). |
 | US-6.5 | Maker-checker manual journal entry workflow | ✅ | SPs `create_manual_je` (balanced ΣDR=ΣCR, valid `fm_gl_mast` codes, ≥2 lines, reason → status PENDING), `approve_manual_je` (checker ≠ maker, posts balanced lines into `WLT_GL_BATCH` source `MJE` under one tran_key → POSTED), `reject_manual_je` (`db/export/schema.sql`). GL-only adjusting entries (suspense/clearing/corrections); never touches customer balances. Period-open enforced by the GL freeze trigger (`fn_freeze_closed_period`, P0092). Go: domain/repo/usecase/dto/handler + routes `/v1/ops/gl/journal-entries` (RBAC `wallet.gl.je.maker` / `wallet.gl.je.checker`). Codes `MJE_*` (P00B0–P00B6). Tests: `db/tests/wallet_manual_je_test.sql` (TC1–TC11) + `dto/manual_je_test.go`. |
 | US-6.6 | EOD daily balance snapshot → `WLT_ACCT_BAL[D]` | ✅ | SP `eod_snapshot` (`db/export/schema.sql`, T1 in `run_eod`). Sparse (accounts that moved on D); close = last `WLT_TRAN_HIST` leg (ledger-authoritative, 24/7-correct); **finalises** the row posting maintains intraday (`ON CONFLICT DO UPDATE`), incl. `calc_bal` = close − final restraint overlay. Chunked short-TX (`COMMIT`/chunk → no xmin pinning), restart-safe. |
@@ -261,7 +261,6 @@ docs alone).
 
 ### Deferred (not MVP)
 
-- US-6.2 remainder (full suspense GL) — when finance team needs GL recon with core banking
 - US-7.3 (downstream consumers) — Treasury Service scope
 
 > Phase 1 đã xong (US-9.12 + US-5.3 shipped 2026-06-10) — không còn blocker go-live. Tiếp theo là Phase 2 (compliance & quality).

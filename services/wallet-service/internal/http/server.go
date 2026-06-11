@@ -180,6 +180,8 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 			je.GET("", readJE, h.ListManualJE)
 			je.GET("/:je_id", readJE, h.GetManualJE)
 		}
+		// Suspense/clearing aging report (US-6.2). Same GL/ops read access.
+		v1.GET("/ops/gl/suspense/aging", readJE, h.SuspenseAging)
 
 		// ── Treasury: withdrawal disbursement state machine (S2S callbacks) ──
 		// wallet.treasury role required (US-9.10) — only the Treasury Service S2S

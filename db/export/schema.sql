@@ -7425,3 +7425,102 @@ GRANT ALL ON FUNCTION public.create_manual_je(p_reference character varying, p_c
 GRANT ALL ON FUNCTION public.approve_manual_je(p_je_id bigint, p_checker character varying, p_reason character varying) TO wallet_app;
 GRANT ALL ON FUNCTION public.reject_manual_je(p_je_id bigint, p_checker character varying, p_reason character varying) TO wallet_app;
 
+-- ============================================================================
+-- US-6.2 — Suspense/clearing GL framework (remainder beyond eod_gl_feed_post)
+-- ----------------------------------------------------------------------------
+-- The clearing/suspense GLs (109.x) accumulate transient balances from posting.
+-- This adds the lifecycle around them:
+--   * fn_suspense_aging(as_of) — visibility: per 109.x GL/ccy, net open balance
+--     (ΣCR−ΣDR) bucketed by post_date age (0-30/31-60/61-90/90+). Pure read.
+--   * eod_sweep_unidentified_receipts(biz_date, age_days) — the automated rule:
+--     net unidentified-receipts (109.04.002) liability aged past the cutoff is
+--     reclassed to dormant/unclaimed (204.01.001) via a balanced GL posting
+--     (source 'SUSP'), one tran_key per ccy. Restart-safe (WLT_EOD_RUN DONE
+--     guard + per-(date,ccy) reference idempotency). Standalone — invoke from
+--     the EOD scheduler/ops; NOT auto-wired into run_gl_close.
+-- Ad-hoc/manual clearing of other suspense balances is the maker-checker manual
+-- journal entry (US-6.5).
+--
+-- Aging note: without item-level matching, buckets are the post_date-age
+-- distribution of the signed net (oldest-first view), not true open-item aging.
+-- ============================================================================
+
+CREATE FUNCTION public.fn_suspense_aging(p_as_of date DEFAULT CURRENT_DATE) RETURNS TABLE(gl_code character varying, gl_desc character varying, ccy character varying, net_balance numeric, bucket_0_30 numeric, bucket_31_60 numeric, bucket_61_90 numeric, bucket_90_plus numeric, oldest_post_date date)
+    LANGUAGE sql STABLE
+    SET search_path TO 'public'
+    AS $$
+  SELECT b.gl_code, m.gl_code_desc, b.ccy,
+         sum(b.sgn)::numeric(18,2),
+         COALESCE(sum(b.sgn) FILTER (WHERE b.age <= 30), 0)::numeric(18,2),
+         COALESCE(sum(b.sgn) FILTER (WHERE b.age > 30 AND b.age <= 60), 0)::numeric(18,2),
+         COALESCE(sum(b.sgn) FILTER (WHERE b.age > 60 AND b.age <= 90), 0)::numeric(18,2),
+         COALESCE(sum(b.sgn) FILTER (WHERE b.age > 90), 0)::numeric(18,2),
+         min(b.post_date)
+    FROM (
+      SELECT gl_code, ccy, post_date,
+             (p_as_of - post_date) AS age,
+             CASE WHEN tran_nature = 'CR' THEN amount ELSE -amount END AS sgn
+        FROM WLT_GL_BATCH
+       WHERE gl_code LIKE '109%' AND post_date <= p_as_of
+    ) b
+    JOIN FM_GL_MAST m ON m.gl_code = b.gl_code
+   GROUP BY b.gl_code, m.gl_code_desc, b.ccy
+  HAVING sum(b.sgn) <> 0
+   ORDER BY b.gl_code, b.ccy;
+$$;
+
+CREATE PROCEDURE public.eod_sweep_unidentified_receipts(IN p_biz_date date, IN p_age_days integer DEFAULT 90)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_cut     date := p_biz_date - p_age_days;
+  v_started timestamptz := clock_timestamp();
+  v_tot     bigint := 0;
+  v_status  text;
+  v_ref     text;
+  v_tran    bigint;
+  r         record;
+BEGIN
+  IF p_biz_date IS NULL OR p_biz_date > CURRENT_DATE THEN
+    RAISE EXCEPTION 'EOD_INVALID_DATE: %', p_biz_date USING ERRCODE = 'P0090';
+  END IF;
+  PERFORM set_config('audit.actor', 'EOD', false);   -- session-scoped: survives COMMIT
+
+  SELECT status INTO v_status FROM WLT_EOD_RUN WHERE biz_date = p_biz_date AND task = 'SUSP_SWEEP';
+  IF v_status = 'DONE' THEN RETURN; END IF;           -- restart-safe: already swept this date
+
+  INSERT INTO WLT_EOD_RUN(biz_date, task, status, started_at)
+       VALUES (p_biz_date, 'SUSP_SWEEP', 'RUNNING', now())
+  ON CONFLICT (biz_date, task) DO UPDATE SET status = 'RUNNING', started_at = now(), message = NULL;
+
+  FOR r IN
+    SELECT ccy, sum(CASE WHEN tran_nature = 'CR' THEN amount ELSE -amount END) AS net
+      FROM WLT_GL_BATCH
+     WHERE gl_code = '109.04.002' AND post_date <= v_cut
+     GROUP BY ccy
+    HAVING sum(CASE WHEN tran_nature = 'CR' THEN amount ELSE -amount END) > 0
+  LOOP
+    v_ref := 'SUSP-SWEEP-' || to_char(p_biz_date, 'YYYYMMDD') || '-' || r.ccy;
+    CONTINUE WHEN EXISTS (SELECT 1 FROM WLT_GL_BATCH WHERE reference = v_ref AND source_module = 'SUSP');
+
+    v_tran := nextval('seq_tran');
+    INSERT INTO WLT_GL_BATCH (TRAN_KEY, SEQ_NO, GL_CODE, AMOUNT, TRAN_NATURE, CCY, REFERENCE,
+         NARRATIVE, POST_DATE, VALUE_DATE, SOURCE_MODULE, ACCOUNTING_DATE, CREATED_BY, UPDATED_BY)
+    VALUES
+      (v_tran, 1, '109.04.002', r.net, 'DR', r.ccy, v_ref,
+       'Sweep aged unidentified receipts to unclaimed', p_biz_date, p_biz_date, 'SUSP', p_biz_date, 'EOD', 'EOD'),
+      (v_tran, 2, '204.01.001', r.net, 'CR', r.ccy, v_ref,
+       'Sweep aged unidentified receipts to unclaimed', p_biz_date, p_biz_date, 'SUSP', p_biz_date, 'EOD', 'EOD');
+    v_tot := v_tot + 1;
+  END LOOP;
+
+  UPDATE WLT_EOD_RUN SET status = 'DONE', rows_done = v_tot, finished_at = now()
+    WHERE biz_date = p_biz_date AND task = 'SUSP_SWEEP';
+  PERFORM eod_log(p_biz_date, 'SUSP_SWEEP', 'DONE', v_tot, v_started);
+  COMMIT;
+END;
+$$;
+
+GRANT ALL ON FUNCTION public.fn_suspense_aging(p_as_of date) TO wallet_app;
+GRANT ALL ON PROCEDURE public.eod_sweep_unidentified_receipts(p_biz_date date, p_age_days integer) TO wallet_app;
+
