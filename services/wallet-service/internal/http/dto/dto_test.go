@@ -21,8 +21,9 @@ func TestOk_Shape(t *testing.T) {
 	if got["errorMessage"] != SuccessErrorMessage {
 		t.Errorf("errorMessage = %v, want %q", got["errorMessage"], SuccessErrorMessage)
 	}
-	if got["trace_id"] != "req-abc" {
-		t.Errorf("trace_id = %v, want req-abc", got["trace_id"])
+	// trace_id was removed from the response envelope — assert it's absent.
+	if _, present := got["trace_id"]; present {
+		t.Errorf("trace_id should be omitted from the success envelope, got %v", got["trace_id"])
 	}
 	if got["timestamp"] == "" || got["timestamp"] == nil {
 		t.Error("timestamp is empty")

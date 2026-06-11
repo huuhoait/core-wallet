@@ -223,7 +223,6 @@ type ProblemDetails struct {
 	ErrorMessage      string         `json:"errorMessage" example:"INSUFFICIENT_FUNDS: available 50000 < required 100000"` // full raw "CODE: detail" message (pg.Message verbatim for PG errors, synthesized for Go); "Internal Error" when not whitelisted
 	ISO20022Reason    string         `json:"iso20022_reason_code,omitempty" example:"AM04"`                                // ISO 20022 External Status Reason (§13.2)
 	TransactionStatus string         `json:"transaction_status,omitempty" example:"RJCT"`                                  // pain.002 status (§13.3)
-	TraceID           string         `json:"trace_id,omitempty" example:"5f3b2c8e-1a2b-4c3d-9e8f-0a1b2c3d4e5f"`            // = X-Request-Id
 	Timestamp         string         `json:"timestamp,omitempty" example:"2026-06-06T07:30:00Z"`                           // RFC 3339
 	Details           map[string]any `json:"details,omitempty"`
 	Errors            []FieldError   `json:"errors,omitempty"` // field-level (Berlin Group / OBIE style)
@@ -264,7 +263,6 @@ type SuccessEnvelope struct {
 	ErrorCode    string `json:"errorCode"`
 	ErrorMessage string `json:"errorMessage"`
 	Data         any    `json:"data,omitempty"`
-	TraceID      string `json:"trace_id,omitempty"`
 	Timestamp    string `json:"timestamp,omitempty"`
 }
 
@@ -274,7 +272,6 @@ func Ok(data any, traceID string) SuccessEnvelope {
 		ErrorCode:    SuccessErrorCode,
 		ErrorMessage: SuccessErrorMessage,
 		Data:         data,
-		TraceID:      traceID,
 		Timestamp:    nowRFC3339(),
 	}
 }
@@ -313,7 +310,6 @@ func NewProblemFromError(de *domain.Error, instance, traceID string) ProblemDeta
 			Status:       http.StatusInternalServerError,
 			ErrorCode:    FallbackErrorCode,
 			ErrorMessage: FallbackErrorMessage,
-			TraceID:      traceID,
 			Timestamp:    nowRFC3339(),
 		}
 	}
@@ -333,7 +329,6 @@ func NewProblemFromError(de *domain.Error, instance, traceID string) ProblemDeta
 		ErrorMessage:      rawMessage,
 		ISO20022Reason:    m.ISOReason,
 		TransactionStatus: m.TxStatus,
-		TraceID:           traceID,
 		Timestamp:         nowRFC3339(),
 	}
 }

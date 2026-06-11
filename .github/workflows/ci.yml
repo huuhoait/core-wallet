@@ -137,6 +137,9 @@ jobs:
       - name: Run EOD period lock tests
         run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_eod_period_lock_test.sql
 
+      - name: Run manual JE tests
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_manual_je_test.sql
+
       - name: Run reconciliation check
         run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -v ON_ERROR_STOP=1 -f db/tests/wallet_reconciliation_check.sql
 

@@ -15,6 +15,8 @@ const (
 	RoleFinanceReverse = "wallet.finance.reverse" // any reversal endpoint (transfer, topup, fee-charge, merchant-withdraw)
 	RoleOpsRead        = "wallet.ops.read"        // /v1/ops/* — unmasked PII + ops balance views
 	RoleTreasury       = "wallet.treasury"        // /v1/treasury/* — S2S callbacks from Treasury Service
+	RoleGLJEMaker      = "wallet.gl.je.maker"     // draft + cancel a manual journal entry (US-6.5)
+	RoleGLJEChecker    = "wallet.gl.je.checker"   // approve/reject a manual journal entry (US-6.5)
 )
 
 // RequireAnyRole returns 403 unless the JWT-attached roles include at least one

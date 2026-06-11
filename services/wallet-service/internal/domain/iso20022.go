@@ -112,6 +112,15 @@ var codeMeta = map[string]CodeMeta{
 	CodeInvalidGroupType:      {"Invalid group type", "Group type must be one of: MERCHANT, AGENT, NOSTRO_HOT", "E3032", "", ""},
 	CodeGroupAlreadyExists:    {"Group already exists", "A group with this ID already exists", "E3033", "AM05", ""},
 	CodeGroupNotActivated:     {"Group not activated", "This group is still cold (0 shards); activate it before rescaling", "E3034", "", ""},
+
+	// ── Manual journal entry — maker-checker (US-6.5) ──
+	CodeMJEReasonRequired:   {"Reason required", "A reason is mandatory for a manual journal entry", "E6050", "", ""},
+	CodeMJEInvalidLines:     {"Invalid journal lines", "A journal entry needs at least two lines, each DR or CR with amount > 0", "E6051", "", ""},
+	CodeMJEGLInvalid:        {"Invalid GL code", "A journal line references a GL code that is unknown or inactive", "E6052", "", ""},
+	CodeMJEUnbalanced:       {"Journal entry unbalanced", "Total debits must equal total credits", "E6053", "", ""},
+	CodeMJENotFound:         {"Journal entry not found", "No manual journal entry exists with the specified id", "E6054", "", ""},
+	CodeMJEInvalidState:     {"Invalid journal entry state", "The journal entry is not pending and cannot be approved or rejected", "E6055", "", ""},
+	CodeMJEMakerCannotCheck: {"Maker cannot check", "The maker of a journal entry cannot approve their own entry", "E6056", "", ""},
 }
 
 // MetaFor returns the standards metadata for a canonical code. Unknown codes
