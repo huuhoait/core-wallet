@@ -75,6 +75,9 @@ type WalletRepository interface {
 	ListManualJE(ctx context.Context, q domain.ManualJEListQuery) ([]domain.ManualJEView, error)
 	GetManualJE(ctx context.Context, id int64) (*domain.ManualJEView, error)
 
+	// Suspense/clearing aging report (US-6.2, read-only — fn_suspense_aging).
+	SuspenseAging(ctx context.Context, asOf time.Time) ([]domain.SuspenseAgingRow, error)
+
 	// Client master CRUD (create_client / update_client).
 	CreateClient(ctx context.Context, in domain.ClientCreateInput) (*domain.ClientResult, error)
 	UpdateClient(ctx context.Context, in domain.ClientUpdateInput) (*domain.ClientResult, error)
