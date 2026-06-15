@@ -6033,6 +6033,18 @@ CREATE INDEX idx_outbox_pending ON ONLY public.wlt_outbox USING btree (event_id)
 
 
 --
+-- Name: idx_outbox_claim; Type: INDEX; Schema: public; Owner: -
+--
+
+-- Serves the relay claim query (services/outbox-relay … fetchPending):
+--   WHERE status IN ('PENDING','FAILED') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT $1
+-- Without it, each poll Seq-Scans + sorts the whole PENDING backlog (spilling
+-- jsonb payload/headers to disk), starving the OLTP posting path under load.
+-- With it, a poll is an ordered index scan that stops after LIMIT rows.
+CREATE INDEX idx_outbox_claim ON ONLY public.wlt_outbox USING btree (created_at) WHERE ((status)::text = ANY (ARRAY[('PENDING'::character varying)::text, ('FAILED'::character varying)::text]));
+
+
+--
 -- Name: idx_period_closed; Type: INDEX; Schema: public; Owner: -
 --
 
