@@ -84,6 +84,59 @@ jobs:
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/relay
 
   # ──────────────────────────────────────────────────────────────────────────
+  # Go Integration: posting-path repo tests against a real PostgreSQL (US-10.7).
+  # These run the real stored procedures + read the ledger back. The go-checks
+  # job has no DB, so the *Integration tests SKIP there; this job is where they
+  # actually execute (load schema → partitions → seed, then go test -run Integration).
+  # ──────────────────────────────────────────────────────────────────────────
+  go-integration:
+    name: Go Integration (real PG)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: wallet
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci
+        options: >-
+          --health-cmd "pg_isready -U postgres -d wallet"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+          --health-start-period 30s
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: services/wallet-service/go.sum
+
+      - name: Wait for PG ready
+        run: until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done
+
+      - name: Load schema + partitions + seed
+        run: |
+          PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -f db/export/schema.sql
+          PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -f db/export/partitions.sql
+          PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -f db/export/seed.sql
+
+      # The PII DEK is supplied at the database/role level in every environment
+      # (ALTER DATABASE ... SET app.pii_dek=...); create_client / post_withdraw
+      # encrypt PII with it. Set it as a DB default so the pgx pool inherits it.
+      - name: Configure PII DEK (db-level, test key)
+        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -c "ALTER DATABASE wallet SET app.pii_dek = 'dev-test-pii-dek-do-not-use-in-prod';"
+
+      - name: go test (integration)
+        working-directory: services/wallet-service
+        env:
+          WALLET_TEST_DSN: postgres://postgres:postgres_ci@localhost:5432/wallet?sslmode=disable
+        run: go test -race -count=1 -run Integration ./internal/repo/...
+
+  # ──────────────────────────────────────────────────────────────────────────
   # SQL Tests: spin up PG17 + run assertion suites
   # ──────────────────────────────────────────────────────────────────────────
   sql-tests:
