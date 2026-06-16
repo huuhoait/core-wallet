@@ -3401,8 +3401,6 @@ DECLARE
   v_vat_amt     NUMERIC(18,2) := 0;
   v_fee_net     NUMERIC(18,2) := 0;
   v_total_debit NUMERIC(18,2);
-  v_monthly_used  NUMERIC(18,2);
-  v_monthly_limit NUMERIC(18,2);
   v_tran_key     BIGINT;
   v_out_seq     BIGINT;   -- SEQ_NO of the WDRAW (origin) leg; fee leg refers to it
   v_cur_bal     NUMERIC(18,2);   -- re-read on CAS miss to classify the failure
@@ -3456,7 +3454,6 @@ BEGIN
     RAISE EXCEPTION 'ACCT_NOT_ACTIVE: %', v_acct.ACCT_STATUS USING ERRCODE = 'P0022';
   END IF;
 
-  SELECT * INTO v_acct_type FROM WLT_ACCT_TYPE WHERE ACCT_TYPE = v_acct.ACCT_TYPE;
   SELECT * INTO v_kyc       FROM FM_CLIENT_KYC WHERE CLIENT_NO = v_acct.CLIENT_NO;
   IF v_kyc.KYC_TIER < '2' THEN
     RAISE EXCEPTION 'TIER_INSUFFICIENT: tier=%, required >= 2', v_kyc.KYC_TIER
@@ -3495,21 +3492,10 @@ BEGIN
                     v_acct.CALC_BAL, v_total_debit USING ERRCODE = 'P0026';
   END IF;
 
-  -- Monthly tier limit (simple inline SUM — OK at 20 TPS)
-  SELECT COALESCE(SUM(TRAN_AMT), 0) INTO v_monthly_used
-    FROM WLT_TRAN_HIST
-   WHERE INTERNAL_KEY = v_acct.INTERNAL_KEY
-     AND TRAN_TYPE IN ('WDRAW','TRFOUT')
-     AND POST_DATE >= date_trunc('month', CURRENT_DATE);
-  v_monthly_limit := CASE v_kyc.KYC_TIER
-                       WHEN '1' THEN 20000000::numeric
-                       WHEN '2' THEN v_acct_type.MONTHLY_LIMIT
-                       WHEN '3' THEN 9999999999::numeric
-                     END;
-  IF v_monthly_used + p_amount > v_monthly_limit THEN
-    RAISE EXCEPTION 'TIER_LIMIT_EXCEEDED: used=%, limit=%',
-                    v_monthly_used, v_monthly_limit USING ERRCODE = 'P0027';
-  END IF;
+  -- Monthly tier limit (TIER_LIMIT_EXCEEDED) removed — the inline SUM over
+  -- WLT_TRAN_HIST did not scale past ~20 TPS. If the monthly KYC-tier cap is
+  -- reintroduced, back it with an O(1) running counter (WLT_CUSTOMER_USAGE_MONTHLY
+  -- per HLD), not a per-transaction history scan.
 
   -- Phase 3: snapshot
 
