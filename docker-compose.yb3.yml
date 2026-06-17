@@ -1,0 +1,157 @@
+# =============================================================================
+# Core Wallet — YugabyteDB 3-NODE cluster PoC (separate project core-wallet-yb3).
+#
+# 3 yugabyted nodes (node2/node3 --join node1) → tablets distribute across nodes,
+# so a posting that touches tablets on different nodes is a REAL distributed
+# transaction (cross-node Raft consensus) — what single-node could not measure.
+# wallet-service-yb connects to yb-node1:5433 (that node coordinates the
+# distributed txn across the cluster). Focused on DB latency/scale: no
+# kafka/relay here (the outbox pipeline was already proven on the single-node
+# stack); outbox rows just stay PENDING during the run.
+#
+#   docker compose -f docker-compose.yb3.yml up -d yb-node1            # bootstrap
+#   docker compose -f docker-compose.yb3.yml up -d yb-node2 yb-node3   # join
+#   # init: create db + roles + schema.yb.sql + partitions + seed + pii_dek
+#   docker compose -f docker-compose.yb3.yml up -d wallet-service-yb   # :8029
+#
+# Nuke:  docker compose -f docker-compose.yb3.yml down -v
+# =============================================================================
+
+name: core-wallet-yb3
+
+x-ybnode: &ybnode
+  image: yugabytedb/yugabyte:latest
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: "2"
+        memory: 2000M
+      reservations:
+        cpus: "1"
+        memory: 768M
+  networks:
+    - yb3-net
+
+services:
+  yb-node1:
+    <<: *ybnode
+    container_name: wallet-yb-node1
+    hostname: yb-node1
+    command:
+      - "bin/yugabyted"
+      - "start"
+      - "--background=false"
+      - "--advertise_address=yb-node1"
+      - "--tserver_flags=ysql_sequence_cache_minval=1000"
+    ports:
+      - "${YB3_YSQL_PORT:-5433}:5433"     # YSQL on node1 (PG wire)
+      - "${YB3_UI_PORT:-15433}:15433"     # yugabyted UI
+      - "${YB3_MASTER_UI_PORT:-7001}:7000"
+    volumes:
+      - yb3_node1:/root/var
+    healthcheck:
+      test: ["CMD-SHELL", "bin/ysqlsh -h yb-node1 -U yugabyte -d yugabyte -c 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+
+  yb-node2:
+    <<: *ybnode
+    container_name: wallet-yb-node2
+    hostname: yb-node2
+    depends_on:
+      yb-node1:
+        condition: service_healthy
+    command:
+      - "bin/yugabyted"
+      - "start"
+      - "--background=false"
+      - "--advertise_address=yb-node2"
+      - "--join=yb-node1"
+      - "--tserver_flags=ysql_sequence_cache_minval=1000"
+    volumes:
+      - yb3_node2:/root/var
+    healthcheck:
+      test: ["CMD-SHELL", "bin/ysqlsh -h yb-node2 -U yugabyte -d yugabyte -c 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+
+  yb-node3:
+    <<: *ybnode
+    container_name: wallet-yb-node3
+    hostname: yb-node3
+    depends_on:
+      yb-node1:
+        condition: service_healthy
+    command:
+      - "bin/yugabyted"
+      - "start"
+      - "--background=false"
+      - "--advertise_address=yb-node3"
+      - "--join=yb-node1"
+      - "--tserver_flags=ysql_sequence_cache_minval=1000"
+    volumes:
+      - yb3_node3:/root/var
+    healthcheck:
+      test: ["CMD-SHELL", "bin/ysqlsh -h yb-node3 -U yugabyte -d yugabyte -c 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+
+  wallet-service-yb:
+    build:
+      context: ./services
+      dockerfile: wallet-service/Dockerfile
+      args:
+        VERSION: ${WALLET_SERVICE_VERSION:-dev}
+    image: core-wallet/wallet-service:dev
+    container_name: wallet-service-yb3
+    restart: unless-stopped
+    depends_on:
+      yb-node1:
+        condition: service_healthy
+      yb-node2:
+        condition: service_healthy
+      yb-node3:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      GIN_MODE: ${GIN_MODE:-release}
+      HTTP_ADDR: ":8080"
+      DB_DSN: postgres://wallet_app:${WALLET_APP_PASSWORD:-wallet_app_dev}@yb-node1:5433/wallet?sslmode=disable
+      DB_PII_DSN: postgres://wallet_pii_ro:${WALLET_PII_RO_PASSWORD:-wallet_pii_dev}@yb-node1:5433/wallet?sslmode=disable
+      DB_LOCK_TIMEOUT: ${DB_LOCK_TIMEOUT:-1500ms}
+      DB_STATEMENT_TIMEOUT: ${DB_STATEMENT_TIMEOUT:-2500ms}
+      HTTP_REQUEST_TIMEOUT: ${HTTP_REQUEST_TIMEOUT:-10s}
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-50}
+      DB_MIN_CONNS: ${DB_MIN_CONNS:-5}
+      OTEL_ENABLED: "false"
+    ports:
+      - "${WALLET_SERVICE_YB_PORT:-8029}:8080"
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    networks:
+      - yb3-net
+
+volumes:
+  yb3_node1:
+    name: wallet_yb3_node1
+  yb3_node2:
+    name: wallet_yb3_node2
+  yb3_node3:
+    name: wallet_yb3_node3
+
+networks:
+  yb3-net:
+    name: core-wallet-yb3-net
+    driver: bridge
