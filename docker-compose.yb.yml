@@ -1,0 +1,229 @@
+# =============================================================================
+# Core Wallet — YugabyteDB scale-out PoC stack (SEPARATE from the PG17 stack).
+#
+# This is a standalone compose project (core-wallet-yb) with its own network and
+# volume. It does NOT touch the primary PG17 + PgBouncer stack in
+# docker-compose.yml — run them independently.
+#
+#   # bring YB DB up
+#   docker compose -f docker-compose.yb.yml up -d yugabyte
+#
+#   # load the schema once YSQL is healthy (schema.yb.sql = schema.sql minus the
+#   # 3 YB-incompatible bits: column SET COMPRESSION, PG17 transaction_timeout,
+#   # the balanced-posting CONSTRAINT TRIGGER — move that into the SP on YB):
+#   docker exec wallet-yugabyte bin/ysqlsh -h yugabyte -U yugabyte -d yugabyte \
+#       -c "CREATE DATABASE wallet;"
+#   docker exec -i wallet-yugabyte bin/ysqlsh -h yugabyte -U yugabyte -d wallet \
+#       < db/export/schema.yb.sql      # + partitions.sql + seed.sql
+#
+#   # then the YB-backed wallet-service (host :8029)
+#   docker compose -f docker-compose.yb.yml up -d wallet-service-yb
+#
+# Tear down (keep data):   docker compose -f docker-compose.yb.yml down
+# Nuke data:               docker compose -f docker-compose.yb.yml down -v
+# =============================================================================
+
+name: core-wallet-yb
+
+services:
+  # YugabyteDB single-node (yugabyted). YSQL on :5433 (PostgreSQL-15 wire).
+  # hostname + --advertise_address are PINNED to `yugabyte` so the advertised
+  # node address persists across container recreation — otherwise yugabyted
+  # records the ephemeral container-id hostname in its data dir and refuses to
+  # restart (address mismatch → crash loop).
+  yugabyte:
+    image: yugabytedb/yugabyte:latest
+    container_name: wallet-yugabyte
+    hostname: yugabyte
+    restart: unless-stopped
+    command:
+      - "bin/yugabyted"
+      - "start"
+      - "--background=false"
+      - "--advertise_address=yugabyte"
+      # Cache sequence values per node — mitigates the distributed monotonic
+      # sequence bottleneck (seq_no IDENTITY / nextval('seq_tran')) under load.
+      - "--tserver_flags=ysql_sequence_cache_minval=1000"
+    ports:
+      - "${YB_YSQL_PORT:-5433}:5433"        # YSQL (PostgreSQL wire protocol)
+      - "${YB_UI_PORT:-15433}:15433"        # yugabyted web UI
+      - "${YB_MASTER_UI_PORT:-7001}:7000"   # master admin UI
+    volumes:
+      - yb_data:/root/var
+    healthcheck:
+      test: ["CMD-SHELL", "bin/ysqlsh -h yugabyte -U yugabyte -d yugabyte -c 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+        reservations:
+          cpus: "1"
+          memory: 2G
+    networks:
+      - yb-net
+
+  # wallet-service pointed at YugabyteDB. Same image as the PG-backed service
+  # (built from docker-compose.yml's wallet-service); DB_DSN → yugabyte:5433
+  # DIRECTLY — YB has built-in pooling (YSQL Connection Manager) + smart drivers,
+  # so no external PgBouncer (the single-thread bottleneck seen at 250 TPS).
+  # Host :8029 so it never clashes with the PG-backed wallet-service (:8019).
+  wallet-service-yb:
+    build:
+      context: ./services
+      dockerfile: wallet-service/Dockerfile
+      args:
+        VERSION: ${WALLET_SERVICE_VERSION:-dev}
+    image: core-wallet/wallet-service:dev
+    container_name: wallet-service-yb
+    restart: unless-stopped
+    depends_on:
+      yugabyte:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      GIN_MODE: ${GIN_MODE:-release}
+      HTTP_ADDR: ":8080"
+      DB_DSN: postgres://wallet_app:${WALLET_APP_PASSWORD:-wallet_app_dev}@yugabyte:5433/wallet?sslmode=disable
+      DB_PII_DSN: postgres://wallet_pii_ro:${WALLET_PII_RO_PASSWORD:-wallet_pii_dev}@yugabyte:5433/wallet?sslmode=disable
+      DB_LOCK_TIMEOUT: ${DB_LOCK_TIMEOUT:-1500ms}
+      DB_STATEMENT_TIMEOUT: ${DB_STATEMENT_TIMEOUT:-2500ms}
+      HTTP_REQUEST_TIMEOUT: ${HTTP_REQUEST_TIMEOUT:-10s}
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-50}
+      DB_MIN_CONNS: ${DB_MIN_CONNS:-5}
+      # Trace → the YB stack's own Jaeger (service `jaeger` on yb-net).
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+      OTEL_SERVICE_NAME: wallet-service-yb
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+    ports:
+      - "${WALLET_SERVICE_YB_PORT:-8029}:8080"
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    networks:
+      - yb-net
+
+  # Jaeger — tracing backend for the YB stack (own ports/volume, isolated from
+  # the PG stack's jaeger). UI :16687. wallet-service-yb + outbox-relay export here.
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: wallet-jaeger-yb
+    restart: unless-stopped
+    user: "0"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: badger
+      BADGER_EPHEMERAL: "false"
+      BADGER_DIRECTORY_VALUE: /badger/data
+      BADGER_DIRECTORY_KEY: /badger/key
+    volumes:
+      - yb_jaeger_data:/badger
+    ports:
+      - "${YB_JAEGER_UI_PORT:-16687}:16686"   # web UI
+      - "${YB_OTLP_GRPC_PORT:-4327}:4317"     # OTLP gRPC
+      - "${YB_OTLP_HTTP_PORT:-4328}:4318"     # OTLP HTTP
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1024M
+    networks:
+      - yb-net
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: wallet-zookeeper-yb
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - yb-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: wallet-kafka-yb
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "${YB_KAFKA_HOST_PORT:-29093}:29092"   # host tools (distinct from PG stack's 29092)
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - yb-net
+
+  # Outbox → Kafka relay reading WLT_OUTBOX on YugabyteDB (DB_PORT 5433). Same
+  # image as the PG-stack relay; the idx_outbox_claim index is in schema.yb.sql
+  # so the claim query is an ordered index scan, not a full scan.
+  outbox-relay:
+    build:
+      context: ./services
+      dockerfile: outbox-relay/Dockerfile
+    image: core-wallet/outbox-relay:dev
+    container_name: wallet-outbox-relay-yb
+    restart: unless-stopped
+    depends_on:
+      yugabyte:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DB_HOST: yugabyte
+      DB_PORT: 5433
+      DB_USER: wallet_app
+      DB_PASSWORD: ${WALLET_APP_PASSWORD:-wallet_app_dev}
+      DB_NAME: wallet
+      KAFKA_BROKERS: kafka:9092
+      POLL_INTERVAL: ${RELAY_POLL_INTERVAL:-1s}
+      BATCH_SIZE: ${RELAY_BATCH_SIZE:-100}
+      MAX_RETRIES: ${RELAY_MAX_RETRIES:-5}
+      WORKER_COUNT: ${RELAY_WORKER_COUNT:-4}
+      METRICS_PORT: 9090
+      LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+      OTEL_SERVICE_NAME: outbox-relay-yb
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      ENV: ${APP_ENV:-dev}
+    ports:
+      - "${YB_RELAY_METRICS_PORT:-9091}:9090"
+    networks:
+      - yb-net
+
+volumes:
+  yb_data:
+    name: wallet_yb_data
+    driver: local
+  yb_jaeger_data:
+    name: wallet_yb_jaeger_data
+    driver: local
+
+networks:
+  yb-net:
+    name: core-wallet-yb-net
+    driver: bridge
