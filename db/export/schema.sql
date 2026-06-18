@@ -1156,17 +1156,23 @@ DECLARE
 BEGIN
   WITH
   ledger AS (
+    -- Chain order key = commit time (time_stamp), tiebreak seq_no. seq_no is a
+    -- GENERATED IDENTITY: on single-node PG it is commit-monotonic, but on a
+    -- multi-node YugabyteDB the identity sequence is handed out from per-node
+    -- caches, so seq_no is NOT globally commit-ordered → ordering the running-
+    -- balance chain by seq_no reports false breaks. time_stamp (insert order)
+    -- reflects posting order; seq_no only disambiguates legs of the same tran.
     SELECT internal_key,
            sum(CASE cr_dr_maint_ind WHEN 'CR' THEN tran_amt ELSE -tran_amt END) AS sum_signed,
-           (array_agg(actual_bal_amt ORDER BY post_date DESC, seq_no DESC))[1]  AS last_act
+           (array_agg(actual_bal_amt ORDER BY post_date DESC, time_stamp DESC, seq_no DESC))[1]  AS last_act
     FROM wlt_tran_hist
     GROUP BY internal_key
   ),
   seqd AS (
     SELECT (actual_bal_amt <> previous_bal_amt
               + (CASE cr_dr_maint_ind WHEN 'CR' THEN tran_amt ELSE -tran_amt END)) AS bad_math,
-           (lag(actual_bal_amt) OVER (PARTITION BY internal_key ORDER BY seq_no) IS NOT NULL
-              AND previous_bal_amt <> lag(actual_bal_amt) OVER (PARTITION BY internal_key ORDER BY seq_no)) AS bad_chain
+           (lag(actual_bal_amt) OVER (PARTITION BY internal_key ORDER BY time_stamp, seq_no) IS NOT NULL
+              AND previous_bal_amt <> lag(actual_bal_amt) OVER (PARTITION BY internal_key ORDER BY time_stamp, seq_no)) AS bad_chain
     FROM wlt_tran_hist
     WHERE post_date >= v_month
   ),
