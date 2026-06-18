@@ -24,9 +24,14 @@ WITH
 -- phải đối chiếu với Σ toàn bộ bút toán; nếu chỉ lấy tháng hiện tại thì mỗi đầu
 -- tháng (partition tháng mới còn rỗng) D sẽ báo lệch GIẢ cho mọi ví có số dư cũ.
 ledger AS (
+  -- Chain order = commit time (time_stamp), tiebreak seq_no. seq_no là GENERATED
+  -- IDENTITY: trên PG đơn-node thì tăng theo thứ tự commit, nhưng trên YugabyteDB
+  -- đa-node sequence được cấp từ cache theo node nên seq_no KHÔNG commit-ordered
+  -- toàn cục → order chuỗi running-balance theo seq_no báo lệch GIẢ (F/G). time_stamp
+  -- (thứ tự insert) phản ánh thứ tự post; seq_no chỉ phân biệt các leg cùng 1 giao dịch.
   SELECT internal_key,
          sum(CASE cr_dr_maint_ind WHEN 'CR' THEN tran_amt ELSE -tran_amt END) AS sum_signed,
-         (array_agg(actual_bal_amt ORDER BY post_date DESC, seq_no DESC))[1]  AS last_act
+         (array_agg(actual_bal_amt ORDER BY post_date DESC, time_stamp DESC, seq_no DESC))[1]  AS last_act
   FROM wlt_tran_hist
   GROUP BY internal_key
 ),
@@ -34,8 +39,8 @@ ledger AS (
 seqd AS (
   SELECT (actual_bal_amt <> previous_bal_amt
             + (CASE cr_dr_maint_ind WHEN 'CR' THEN tran_amt ELSE -tran_amt END)) AS bad_math,
-         (lag(actual_bal_amt) OVER (PARTITION BY internal_key ORDER BY seq_no) IS NOT NULL
-            AND previous_bal_amt <> lag(actual_bal_amt) OVER (PARTITION BY internal_key ORDER BY seq_no)) AS bad_chain
+         (lag(actual_bal_amt) OVER (PARTITION BY internal_key ORDER BY time_stamp, seq_no) IS NOT NULL
+            AND previous_bal_amt <> lag(actual_bal_amt) OVER (PARTITION BY internal_key ORDER BY time_stamp, seq_no)) AS bad_chain
   FROM wlt_tran_hist
   WHERE post_date >= date_trunc('month', CURRENT_DATE)::date
 ),
