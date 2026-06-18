@@ -22,8 +22,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-CTN=wallet-postgres
-PW="$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)"
+# DB container + client command + stack-container list are env-overridable so the
+# same wrapper runs against the YugabyteDB stack, e.g.:
+#   K6_DB_CTN=wallet-yb-node1 \
+#   K6_DB_CLI="bin/ysqlsh -h yb-node1 -U yugabyte -d wallet" \
+#   K6_STACK_CTNS="wallet-yb-node1 wallet-yb-node2 wallet-service-yb2"
+# Defaults target the PG17 stack (psql -U postgres).
+CTN="${K6_DB_CTN:-wallet-postgres}"
+DB_CLI="${K6_DB_CLI:-psql -U postgres -d wallet}"
+STACK_CTNS="${K6_STACK_CTNS:-wallet-postgres wallet-pgbouncer wallet-service}"
+PW="$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2- || true)"
 BASE="${BASE_URL:-http://localhost:8099}"
 TS="$(date +%Y%m%d_%H%M%S)"
 REPORT_DIR="deploy/loadtest/reports"
@@ -36,7 +44,7 @@ mkdir -p "$REPORT_DIR"
 # kills the script before the report is written. Set it as a connection GUC via
 # PGOPTIONS (NOT an in-band `SET ...;` — that emits a "SET" status line into -tAc
 # output, corrupting single-value captures like s0). Admin reads, not the hot path.
-q() { docker exec -e PGPASSWORD="$PW" -e PGOPTIONS="-c statement_timeout=0" "$CTN" psql -U postgres -d wallet -tAc "$1"; }
+q() { docker exec -e PGPASSWORD="$PW" -e PGOPTIONS="-c statement_timeout=0" "$CTN" $DB_CLI -tAc "$1"; }
 f2() { printf "%.2f" "${1:-0}"; }
 # fmt_cpu / fmt_mem render a container's HostConfig limits (NanoCpus / Memory bytes,
 # i.e. compose `deploy.resources.limits`) for the report. 0 = no limit configured.
@@ -52,7 +60,7 @@ fmt_mem() { awk -v b="${1:-0}" 'BEGIN{ if(b+0==0){print "unlimited"} else if(b>=
 LIMITS_F="$(mktemp -t k6lim.XXXXXX)"
 STATS="$(mktemp -t k6stats.XXXXXX)"
 STAT_CTNS=""
-for c in wallet-postgres wallet-pgbouncer wallet-service; do
+for c in $STACK_CTNS; do
   docker inspect "$c" >/dev/null 2>&1 || continue
   read -r _nc _mb <<<"$(docker inspect "$c" --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' 2>/dev/null || echo '0 0')"
   printf '%s|%s|%s\n' "$c" "$(fmt_cpu "$_nc")" "$(fmt_mem "$_mb")" >> "$LIMITS_F"
@@ -258,7 +266,7 @@ op_errs="$(printf '%s' "$srv_log" | grep '"msg":"operation failed"' \
   if [ -n "$stats_sum" ]; then
     echo "| Service | Peak CPU | Avg CPU | Peak Mem | Peak Mem% | Samples |"
     echo "|---|---:|---:|---:|---:|---:|"
-    for c in wallet-postgres wallet-pgbouncer wallet-service; do
+    for c in $STACK_CTNS; do
       line="$(printf '%s\n' "$stats_sum" | awk -F'|' -v n="$c" '$1==n{print; exit}')"
       [ -z "$line" ] && continue
       IFS='|' read -r _n _pc _ac _pm _pu _sm <<< "$line"

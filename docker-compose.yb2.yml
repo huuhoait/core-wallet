@@ -1,23 +1,22 @@
 # =============================================================================
-# Core Wallet — YugabyteDB 3-NODE cluster PoC (separate project core-wallet-yb3).
+# Core Wallet — YugabyteDB 2-NODE cluster PoC (project core-wallet-yb2).
 #
-# 3 yugabyted nodes (node2/node3 --join node1) → tablets distribute across nodes,
-# so a posting that touches tablets on different nodes is a REAL distributed
-# transaction (cross-node Raft consensus) — what single-node could not measure.
-# wallet-service-yb connects to yb-node1:5433 (that node coordinates the
-# distributed txn across the cluster). Focused on DB latency/scale: no
-# kafka/relay here (the outbox pipeline was already proven on the single-node
-# stack); outbox rows just stay PENDING during the run.
+# 2 yugabyted nodes (node2 --join node1). With 2 nodes the universe runs RF=1
+# (Raft needs an odd count for quorum — RF=3 needs ≥3 nodes), so data is SHARDED
+# across the 2 nodes but NOT replicated. A posting touching tablets on both nodes
+# is still a cross-node distributed transaction. Lighter than the 3-node setup
+# (no replication consensus + more RAM/node) — better fit for a single 7.7 GB box.
+# wallet-service-yb connects to yb-node1:5433 (coordinates the distributed txn).
 #
-#   docker compose -f docker-compose.yb3.yml up -d yb-node1            # bootstrap
-#   docker compose -f docker-compose.yb3.yml up -d yb-node2 yb-node3   # join
+#   docker compose -f docker-compose.yb2.yml up -d yb-node1          # bootstrap
+#   docker compose -f docker-compose.yb2.yml up -d yb-node2          # join
 #   # init: create db + roles + schema.yb.sql + partitions + seed + pii_dek
-#   docker compose -f docker-compose.yb3.yml up -d wallet-service-yb   # :8029
+#   docker compose -f docker-compose.yb2.yml up -d wallet-service-yb # :8029
 #
-# Nuke:  docker compose -f docker-compose.yb3.yml down -v
+# Nuke:  docker compose -f docker-compose.yb2.yml down -v
 # =============================================================================
 
-name: core-wallet-yb3
+name: core-wallet-yb2
 
 x-ybnode: &ybnode
   image: yugabytedb/yugabyte:latest
@@ -25,13 +24,13 @@ x-ybnode: &ybnode
   deploy:
     resources:
       limits:
-        cpus: "2"
-        memory: 2000M
+        cpus: "4"
+        memory: 4096M
       reservations:
-        cpus: "1"
-        memory: 768M
+        cpus: "2"
+        memory: 2G
   networks:
-    - yb3-net
+    - yb2-net
 
 services:
   yb-node1:
@@ -45,11 +44,15 @@ services:
       - "--advertise_address=yb-node1"
       - "--tserver_flags=ysql_sequence_cache_minval=1000"
     ports:
-      - "${YB3_YSQL_PORT:-5433}:5433"     # YSQL on node1 (PG wire)
-      - "${YB3_UI_PORT:-15433}:15433"     # yugabyted UI
-      - "${YB3_MASTER_UI_PORT:-7001}:7000"
+      - "${YB2_YSQL_PORT:-5433}:5433"     # YSQL on node1 (PG wire)
+      - "${YB2_UI_PORT:-15433}:15433"     # yugabyted UI
+      - "${YB2_MASTER_UI_PORT:-7001}:7000"
     volumes:
-      - yb3_node1:/root/var
+      - yb2_node1:/root/var
+    networks:
+      yb2-net:
+        aliases:
+          - yb-cluster
     healthcheck:
       test: ["CMD-SHELL", "bin/ysqlsh -h yb-node1 -U yugabyte -d yugabyte -c 'SELECT 1' || exit 1"]
       interval: 10s
@@ -63,7 +66,7 @@ services:
     hostname: yb-node2
     depends_on:
       yb-node1:
-        condition: service_healthy
+        condition: service_started
     command:
       - "bin/yugabyted"
       - "start"
@@ -72,32 +75,13 @@ services:
       - "--join=yb-node1"
       - "--tserver_flags=ysql_sequence_cache_minval=1000"
     volumes:
-      - yb3_node2:/root/var
+      - yb2_node2:/root/var
+    networks:
+      yb2-net:
+        aliases:
+          - yb-cluster
     healthcheck:
       test: ["CMD-SHELL", "bin/ysqlsh -h yb-node2 -U yugabyte -d yugabyte -c 'SELECT 1' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 40
-      start_period: 60s
-
-  yb-node3:
-    <<: *ybnode
-    container_name: wallet-yb-node3
-    hostname: yb-node3
-    depends_on:
-      yb-node1:
-        condition: service_healthy
-    command:
-      - "bin/yugabyted"
-      - "start"
-      - "--background=false"
-      - "--advertise_address=yb-node3"
-      - "--join=yb-node1"
-      - "--tserver_flags=ysql_sequence_cache_minval=1000"
-    volumes:
-      - yb3_node3:/root/var
-    healthcheck:
-      test: ["CMD-SHELL", "bin/ysqlsh -h yb-node3 -U yugabyte -d yugabyte -c 'SELECT 1' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 40
@@ -110,21 +94,19 @@ services:
       args:
         VERSION: ${WALLET_SERVICE_VERSION:-dev}
     image: core-wallet/wallet-service:dev
-    container_name: wallet-service-yb3
+    container_name: wallet-service-yb2
     restart: unless-stopped
     depends_on:
       yb-node1:
         condition: service_healthy
       yb-node2:
         condition: service_healthy
-      yb-node3:
-        condition: service_healthy
     environment:
       APP_ENV: ${APP_ENV:-dev}
       GIN_MODE: ${GIN_MODE:-release}
       HTTP_ADDR: ":8080"
-      DB_DSN: postgres://wallet_app:${WALLET_APP_PASSWORD:-wallet_app_dev}@yb-node1:5433/wallet?sslmode=disable
-      DB_PII_DSN: postgres://wallet_pii_ro:${WALLET_PII_RO_PASSWORD:-wallet_pii_dev}@yb-node1:5433/wallet?sslmode=disable
+      DB_DSN: postgres://wallet_app:${WALLET_APP_PASSWORD:-wallet_app_dev}@yb-cluster:5433/wallet?sslmode=disable
+      DB_PII_DSN: postgres://wallet_pii_ro:${WALLET_PII_RO_PASSWORD:-wallet_pii_dev}@yb-cluster:5433/wallet?sslmode=disable
       DB_LOCK_TIMEOUT: ${DB_LOCK_TIMEOUT:-1500ms}
       DB_STATEMENT_TIMEOUT: ${DB_STATEMENT_TIMEOUT:-2500ms}
       HTTP_REQUEST_TIMEOUT: ${HTTP_REQUEST_TIMEOUT:-10s}
@@ -141,17 +123,15 @@ services:
           cpus: "0.5"
           memory: 256M
     networks:
-      - yb3-net
+      - yb2-net
 
 volumes:
-  yb3_node1:
-    name: wallet_yb3_node1
-  yb3_node2:
-    name: wallet_yb3_node2
-  yb3_node3:
-    name: wallet_yb3_node3
+  yb2_node1:
+    name: wallet_yb2_node1
+  yb2_node2:
+    name: wallet_yb2_node2
 
 networks:
-  yb3-net:
-    name: core-wallet-yb3-net
+  yb2-net:
+    name: core-wallet-yb2-net
     driver: bridge
