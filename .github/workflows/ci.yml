@@ -15,6 +15,12 @@ env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository_owner }}/core-wallet
 
+# Least-privilege default GITHUB_TOKEN for every job (CodeQL
+# actions/missing-workflow-permissions). No CI job writes to the repo; the
+# deploy workflow (cd-k8s.yml) declares its own elevated scopes separately.
+permissions:
+  contents: read
+
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
   # Go: lint + vet + test + build
