@@ -113,7 +113,7 @@ func (r *PgWalletRepo) SearchAccounts(ctx context.Context, query string, limit i
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
-	out := make([]domain.AccountSearchItem, 0, limit)
+	out := make([]domain.AccountSearchItem, 0, min(limit, domain.MaxAccountSearchSize))
 	for rows.Next() {
 		var it domain.AccountSearchItem
 		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
@@ -146,7 +146,7 @@ func (r *PgWalletRepo) SearchAccountsFull(ctx context.Context, query string, lim
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
-	out := make([]domain.AccountSearchItem, 0, limit)
+	out := make([]domain.AccountSearchItem, 0, min(limit, domain.MaxAccountSearchSize))
 	for rows.Next() {
 		var it domain.AccountSearchItem
 		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
@@ -185,7 +185,7 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 	}
 	defer rows.Close()
 
-	out := make([]domain.TxEntry, 0, q.Limit)
+	out := make([]domain.TxEntry, 0, min(q.Limit, domain.MaxTxPageSize))
 	for rows.Next() {
 		var e domain.TxEntry
 		if err := rows.Scan(

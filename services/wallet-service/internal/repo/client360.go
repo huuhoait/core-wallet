@@ -226,7 +226,7 @@ func (r *PgWalletRepo) ListClientsFull(ctx context.Context, q domain.ClientListQ
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
-	out := make([]domain.ClientFullView, 0, q.Limit)
+	out := make([]domain.ClientFullView, 0, min(q.Limit, domain.MaxClientPageSize))
 	for rows.Next() {
 		var c domain.ClientFullView
 		if err := rows.Scan(

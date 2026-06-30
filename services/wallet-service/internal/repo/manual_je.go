@@ -121,7 +121,7 @@ func (r *PgWalletRepo) ListManualJE(ctx context.Context, q domain.ManualJEListQu
 	}
 	defer rows.Close()
 
-	out := make([]domain.ManualJEView, 0, q.Limit)
+	out := make([]domain.ManualJEView, 0, min(q.Limit, domain.MaxManualJEPageSize))
 	for rows.Next() {
 		v, err := scanManualJEHeader(rows)
 		if err != nil {
