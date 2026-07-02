@@ -113,7 +113,16 @@ func (r *PgWalletRepo) SearchAccounts(ctx context.Context, query string, limit i
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
-	out := make([]domain.AccountSearchItem, 0, min(limit, domain.MaxAccountSearchSize))
+
+	safeLimit := limit
+	if safeLimit < 0 {
+		safeLimit = 0
+	}
+	if safeLimit > domain.MaxAccountSearchSize {
+		safeLimit = domain.MaxAccountSearchSize
+	}
+
+	out := make([]domain.AccountSearchItem, 0, safeLimit)
 	for rows.Next() {
 		var it domain.AccountSearchItem
 		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
