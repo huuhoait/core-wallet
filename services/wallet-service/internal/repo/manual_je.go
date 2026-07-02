@@ -115,13 +115,22 @@ func (r *PgWalletRepo) ListManualJE(ctx context.Context, q domain.ManualJEListQu
 		 ORDER BY je_id DESC
 		 LIMIT $3
 	`
-	rows, err := r.readPool.Query(ctx, sql, q.Status, q.BeforeID, q.Limit)
+
+	limit := q.Limit
+	if limit <= 0 {
+		limit = domain.DefaultManualJEPageSize
+	}
+	if limit > domain.MaxManualJEPageSize {
+		limit = domain.MaxManualJEPageSize
+	}
+
+	rows, err := r.readPool.Query(ctx, sql, q.Status, q.BeforeID, limit)
 	if err != nil {
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
 
-	out := make([]domain.ManualJEView, 0, min(q.Limit, domain.MaxManualJEPageSize))
+	out := make([]domain.ManualJEView, 0, limit)
 	for rows.Next() {
 		v, err := scanManualJEHeader(rows)
 		if err != nil {
