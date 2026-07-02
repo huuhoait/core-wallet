@@ -5,19 +5,62 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
 	"github.com/huuhoait/core-wallet/outbox-relay/internal/domain"
 )
 
+// batchCommitTimeout bounds the fresh context used to commit a claimed batch's
+// outcome. It is deliberately independent of the caller's (possibly cancelled)
+// ctx so the final in-flight batch still drains on shutdown; the DB pool's own
+// statement/lock timeouts remain the inner bound on the commit itself.
+const batchCommitTimeout = 5 * time.Second
+
+// RetryBackoff bounds when a FAILED outbox row becomes eligible for re-claim.
+// A FAILED row is skipped until Base*2^(attempts-1) (capped at Max) has elapsed
+// since its last_attempt_at, giving exponential backoff so a transient broker
+// outage does not burn the whole attempt budget in milliseconds and DEAD the
+// events. With Base=5s, Max=5m and MaxAttempts=10 the total window from first
+// failure to DEAD is ~20 minutes (5+10+20+40+80+160+300+300+300s).
+type RetryBackoff struct {
+	Base time.Duration
+	Max  time.Duration
+}
+
+// Delay returns how long a row that has now failed `attempts` times waits before
+// it is eligible for re-claim: Base*2^(attempts-1), capped at Max. It mirrors the
+// SQL claim predicate in repo.fetchPending (kept in lockstep) and is used both to
+// surface the next-retry ETA in logs and to make the schedule unit-testable. The
+// exponent is bounded to avoid overflow, matching the SQL LEAST(...,20) guard.
+func (b RetryBackoff) Delay(attempts int) time.Duration {
+	exp := attempts - 1
+	if exp < 0 {
+		exp = 0
+	}
+	if exp > 20 {
+		exp = 20
+	}
+	d := time.Duration(float64(b.Base) * math.Pow(2, float64(exp)))
+	if b.Max > 0 && (d > b.Max || d < 0) { // d<0 guards int64 overflow
+		return b.Max
+	}
+	return d
+}
+
 // PollingSettings carries the runtime knobs the polling relay needs. The
 // composition root fills it from config so the usecase never imports the config
 // package.
 type PollingSettings struct {
-	WorkerCount  int
-	BatchSize    int
-	MaxRetries   int
+	WorkerCount int
+	BatchSize   int
+	// MaxAttempts is the DEAD threshold: a row that fails to publish this many
+	// times is parked DEAD (no longer retried). Distinct from the Kafka producer's
+	// per-send retry budget.
+	MaxAttempts int
+	// Backoff governs how long a FAILED row waits before it is re-claimed.
+	Backoff      RetryBackoff
 	PollInterval time.Duration
 }
 
@@ -97,7 +140,7 @@ func (r *PollingRelay) run(ctx context.Context, id int) {
 func (r *PollingRelay) processBatch(ctx context.Context) (int, error) {
 	start := time.Now()
 
-	batch, err := r.repo.ClaimBatch(ctx, r.cfg.BatchSize)
+	batch, err := r.repo.ClaimBatch(ctx, r.cfg.BatchSize, r.cfg.Backoff)
 	if err != nil {
 		return 0, err
 	}
@@ -120,18 +163,38 @@ func (r *PollingRelay) processBatch(ctx context.Context) (int, error) {
 			failIDs = append(failIDs, e.EventID)
 			lastErr = perr.Error()
 			r.metrics.IncrementErrors("publish")
-			r.log.Warn("publish failed — will retry",
-				slog.Any("error", perr),
-				slog.String("event_uuid", e.EventUUID),
-				slog.String("event_type", e.EventType),
-				slog.Int("attempts", e.Attempts))
+			// This failure is the (Attempts+1)th; mirror the SQL DEAD rule
+			// (attempts+1 >= MaxAttempts) so a DEAD transition is never silent.
+			if e.Attempts+1 >= r.cfg.MaxAttempts {
+				r.metrics.IncrementDead()
+				r.log.Error("outbox event exhausted retries — parking DEAD",
+					slog.Any("error", perr),
+					slog.String("event_uuid", e.EventUUID),
+					slog.String("event_type", e.EventType),
+					slog.Int("attempts", e.Attempts+1),
+					slog.Int("max_attempts", r.cfg.MaxAttempts))
+			} else {
+				r.log.Warn("publish failed — will retry",
+					slog.Any("error", perr),
+					slog.String("event_uuid", e.EventUUID),
+					slog.String("event_type", e.EventType),
+					slog.Int("attempts", e.Attempts+1),
+					slog.Duration("retry_in", r.cfg.Backoff.Delay(e.Attempts+1)))
+			}
 			continue
 		}
 		sent = append(sent, domain.SentRef{EventID: e.EventID, Partition: partition, Offset: offset})
 		r.metrics.IncrementSuccess()
 	}
 
-	if err := batch.Commit(ctx, sent, failIDs, lastErr, r.cfg.MaxRetries); err != nil {
+	// Persisting the batch outcome must survive shutdown: once we have published to
+	// Kafka, committing on a cancelled ctx would roll back the SENT marks and the
+	// same events would be re-published on restart (needless duplicates). Commit on
+	// a fresh, bounded context so the final in-flight batch always drains — mirrors
+	// the withTx fresh-context cleanup pattern. Still at-least-once, never drops.
+	commitCtx, cancel := context.WithTimeout(context.Background(), batchCommitTimeout)
+	defer cancel()
+	if err := batch.Commit(commitCtx, sent, failIDs, lastErr, r.cfg.MaxAttempts); err != nil {
 		return 0, fmt.Errorf("polling: commit batch: %w", err)
 	}
 

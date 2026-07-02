@@ -55,9 +55,21 @@ type Config struct {
 	// Worker (polling mode)
 	PollInterval time.Duration
 	BatchSize    int
-	MaxRetries   int
-	RetryDelay   time.Duration
-	WorkerCount  int
+	// MaxRetries is the Kafka producer's per-send retry budget (sarama
+	// Producer.Retry.Max) — how many times a single publish is retried inside the
+	// broker client before it surfaces an error to the relay.
+	MaxRetries int
+	// MaxAttempts is the outbox DEAD threshold: a row is parked DEAD once it has
+	// failed to publish this many times (relay-level attempts). Kept distinct from
+	// MaxRetries so the durable retry envelope can be widened without inflating the
+	// per-send broker retry budget.
+	MaxAttempts int
+	// RetryDelay is the BASE of the exponential re-claim backoff: a FAILED row is
+	// not re-claimed until base*2^(attempts-1) has elapsed since last_attempt_at.
+	RetryDelay time.Duration
+	// RetryMaxDelay caps that backoff so it plateaus instead of growing unbounded.
+	RetryMaxDelay time.Duration
+	WorkerCount   int
 
 	// ShutdownTimeout bounds graceful shutdown: how long to let in-flight work
 	// drain (workers / consumer / connector pause) before forcing exit, so a
@@ -190,6 +202,9 @@ func LoadConfig() (*Config, error) {
 	if c.MaxRetries, err = getEnvInt("MAX_RETRIES", 3); err != nil {
 		return nil, err
 	}
+	if c.MaxAttempts, err = getEnvInt("MAX_ATTEMPTS", 10); err != nil {
+		return nil, err
+	}
 	if c.WorkerCount, err = getEnvInt("WORKER_COUNT", 4); err != nil {
 		return nil, err
 	}
@@ -200,6 +215,9 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	if c.RetryDelay, err = getEnvDuration("RETRY_DELAY", 5*time.Second); err != nil {
+		return nil, err
+	}
+	if c.RetryMaxDelay, err = getEnvDuration("RETRY_MAX_DELAY", 5*time.Minute); err != nil {
 		return nil, err
 	}
 	if c.ShutdownTimeout, err = getEnvDuration("SHUTDOWN_TIMEOUT", 15*time.Second); err != nil {
@@ -217,6 +235,16 @@ func LoadConfig() (*Config, error) {
 	}
 	if c.BatchSize < 1 {
 		return nil, fmt.Errorf("config: BATCH_SIZE must be >= 1, got %d", c.BatchSize)
+	}
+	if c.MaxAttempts < 1 {
+		return nil, fmt.Errorf("config: MAX_ATTEMPTS must be >= 1, got %d", c.MaxAttempts)
+	}
+	if c.RetryDelay <= 0 {
+		return nil, fmt.Errorf("config: RETRY_DELAY must be > 0, got %s", c.RetryDelay)
+	}
+	// A cap below the base would clamp every wait to the base; treat as misconfig.
+	if c.RetryMaxDelay < c.RetryDelay {
+		return nil, fmt.Errorf("config: RETRY_MAX_DELAY (%s) must be >= RETRY_DELAY (%s)", c.RetryMaxDelay, c.RetryDelay)
 	}
 	return c, nil
 }

@@ -101,7 +101,8 @@ func runPolling(ctx context.Context, cancel context.CancelFunc, cfg *config.Conf
 	relay := usecase.NewPollingRelay(outboxRepo, producer, m, usecase.PollingSettings{
 		WorkerCount:  cfg.WorkerCount,
 		BatchSize:    cfg.BatchSize,
-		MaxRetries:   cfg.MaxRetries,
+		MaxAttempts:  cfg.MaxAttempts,
+		Backoff:      usecase.RetryBackoff{Base: cfg.RetryDelay, Max: cfg.RetryMaxDelay},
 		PollInterval: cfg.PollInterval,
 	}, logger)
 	relay.Start(ctx)
