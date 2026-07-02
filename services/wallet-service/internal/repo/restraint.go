@@ -94,7 +94,15 @@ func (r *PgWalletRepo) ListRestraints(ctx context.Context, q domain.RestraintLis
 	}
 	defer rows.Close()
 
-	out := make([]domain.RestraintView, 0, q.Limit)
+	capLimit := q.Limit
+	if capLimit < 0 {
+		capLimit = 0
+	}
+	if capLimit > domain.MaxRestraintPageSize {
+		capLimit = domain.MaxRestraintPageSize
+	}
+
+	out := make([]domain.RestraintView, 0, capLimit)
 	for rows.Next() {
 		v, err := scanRestraint(rows)
 		if err != nil {

@@ -194,6 +194,14 @@ func (r *PgWalletRepo) listRestraintsByClient(ctx context.Context, clientNo stri
 // (raw name/CCCD + decrypted phone/email), read via wallet_pii_ro. Mirrors
 // ListClients (masked) but on the privileged path. Keyset by client_no ascending.
 func (r *PgWalletRepo) ListClientsFull(ctx context.Context, q domain.ClientListQuery) ([]domain.ClientFullView, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = domain.DefaultClientPageSize
+	}
+	if limit > domain.MaxClientPageSize {
+		limit = domain.MaxClientPageSize
+	}
+
 	const sql = `
 		SELECT c.client_no, c.client_name, c.client_type, c.global_id, c.global_id_type,
 		       c.country_loc, c.country_citizen, c.client_grp, c.acct_exec, c.status,
@@ -221,12 +229,12 @@ func (r *PgWalletRepo) ListClientsFull(ctx context.Context, q domain.ClientListQ
 		 ORDER BY c.client_no ASC
 		 LIMIT $1
 	`
-	rows, err := r.piiPool.Query(ctx, sql, q.Limit, q.AfterNo, q.Status, q.ClientType)
+	rows, err := r.piiPool.Query(ctx, sql, limit, q.AfterNo, q.Status, q.ClientType)
 	if err != nil {
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
-	out := make([]domain.ClientFullView, 0, q.Limit)
+	out := make([]domain.ClientFullView, 0, limit)
 	for rows.Next() {
 		var c domain.ClientFullView
 		if err := rows.Scan(

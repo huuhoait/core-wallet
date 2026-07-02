@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -157,6 +158,15 @@ func LoadConfig() (*Config, error) {
 	}
 	if minConns, err = getEnvInt("DB_MIN_CONNS", 5); err != nil {
 		return nil, err
+	}
+	// Bound the env-supplied pool sizes before narrowing int→int32 so a bogus
+	// value can't overflow into a negative/garbage pool size (CodeQL
+	// go/incorrect-integer-conversion).
+	if maxConns < 1 || maxConns > math.MaxInt32 {
+		return nil, fmt.Errorf("DB_MAX_CONNS out of range: %d", maxConns)
+	}
+	if minConns < 0 || minConns > math.MaxInt32 {
+		return nil, fmt.Errorf("DB_MIN_CONNS out of range: %d", minConns)
 	}
 	c.DBMaxConns, c.DBMinConns = int32(maxConns), int32(minConns)
 	if c.DBMaxConnLifetime, err = getEnvDuration("DB_MAX_CONN_LIFETIME", 30*time.Minute); err != nil {

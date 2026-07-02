@@ -113,7 +113,16 @@ func (r *PgWalletRepo) SearchAccounts(ctx context.Context, query string, limit i
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
-	out := make([]domain.AccountSearchItem, 0, limit)
+
+	safeLimit := limit
+	if safeLimit < 0 {
+		safeLimit = 0
+	}
+	if safeLimit > domain.MaxAccountSearchSize {
+		safeLimit = domain.MaxAccountSearchSize
+	}
+
+	out := make([]domain.AccountSearchItem, 0, safeLimit)
 	for rows.Next() {
 		var it domain.AccountSearchItem
 		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
@@ -146,7 +155,7 @@ func (r *PgWalletRepo) SearchAccountsFull(ctx context.Context, query string, lim
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
-	out := make([]domain.AccountSearchItem, 0, limit)
+	out := make([]domain.AccountSearchItem, 0, min(limit, domain.MaxAccountSearchSize))
 	for rows.Next() {
 		var it domain.AccountSearchItem
 		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
@@ -164,6 +173,15 @@ func (r *PgWalletRepo) SearchAccountsFull(ctx context.Context, query string, lim
 // touched the account), newest-first, keyset-paginated by seq_no. An existing
 // account with no entries returns an empty slice; an unknown account → 404.
 func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuery) ([]domain.TxEntry, error) {
+	// Defense-in-depth: bound user-influenced limit at allocation/query sink.
+	safeLimit := q.Limit
+	if safeLimit <= 0 {
+		safeLimit = domain.DefaultTxPageSize
+	}
+	if safeLimit > domain.MaxTxPageSize {
+		safeLimit = domain.MaxTxPageSize
+	}
+
 	// post_date range ($4/$5) also drives partition pruning on WLT_TRAN_HIST.
 	const sql = `
 		SELECT h.seq_no, h.tran_internal_id, h.tran_type, h.cr_dr_maint_ind,
@@ -179,13 +197,13 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 		 ORDER BY h.seq_no DESC
 		 LIMIT $3
 	`
-	rows, err := r.readPool.Query(ctx, sql, q.AcctNo, q.BeforeSeq, q.Limit, q.From, q.To) // replica
+	rows, err := r.readPool.Query(ctx, sql, q.AcctNo, q.BeforeSeq, safeLimit, q.From, q.To) // replica
 	if err != nil {
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
 
-	out := make([]domain.TxEntry, 0, q.Limit)
+	out := make([]domain.TxEntry, 0, safeLimit)
 	for rows.Next() {
 		var e domain.TxEntry
 		if err := rows.Scan(
