@@ -242,7 +242,15 @@ func (r *PgWalletRepo) ListClients(ctx context.Context, q domain.ClientListQuery
 	}
 	defer rows.Close()
 
-	out := make([]domain.ClientView, 0, min(q.Limit, domain.MaxClientPageSize))
+	capHint := q.Limit
+	if capHint <= 0 {
+		capHint = domain.DefaultClientPageSize
+	}
+	if capHint > domain.MaxClientPageSize {
+		capHint = domain.MaxClientPageSize
+	}
+
+	out := make([]domain.ClientView, 0, capHint)
 	for rows.Next() {
 		var c domain.ClientView
 		if err := rows.Scan(
