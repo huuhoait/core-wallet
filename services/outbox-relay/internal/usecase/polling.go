@@ -35,13 +35,9 @@ type RetryBackoff struct {
 // surface the next-retry ETA in logs and to make the schedule unit-testable. The
 // exponent is bounded to avoid overflow, matching the SQL LEAST(...,20) guard.
 func (b RetryBackoff) Delay(attempts int) time.Duration {
-	exp := attempts - 1
-	if exp < 0 {
-		exp = 0
-	}
-	if exp > 20 {
-		exp = 20
-	}
+	// Clamp the exponent: never negative, bounded at 20 to avoid overflow
+	// (mirrors the SQL LEAST(GREATEST(attempts-1, 0), 20) guard).
+	exp := min(max(attempts-1, 0), 20)
 	d := time.Duration(float64(b.Base) * math.Pow(2, float64(exp)))
 	if b.Max > 0 && (d > b.Max || d < 0) { // d<0 guards int64 overflow
 		return b.Max
