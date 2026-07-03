@@ -19,9 +19,20 @@
 -- =============================================================================
 \set ON_ERROR_STOP on
 
+-- SECURITY DEFINER: creating a child partition requires ownership of the parent
+-- table, which wallet_app does not hold (it has only DML grants). The function is
+-- owned by the superuser that restores this file (which owns the parents), so as
+-- DEFINER it can CREATE the partitions while the caller needs only EXECUTE. This
+-- lets the in-process partition roll-forward janitor call it as wallet_app on the
+-- ordinary app pool — no DDL privilege is granted to wallet_app itself. Pin
+-- search_path (mirrors every other SECURITY DEFINER function in schema.sql) so a
+-- caller-controlled path cannot hijack an unqualified name inside the body.
 CREATE OR REPLACE FUNCTION fn_ensure_wallet_partitions(p_from date, p_to date)
 RETURNS void
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_catalog'
+AS $$
 DECLARE
   c_hash_modulus constant int := 8;    -- hash sub-partitions per wlt_tran_hist month
                                         -- (was 32: cut to 8 to reduce the partition
@@ -62,6 +73,14 @@ BEGIN
   END LOOP;
 END $$;
 
+-- Let wallet_app EXECUTE the roller (it runs as DEFINER, above). This GRANT lives
+-- HERE, not in schema.sql's ACL block, because docker-init loads schema.sql FIRST
+-- (01-schema) — the function does not exist until this file (02-partitions) runs,
+-- so a GRANT in schema.sql would fail with "function does not exist". Being
+-- explicit also survives a future `REVOKE EXECUTE ON ALL FUNCTIONS ... FROM PUBLIC`
+-- hardening pass (the roller keeps working; PUBLIC loses the implicit grant).
+GRANT EXECUTE ON FUNCTION public.fn_ensure_wallet_partitions(p_from date, p_to date) TO wallet_app;
+
 -- DEFAULT (catch-all) partitions — one per parent, created once. Keep them EMPTY
 -- in production by pre-creating monthly partitions ahead of time (call the
 -- function below on a schedule); a DEFAULT holding rows blocks adding a new
@@ -71,8 +90,13 @@ CREATE TABLE IF NOT EXISTS public.wlt_outbox_default           PARTITION OF publ
 CREATE TABLE IF NOT EXISTS public.fm_client_audit_log_default PARTITION OF public.fm_client_audit_log DEFAULT;
 CREATE TABLE IF NOT EXISTS public.wlt_tran_hist_default        PARTITION OF public.wlt_tran_hist        DEFAULT;
 
--- Initial window: 2026-05 .. 2026-10 inclusive (matches the prior baked schema).
--- Adjust / re-run as time rolls forward (e.g. monthly: SELECT
--- fn_ensure_wallet_partitions(date_trunc('month', now())::date,
---                             (date_trunc('month', now()) + interval '3 months')::date);)
-SELECT fn_ensure_wallet_partitions('2026-05-01', '2026-11-01');
+-- Initial window: 2026-05 .. 2027-04 inclusive (12 months). Widened from the
+-- former 6-month baseline (…2026-10) so a fresh restore ships a full year of
+-- runway even before the roller ticks — the old window put the DEFAULT-partition
+-- cliff at 2026-11-01. The DURABLE fix is the recurring roll-forward: the
+-- in-process partition janitor (janitor.NewPartition) re-runs this every day to
+-- keep >= PARTITION_LOOKAHEAD_MONTHS months of partitions ahead, e.g.:
+--   SELECT fn_ensure_wallet_partitions(date_trunc('month', now())::date,
+--          (date_trunc('month', now()) + interval '3 months')::date);
+-- It is idempotent (CREATE … IF NOT EXISTS), so many replicas may run it safely.
+SELECT fn_ensure_wallet_partitions('2026-05-01', '2027-05-01');
