@@ -31,7 +31,7 @@ type Server struct {
 }
 
 // New builds the gin engine + applies middleware + mounts routes.
-func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *slog.Logger) (*Server, error) {
+func New(cfg config.HTTP, jwtCfg config.JWT, gwCfg config.GatewayAuth, svc *usecase.WalletService, log *slog.Logger) (*Server, error) {
 	if cfg.Mode == "" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -58,13 +58,24 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 		return nil, err
 	}
 
+	// Kong-gateway trust: decode the gateway-forwarded (already-verified) JWT and
+	// extract the authoritative actor. MUST run BEFORE AuditContext so resolveActor
+	// sees the gateway actor. Signature is NOT re-verified here — Kong owns that.
+	gwMW := middleware.GatewayConfig{
+		Enforce:            gwCfg.Enforce,
+		JWTHeader:          gwCfg.JWTHeader,
+		ActorClaim:         gwCfg.ActorClaim,
+		ActorClaimFallback: gwCfg.ActorClaimFallback,
+	}
+
 	r := gin.New()
 	r.Use(
-		gin.Logger(),                    // simple access log
-		middleware.Recovery(),           // panic → 500 envelope
+		gin.Logger(),          // simple access log
+		middleware.Recovery(), // panic → 500 envelope
 		middleware.RequestID(),
 		middleware.FlowID(), // FlowId header/?flowId= → traceparent (before otelgin)
 		otelgin.Middleware(cfg.ServiceName),
+		middleware.GatewayIdentity(gwMW), // Kong JWT claim forward → authoritative actor
 		middleware.AuditContext(),
 	)
 	if cfg.MetricsEnabled {
@@ -93,7 +104,11 @@ func New(cfg config.HTTP, jwtCfg config.JWT, svc *usecase.WalletService, log *sl
 	// and require a valid JWT when JWT_ENABLED=true.
 	// Everything below this group inherits middleware.WithTimeout(cfg.RequestTimeout).
 	v1 := r.Group("/v1")
-	v1.Use(middleware.WithTimeout(cfg.RequestTimeout), jwtMW)
+	// EnforceGatewayIdentity rejects mutating requests (POST/PUT/PATCH/DELETE) with
+	// no gateway actor when enforcement is on (staging/prod). Read-only GETs pass;
+	// the two ops POST reads (/ops/accounts/balance/batch) are intentionally also
+	// covered — they are privileged ops endpoints that should carry an identity.
+	v1.Use(middleware.WithTimeout(cfg.RequestTimeout), jwtMW, middleware.EnforceGatewayIdentity(gwCfg.Enforce))
 	{
 		// ── Finance: money movement + ledger reads ──
 		finance := v1.Group("/finance")

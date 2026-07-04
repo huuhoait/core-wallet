@@ -122,14 +122,24 @@ func FromGin(c *gin.Context) domain.AuditContext {
 }
 
 func resolveActor(c *gin.Context) string {
-	// Prefer the JWT subject when this service validated the token itself
-	// (US-9.10). Fall back to a gateway-set header for the JWT-disabled path
-	// (dev / unit tests / staged rollout).
+	// AUTHORITATIVE: the identity Kong forwarded, decoded from the already-
+	// verified JWT by GatewayIdentity. This is the primary trust path and a
+	// client CANNOT override it — the spoofable X-Caller-Subject header below is
+	// consulted only when neither the gateway nor a self-validated JWT produced
+	// an actor (i.e. local dev with GATEWAY_AUTH_ENFORCE=false and JWT disabled).
+	if actor, ok := GatewayActor(c); ok {
+		return actor
+	}
+	// Defense-in-depth: when this service ALSO validates the token itself
+	// (JWT_ENABLED, US-9.10), trust its verified subject.
 	if v, ok := c.Get(CtxKeyJWTSubject); ok {
 		if s, _ := v.(string); s != "" {
 			return s
 		}
 	}
+	// Dev/local fallback only. On enforced (staging/prod) mutating routes this
+	// branch is unreachable: EnforceGatewayIdentity already rejected the request
+	// with 401 before the handler runs.
 	if v := strings.TrimSpace(c.GetHeader("X-Caller-Subject")); v != "" {
 		return v
 	}
