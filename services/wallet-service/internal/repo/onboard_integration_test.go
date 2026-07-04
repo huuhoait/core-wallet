@@ -60,7 +60,13 @@ func itRepo(t *testing.T) (*PgWalletRepo, *pgxpool.Pool) {
 		t.Skipf("test DB unreachable (%v) — run `docker compose up -d`", err)
 	}
 	t.Cleanup(pool.Close)
-	return NewPgWalletRepo(pool, nil, nil, 5*time.Second, 3*time.Second, 1), pool
+	// PII DEK: KMS-injected via PII_DEK in prod; a fixed dev key here. Passed to the
+	// repo so encrypt/decrypt SPs get app.pii_dek per-TX — NOT via ALTER DATABASE.
+	dek := os.Getenv("PII_DEK")
+	if dek == "" {
+		dek = "dev-test-pii-dek-do-not-use-in-prod"
+	}
+	return NewPgWalletRepo(pool, nil, nil, 5*time.Second, 3*time.Second, 1, dek), pool
 }
 
 // dropClient removes a client and all its rows at test end (audit log included).

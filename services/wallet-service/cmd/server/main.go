@@ -142,13 +142,36 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// ---- security fail-fast (prod) -----------------------------------------
+	// Kong authenticates upstream and forwards the identity; this service trusts
+	// it. In prod, refuse to boot if enforcement is off — that would silently
+	// accept unauthenticated writes with unattributable (SYSTEM) audit rows.
+	if cfg.Env == "prod" && !cfg.Gateway.Enforce {
+		return fmt.Errorf("refusing to boot: APP_ENV=prod requires GATEWAY_AUTH_ENFORCE=true")
+	}
+	// The PII DEK is injected by the on-prem KMS as PII_DEK. In prod it is
+	// mandatory: without it every encrypt/decrypt path raises PII_DEK_NOT_SET.
+	if cfg.Env == "prod" && cfg.PII.DEK == "" {
+		return fmt.Errorf("refusing to boot: APP_ENV=prod requires PII_DEK to be injected (on-prem KMS)")
+	}
+	// Local dev has no gateway in front, so relax enforcement (APP_ENV=dev) → a
+	// bare `make run` / `docker compose up` works without minting a JWT. Extraction
+	// still runs, so a forwarded token is honoured; staging/prod keep the config.
+	gwCfg := cfg.Gateway
+	if cfg.Env == "dev" {
+		gwCfg.Enforce = false
+	}
+
 	logger.Info("config loaded",
 		slog.String("env", cfg.Env),
 		slog.String("http.addr", cfg.HTTP.Addr),
 		slog.Bool("otel.enabled", cfg.Otel.Enabled),
 		slog.Bool("metrics.enabled", cfg.HTTP.MetricsEnabled),
 		slog.Bool("jwt.enabled", cfg.JWT.Enabled),
-		slog.String("jwt.algorithm", cfg.JWT.Algorithm))
+		slog.String("jwt.algorithm", cfg.JWT.Algorithm),
+		slog.Bool("gateway.enforce", gwCfg.Enforce),
+		slog.Bool("pii.dek_set", cfg.PII.DEK != "")) // value NEVER logged
 
 	// ---- OpenTelemetry -----------------------------------------------------
 	shutdownOtel, err := telemetry.Setup(rootCtx, cfg.Otel, cfg.HTTP.ServiceName, cfg.Env)
@@ -218,12 +241,12 @@ func run(logger *slog.Logger) error {
 	}
 
 	// ---- adapter → usecase → http -----------------------------------------
-	walletRepo := repo.NewPgWalletRepo(pool, readPool, piiPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries)
+	walletRepo := repo.NewPgWalletRepo(pool, readPool, piiPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries, cfg.PII.DEK)
 	walletSvc := usecase.NewWalletService(walletRepo, logger)
 
 	// pool (primary) doubles as the /readyz Pinger so readiness reflects the
 	// write-path DB the pod actually needs to serve traffic.
-	server, err := netHTTP.New(cfg.HTTP, cfg.JWT, walletSvc, pool, logger)
+	server, err := netHTTP.New(cfg.HTTP, cfg.JWT, gwCfg, walletSvc, pool, logger)
 	if err != nil {
 		return fmt.Errorf("http server: %w", err)
 	}

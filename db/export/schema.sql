@@ -896,7 +896,7 @@ DECLARE
   v_key       TEXT := current_setting('app.pii_dek', TRUE);  -- same DEK the masked views decrypt with
 BEGIN
   IF v_key IS NULL OR v_key = '' THEN
-    RAISE EXCEPTION 'PII_DEK_NOT_SET — set ALTER DATABASE ... SET app.pii_dek=...'
+    RAISE EXCEPTION 'PII_DEK_NOT_SET — app.pii_dek is not set for this transaction (wallet-service injects it per-TX from the KMS-provided PII_DEK)'
       USING ERRCODE = 'P0030';
   END IF;
   v_client_no := 'C' || LPAD(nextval('seq_client')::text, 10, '0');
@@ -1482,7 +1482,7 @@ BEGIN
     RAISE EXCEPTION 'INVALID_REQUEST: acct_no required' USING ERRCODE = 'P0071';
   END IF;
   IF v_dek IS NULL OR v_dek = '' THEN
-    RAISE EXCEPTION 'PII_DEK_NOT_SET — set ALTER DATABASE ... SET app.pii_dek=...'
+    RAISE EXCEPTION 'PII_DEK_NOT_SET — app.pii_dek is not set for this transaction (wallet-service injects it per-TX from the KMS-provided PII_DEK)'
       USING ERRCODE = 'P0030';
   END IF;
 
@@ -1692,7 +1692,7 @@ BEGIN
     RAISE EXCEPTION 'INVALID_PHONE_FORMAT: %', p_phone USING ERRCODE = 'P0076';
   END IF;
   IF v_dek IS NULL OR v_dek = '' THEN
-    RAISE EXCEPTION 'PII_DEK_NOT_SET — set ALTER DATABASE ... SET app.pii_dek=...'
+    RAISE EXCEPTION 'PII_DEK_NOT_SET — app.pii_dek is not set for this transaction (wallet-service injects it per-TX from the KMS-provided PII_DEK)'
       USING ERRCODE = 'P0030';
   END IF;
   IF jsonb_typeof(v_extra) <> 'object' THEN
@@ -3501,7 +3501,7 @@ BEGIN
   END IF;
   PERFORM fn_validate_metadata(p_metadata);
   IF v_dek IS NULL OR v_dek = '' THEN
-    RAISE EXCEPTION 'PII_DEK_NOT_SET — set ALTER DATABASE ... SET app.pii_dek=...'
+    RAISE EXCEPTION 'PII_DEK_NOT_SET — app.pii_dek is not set for this transaction (wallet-service injects it per-TX from the KMS-provided PII_DEK)'
       USING ERRCODE = 'P0030';
   END IF;
 
