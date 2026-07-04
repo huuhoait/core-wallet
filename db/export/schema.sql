@@ -3939,6 +3939,126 @@ END $$;
 
 
 --
+-- Name: fn_purge_api_message(integer, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fn_purge_api_message(p_retention_days integer DEFAULT 3, p_batch integer DEFAULT 10000) RETURNS bigint
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+-- Data-retention purge for WLT_API_MESSAGE (the API idempotency ledger). Deletes
+-- ONE bounded batch of up to p_batch rows whose created_at is older than
+-- p_retention_days and returns how many it removed. The Go retention janitor
+-- (internal/janitor) loops this until a call returns < p_batch, so each batch
+-- commits in its OWN short transaction on the ordinary app pool -- lock-friendly
+-- and PgBouncer-transaction-mode safe, exactly like reverse_stuck_withdrawals
+-- above. It is deliberately a plain FUNCTION with NO internal COMMIT: a
+-- COMMIT-per-chunk PROCEDURE (the eod_* idiom) would have to run on a DIRECT
+-- non-PgBouncer connection (see internal/eod/scheduler.go), which this janitor
+-- does not use -- so the per-batch COMMIT boundary lives in the Go caller.
+--
+-- WHY row-level DELETE and NOT time partitioning: WLT_API_MESSAGE idempotency
+-- relies on a GLOBAL UNIQUE(object_ref_id) (the post_* SPs do INSERT ... ON
+-- CONFLICT (object_ref_id) DO NOTHING). A partitioned unique index must include
+-- the partition key, which would demote that constraint to per-partition and
+-- break global idempotency -- so rows are aged out by DELETE. DELETE never
+-- touches the constraint, so idempotency stays fully intact.
+--
+-- SECURITY DEFINER because wallet_app holds only SELECT/INSERT/UPDATE (NOT
+-- DELETE) on WLT_API_MESSAGE; the function owner does, letting the janitor purge
+-- without granting the app role direct DELETE. ctid IN (...) is safe here because
+-- WLT_API_MESSAGE is a plain (non-partitioned) table, so ctid is unique.
+DECLARE
+  v_deleted BIGINT;
+BEGIN
+  IF p_retention_days IS NULL OR p_retention_days < 1 THEN
+    RAISE EXCEPTION 'PURGE_INVALID_RETENTION: retention days must be >= 1, got %', p_retention_days
+      USING ERRCODE = 'P0092';
+  END IF;
+  IF p_batch IS NULL OR p_batch < 1 THEN
+    RAISE EXCEPTION 'PURGE_INVALID_BATCH: batch must be >= 1, got %', p_batch
+      USING ERRCODE = 'P0093';
+  END IF;
+
+  -- No ORDER BY on purpose: any p_batch aged-out rows will do, and the loop
+  -- deletes the rest next iteration. ORDER BY created_at would force a full
+  -- table scan + top-N sort PER batch (to find the globally oldest N), making
+  -- the loop O(batches x full scan). idx_api_created_at still lets the planner
+  -- index-scan when the aged-out set is a small fraction; when it is a large
+  -- fraction the planner (correctly) seq-scans and stops after p_batch matches.
+  DELETE FROM public.wlt_api_message
+   WHERE ctid IN (
+           SELECT ctid
+             FROM public.wlt_api_message
+            WHERE created_at < now() - make_interval(days => p_retention_days)
+            LIMIT p_batch);
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted;
+END $$;
+
+
+-- wallet_app has no DELETE on WLT_API_MESSAGE; it purges only via this DEFINER
+-- routine. Explicit grant is required because a prior change REVOKEs the default
+-- PUBLIC EXECUTE on new routines.
+GRANT EXECUTE ON FUNCTION public.fn_purge_api_message(integer, integer) TO wallet_app;
+
+
+--
+-- Name: fn_purge_outbox_sent(integer, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fn_purge_outbox_sent(p_retention_days integer DEFAULT 7, p_batch integer DEFAULT 10000) RETURNS bigint
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_catalog'
+    AS $$
+-- Data-retention purge for already-published outbox events: deletes ONE bounded
+-- batch of up to p_batch WLT_OUTBOX rows with status = 'SENT' AND sent_at older
+-- than p_retention_days, returning how many it removed. Same batched,
+-- own-transaction-per-batch, app-pool-safe contract as fn_purge_api_message (the
+-- Go janitor loops it). ONLY status = 'SENT' rows are ever deleted -- PENDING /
+-- FAILED / DEAD are left untouched so nothing unpublished or still in retry is
+-- lost. A SENT row with a NULL sent_at is also kept (NULL < cutoff is unknown).
+--
+-- WLT_OUTBOX is PARTITIONED BY RANGE (created_at), so ctid is NOT unique across
+-- partitions and MUST NOT be used as a delete key (a ctid collision between two
+-- partitions could delete the wrong row -- e.g. a fresh PENDING event). We key
+-- the delete on the global composite PRIMARY KEY (event_id, created_at), which is
+-- unique across every partition and lets the outer DELETE prune partitions on
+-- created_at. SECURITY DEFINER for the same reason as fn_purge_api_message
+-- (wallet_app holds no DELETE on WLT_OUTBOX).
+DECLARE
+  v_deleted BIGINT;
+BEGIN
+  IF p_retention_days IS NULL OR p_retention_days < 1 THEN
+    RAISE EXCEPTION 'PURGE_INVALID_RETENTION: retention days must be >= 1, got %', p_retention_days
+      USING ERRCODE = 'P0092';
+  END IF;
+  IF p_batch IS NULL OR p_batch < 1 THEN
+    RAISE EXCEPTION 'PURGE_INVALID_BATCH: batch must be >= 1, got %', p_batch
+      USING ERRCODE = 'P0093';
+  END IF;
+
+  -- No ORDER BY (same rationale as fn_purge_api_message). The partial index
+  -- idx_outbox_sent is selective on its own (only SENT rows), so the planner
+  -- index-scans it for sent_at < cutoff and stops after p_batch matches.
+  DELETE FROM public.wlt_outbox
+   WHERE (event_id, created_at) IN (
+           SELECT event_id, created_at
+             FROM public.wlt_outbox
+            WHERE status = 'SENT'
+              AND sent_at < now() - make_interval(days => p_retention_days)
+            LIMIT p_batch);
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted;
+END $$;
+
+
+-- wallet_app has no DELETE on WLT_OUTBOX; it purges only via this DEFINER
+-- routine. Explicit grant required for the same reason as fn_purge_api_message.
+GRANT EXECUTE ON FUNCTION public.fn_purge_outbox_sent(integer, integer) TO wallet_app;
+
+
+--
 -- Name: provision_acct_group(character varying, character varying, character varying, character varying, character varying, numeric, numeric, smallint, character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -5927,6 +6047,18 @@ CREATE INDEX idx_api_subj ON public.wlt_api_message USING btree (object_subject)
 
 
 --
+-- Name: idx_api_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+-- Supports fn_purge_api_message: lets the planner index-scan the aged-out rows
+-- (WHERE created_at < cutoff) when they are a small fraction of the table rather
+-- than seq-scan it; when purging a large fraction the planner (correctly)
+-- seq-scans instead. Plain btree -- the table is not partitioned. Also a
+-- generally useful index for created_at-ordered operational lookups.
+CREATE INDEX IF NOT EXISTS idx_api_created_at ON public.wlt_api_message USING btree (created_at);
+
+
+--
 -- Name: idx_caudit_changed_fields; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6111,6 +6243,20 @@ CREATE INDEX idx_outbox_pending ON ONLY public.wlt_outbox USING btree (event_id)
 -- jsonb payload/headers to disk), starving the OLTP posting path under load.
 -- With it, a poll is an ordered index scan that stops after LIMIT rows.
 CREATE INDEX idx_outbox_claim ON ONLY public.wlt_outbox USING btree (created_at) WHERE ((status)::text = ANY (ARRAY[('PENDING'::character varying)::text, ('FAILED'::character varying)::text]));
+
+
+--
+-- Name: idx_outbox_sent; Type: INDEX; Schema: public; Owner: -
+--
+
+-- Serves fn_purge_outbox_sent. The other outbox partial indexes cover only
+-- PENDING / FAILED / DEAD, so without this one the SENT age-based purge
+--   WHERE status = 'SENT' AND sent_at < cutoff LIMIT n
+-- would Seq-Scan every WLT_OUTBOX partition each run. Partial on status='SENT'
+-- (mirrors idx_outbox_pending's predicate form) so it stays small and hot. ON
+-- ONLY like the sibling outbox indexes: partitions created later by
+-- fn_ensure_wallet_partitions inherit it automatically.
+CREATE INDEX IF NOT EXISTS idx_outbox_sent ON ONLY public.wlt_outbox USING btree (sent_at) WHERE ((status)::text = 'SENT'::text);
 
 
 --
