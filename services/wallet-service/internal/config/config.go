@@ -16,6 +16,7 @@ type Config struct {
 	EOD       EOD
 	WDJanitor WDJanitor
 	PartRoll  PartitionRoller
+	Retention Retention
 	JWT       JWT
 	Env       string `env:"APP_ENV" envDefault:"dev"` // dev | staging | prod
 }
@@ -155,6 +156,29 @@ type PartitionRoller struct {
 	Interval        time.Duration `env:"PARTITION_ROLLER_INTERVAL"    envDefault:"24h"` // how often to roll forward
 	LookaheadMonths int           `env:"PARTITION_LOOKAHEAD_MONTHS"   envDefault:"3"`   // months of partitions to keep ahead of the current month
 	RunTimeout      time.Duration `env:"PARTITION_ROLLER_RUN_TIMEOUT" envDefault:"60s"` // hard cap on one roll (bounds the DDL)
+}
+
+// Retention configures the in-process data-retention purge janitor: on a daily
+// tick it ages rows out of the two unbounded operational tables by CALLing the
+// SECURITY DEFINER purge functions in bounded batches:
+//
+//   - WLT_API_MESSAGE     — API idempotency ledger (RETENTION_API_MESSAGE_DAYS)
+//   - WLT_OUTBOX (SENT)   — published outbox events (RETENTION_OUTBOX_SENT_DAYS);
+//                           only status='SENT' rows are ever deleted
+//
+// WLT_GL_BATCH is intentionally excluded (compliance retention). Disabled by
+// default. Like the withdraw janitor (and UNLIKE EOD) each batch is a
+// single-statement function call with no internal COMMIT, so it runs on the
+// ORDINARY app pool (PgBouncer transaction-mode safe) as wallet_app — no
+// dedicated DSN. Deletes are idempotent, so it is safe on EVERY replica (no
+// leader election); enabling it on one is enough and avoids redundant scans.
+type Retention struct {
+	Enabled    bool          `env:"RETENTION_JANITOR_ENABLED"     envDefault:"false"`
+	Interval   time.Duration `env:"RETENTION_JANITOR_INTERVAL"    envDefault:"24h"`   // how often to purge
+	APIDays    int           `env:"RETENTION_API_MESSAGE_DAYS"    envDefault:"3"`     // WLT_API_MESSAGE age cutoff (days)
+	OutboxDays int           `env:"RETENTION_OUTBOX_SENT_DAYS"    envDefault:"7"`     // WLT_OUTBOX status='SENT' age cutoff (days)
+	BatchSize  int           `env:"RETENTION_JANITOR_BATCH_SIZE"  envDefault:"10000"` // max rows deleted per batch/TX
+	RunTimeout time.Duration `env:"RETENTION_JANITOR_RUN_TIMEOUT" envDefault:"10m"`   // hard cap on one purge run (all batches)
 }
 
 // Load reads the env into Config. Required vars without defaults cause an error.
