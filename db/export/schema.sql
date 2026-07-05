@@ -6667,6 +6667,39 @@ GRANT USAGE ON SCHEMA public TO wallet_app;
 GRANT USAGE ON SCHEMA public TO wallet_pii_ro;
 
 
+-- US-8.x SECURITY: strip the default PUBLIC EXECUTE that CREATE FUNCTION grants.
+-- Posting SPs are SECURITY DEFINER (run as owner) so PUBLIC EXECUTE would let ANY
+-- role move money. Least privilege: only the explicit GRANTs below apply.
+-- NOTE: REVOKE ... ON ALL FUNCTIONS/PROCEDURES only affects objects that already
+-- exist when it runs. A few SPs (manual-JE, suspense aging, eod-sweep) are declared
+-- BELOW this ACL block, so the same REVOKE is repeated at end-of-file to cover them.
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+REVOKE EXECUTE ON ALL PROCEDURES IN SCHEMA public FROM PUBLIC;
+
+-- US-8.x SECURITY: explicit EXECUTE for functions the Go repo layer (wallet_app)
+-- invokes DIRECTLY but which had no prior GRANT; without these, revoking PUBLIC
+-- would break wallet_app's balance-read, reversal and merchant-withdraw paths.
+-- Functions called only INTERNALLY by SECURITY DEFINER SPs need no grant (owner runs).
+GRANT EXECUTE ON FUNCTION public.get_balance(p_acct_no character varying) TO wallet_app;
+GRANT EXECUTE ON FUNCTION public.get_balance_ops(p_acct_no character varying) TO wallet_app;
+GRANT EXECUTE ON FUNCTION public.get_balance_asof(p_acct_no character varying, p_as_of_date date) TO wallet_app;
+GRANT EXECUTE ON FUNCTION public.get_balance_batch(p_acct_nos character varying[]) TO wallet_app;
+GRANT EXECUTE ON FUNCTION public.post_merchant_withdraw(p_group_id character varying, p_amount numeric, p_reference character varying, p_ext_payout_ref character varying, p_auto_sweep boolean, p_channel character varying, p_actor character varying) TO wallet_app;
+GRANT EXECUTE ON FUNCTION public.post_topup_reversal(p_orig_reference character varying, p_reason character varying, p_initiator character varying, p_channel character varying, p_actor character varying) TO wallet_app;
+GRANT EXECUTE ON FUNCTION public.post_transfer_reversal(p_orig_reference character varying, p_reason character varying, p_initiator character varying, p_channel character varying, p_actor character varying) TO wallet_app;
+GRANT EXECUTE ON FUNCTION public.post_merchant_withdraw_reversal(p_orig_reference character varying, p_fail_code character varying, p_fail_reason character varying, p_initiator character varying, p_channel character varying, p_actor character varying) TO wallet_app;
+
+-- US-8.x SECURITY: view public.v_client_banks_masked (granted to wallet_app AND
+-- wallet_pii_ro) decrypts the stored acct_no via pgp_sym_decrypt. A function used
+-- inside a view is permission-checked against the INVOKER (not the view owner), and
+-- pgcrypto lives in schema public — so the blanket REVOKE above stripped its default
+-- PUBLIC EXECUTE and both view readers now need it explicitly. (Only the 3-arg
+-- overload the view uses is granted; wallet_app has no SELECT on the raw ciphertext
+-- table, so this grants no additional cleartext exposure.)
+GRANT EXECUTE ON FUNCTION public.pgp_sym_decrypt(bytea, text, text) TO wallet_app;
+GRANT EXECUTE ON FUNCTION public.pgp_sym_decrypt(bytea, text, text) TO wallet_pii_ro;
+
+
 --
 -- Name: FUNCTION activate_hot_wallet(p_group_id character varying, p_shard_count smallint, p_channel character varying, p_actor character varying); Type: ACL; Schema: public; Owner: -
 --
@@ -7604,4 +7637,14 @@ $$;
 
 GRANT ALL ON FUNCTION public.fn_suspense_aging(p_as_of date) TO wallet_app;
 GRANT ALL ON PROCEDURE public.eod_sweep_unidentified_receipts(p_biz_date date, p_age_days integer) TO wallet_app;
+
+
+-- US-8.x SECURITY (continued): re-run the PUBLIC EXECUTE revoke at end-of-file.
+-- REVOKE ... ON ALL FUNCTIONS/PROCEDURES only affects objects existing when it runs;
+-- create_manual_je / approve_manual_je / reject_manual_je / fn_suspense_aging /
+-- eod_sweep_unidentified_receipts are declared AFTER the main ACL block, so the
+-- earlier REVOKE missed them. This repeat closes that gap. The explicit role GRANTs
+-- above are on wallet_app (not PUBLIC), so they are unaffected by this REVOKE.
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+REVOKE EXECUTE ON ALL PROCEDURES IN SCHEMA public FROM PUBLIC;
 
