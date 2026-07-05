@@ -318,6 +318,28 @@ func run(logger *slog.Logger) error {
 		logger.Info("partition janitor disabled (PARTITION_ROLLER_ENABLED=false)")
 	}
 
+	// ---- data-retention purge janitor (opt-in; safe on every replica) ------
+	// Daily purge of the two unbounded operational tables — WLT_API_MESSAGE and
+	// WLT_OUTBOX status='SENT' — via the SECURITY DEFINER fn_purge_* routines,
+	// batched. No internal COMMIT, so it runs on the ordinary app pool like the
+	// withdraw janitor; deletes are idempotent (no leader election needed).
+	if cfg.Retention.Enabled {
+		rj, err := janitor.NewRetention(pool, cfg.Retention.Interval, cfg.Retention.APIDays,
+			cfg.Retention.OutboxDays, cfg.Retention.BatchSize, cfg.Retention.RunTimeout, logger)
+		if err != nil {
+			return fmt.Errorf("retention janitor: %w", err)
+		}
+		retentionDone := make(chan struct{})
+		go func() { defer close(retentionDone); _ = rj.Start(rootCtx) }()
+		defer func() { <-retentionDone }()
+		logger.Info("retention janitor enabled",
+			slog.Duration("interval", cfg.Retention.Interval),
+			slog.Int("api_message_days", cfg.Retention.APIDays),
+			slog.Int("outbox_sent_days", cfg.Retention.OutboxDays))
+	} else {
+		logger.Info("retention janitor disabled (RETENTION_JANITOR_ENABLED unset)")
+	}
+
 	// ---- block until signal -----------------------------------------------
 	if err := server.Start(rootCtx); err != nil {
 		return fmt.Errorf("http: %w", err)
