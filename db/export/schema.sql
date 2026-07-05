@@ -1827,6 +1827,7 @@ DECLARE
   v_tran_key   BIGINT;
   v_event_uuid UUID;
   v_existing   WLT_API_MESSAGE%ROWTYPE;
+  v_inserted   boolean;
 BEGIN
   PERFORM set_config('audit.actor',   v_actor,   TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
@@ -1837,25 +1838,32 @@ BEGIN
   END IF;
   PERFORM fn_validate_metadata(p_metadata);
 
-  -- ─── Phase 1: idempotency gate ──────────────────────────────────────
-  SELECT * INTO v_existing FROM WLT_API_MESSAGE
-   WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
-  IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY
-    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
-           'DUPLICATE'::varchar,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
-  END IF;
+  -- ─── Phase 1: idempotency gate (atomic claim — TOCTOU-safe) ─────────
+  -- Single-statement claim: ON CONFLICT DO UPDATE takes a row lock so a
+  -- concurrent same-reference caller blocks on our uncommitted unique-index
+  -- entry, then observes the committed row (xmax<>0) instead of racing past a
+  -- stale SELECT into a double post. xmax=0 ⇔ THIS statement inserted the row.
   INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT,
                                OBJECT_REQUEST_DATA, PROCESS_STATUS)
   VALUES (p_reference, p_channel, 'FEE_CHARGE',
           jsonb_build_object('acct_no', p_acct_no, 'amount', p_amount, 'fee_code', p_fee_code)::text,
           'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference;
+    IF v_existing.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY
+      SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
+             'DUPLICATE'::varchar,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', p_reference USING ERRCODE = '23505';
+  END IF;
 
   -- ─── Phase 2: validate fee def + account ────────────────────────────
   SELECT * INTO v_def FROM WLT_TRAN_DEF WHERE TRAN_TYPE = p_fee_code;
@@ -1983,6 +1991,7 @@ DECLARE
   v_actor    VARCHAR(64) := COALESCE(p_actor, session_user);
   v_orig     WLT_API_MESSAGE%ROWTYPE;
   v_rev      WLT_API_MESSAGE%ROWTYPE;
+  v_inserted boolean;
   v_rref     VARCHAR(64) := left('RVFC-'||p_orig_reference, 64);
   v_acct_no  VARCHAR(20);
   v_fee_code VARCHAR(16);
@@ -2002,12 +2011,24 @@ BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
 
-  SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref FOR UPDATE;
-  IF FOUND AND v_rev.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
+  -- Idempotent on the reversal key (atomic claim — TOCTOU-safe). The claim is
+  -- taken up-front so two concurrent reversals of the same original serialize on
+  -- the unique-index row lock (xmax=0 ⇔ THIS statement inserted the row); a
+  -- validation RAISE below rolls the claim back with the rest of the TX.
+  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
+  VALUES (v_rref, p_channel, 'FEE_CHARGE_REVERSAL',
+          jsonb_build_object('orig_reference', p_orig_reference, 'reason', p_reason, 'initiator', p_initiator)::text, 'PENDING')
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref;
+    IF v_rev.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', v_rref USING ERRCODE = '23505';
   END IF;
 
   SELECT * INTO v_orig FROM WLT_API_MESSAGE
@@ -2047,11 +2068,7 @@ BEGIN
   SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST
    WHERE INTERNAL_KEY = v_acct.INTERNAL_KEY AND TRAN_INTERNAL_ID = v_orig_tran AND TRAN_TYPE = 'FEECHG' LIMIT 1;
 
-  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
-  VALUES (v_rref, p_channel, 'FEE_CHARGE_REVERSAL',
-          jsonb_build_object('orig_reference', p_orig_reference, 'reason', p_reason, 'initiator', p_initiator)::text, 'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
-
+  -- (idempotency PENDING row already claimed atomically at the top of this SP)
   v_rev_tran := nextval('seq_tran');
 
   -- Refund the gross fee (CR wallet)
@@ -2125,6 +2142,7 @@ DECLARE
   v_tran_key   BIGINT;
   v_event_uuid UUID;
   v_existing   WLT_API_MESSAGE%ROWTYPE;
+  v_inserted   boolean;
 BEGIN
   PERFORM set_config('audit.actor',   v_actor,   TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
@@ -2135,25 +2153,32 @@ BEGIN
   END IF;
   PERFORM fn_validate_metadata(p_metadata);
 
-  -- ─── Phase 1: idempotency gate ──────────────────────────────────────
-  SELECT * INTO v_existing FROM WLT_API_MESSAGE
-   WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
-  IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY
-    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
-           'DUPLICATE'::varchar,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'target_acct_no')::varchar,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'shard_index')::smallint,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
-  END IF;
+  -- ─── Phase 1: idempotency gate (atomic claim — TOCTOU-safe) ─────────
+  -- Single-statement claim: ON CONFLICT DO UPDATE takes a row lock so a
+  -- concurrent same-reference caller blocks on our uncommitted unique-index
+  -- entry, then observes the committed row (xmax<>0) instead of racing past a
+  -- stale SELECT into a double post. xmax=0 ⇔ THIS statement inserted the row.
   INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT,
                                OBJECT_REQUEST_DATA, PROCESS_STATUS)
   VALUES (p_reference, p_channel, 'MERCHDEP',
           jsonb_build_object('group_id', p_group_id, 'amount', p_amount)::text,
           'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference;
+    IF v_existing.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY
+      SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
+             'DUPLICATE'::varchar,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'target_acct_no')::varchar,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'shard_index')::smallint,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', p_reference USING ERRCODE = '23505';
+  END IF;
 
   -- ─── Phase 2: validate group + tran def ─────────────────────────────
   SELECT * INTO v_def FROM WLT_TRAN_DEF WHERE TRAN_TYPE = 'MERCHDEP';
@@ -2292,6 +2317,7 @@ DECLARE
   v_event    UUID;
   v_liab_gl  VARCHAR(32);
   v_existing WLT_API_MESSAGE%ROWTYPE;
+  v_inserted boolean;
   v_shard    RECORD;
 BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
@@ -2308,23 +2334,31 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'GROUP_NOT_FOUND: %', p_group_id USING ERRCODE='P0050'; END IF;
   IF v_grp.GROUP_STATUS <> 'A' THEN RAISE EXCEPTION 'GROUP_NOT_ACTIVE: %', v_grp.GROUP_STATUS USING ERRCODE='P0022'; END IF;
 
-  -- Phase 1: idempotency
-  SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
-  IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
-      'DUPLICATE'::varchar,
-      (v_existing.OBJECT_RESPONE_DATA::jsonb->>'amount')::numeric,
-      (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
-      (v_existing.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric,
-      (v_existing.OBJECT_RESPONE_DATA::jsonb->>'total_deducted')::numeric,
-      (v_existing.OBJECT_RESPONE_DATA::jsonb->>'settlement_balance_after')::numeric,
-      (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
-  END IF;
+  -- Phase 1: idempotency (atomic claim — TOCTOU-safe)
+  -- Single-statement claim: ON CONFLICT DO UPDATE takes a row lock so a
+  -- concurrent same-reference caller blocks on our uncommitted unique-index
+  -- entry, then observes the committed row (xmax<>0) instead of racing past a
+  -- stale SELECT into a double post. xmax=0 ⇔ THIS statement inserted the row.
   INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
   VALUES (p_reference, p_channel, 'MERCHANT_WITHDRAW',
           jsonb_build_object('group_id', p_group_id, 'amount', p_amount)::text, 'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference;
+    IF v_existing.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
+        'DUPLICATE'::varchar,
+        (v_existing.OBJECT_RESPONE_DATA::jsonb->>'amount')::numeric,
+        (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
+        (v_existing.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric,
+        (v_existing.OBJECT_RESPONE_DATA::jsonb->>'total_deducted')::numeric,
+        (v_existing.OBJECT_RESPONE_DATA::jsonb->>'settlement_balance_after')::numeric,
+        (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', p_reference USING ERRCODE = '23505';
+  END IF;
 
   -- Lock settlement wallet
   SELECT * INTO v_settle FROM WLT_ACCT
@@ -2448,6 +2482,7 @@ DECLARE
   v_actor  VARCHAR(64) := COALESCE(p_actor, session_user);
   v_orig   WLT_API_MESSAGE%ROWTYPE;
   v_rev    WLT_API_MESSAGE%ROWTYPE;
+  v_inserted boolean;
   v_rref   VARCHAR(64) := left('RVMWD-'||p_orig_reference, 64);
   v_grp    VARCHAR(32);
   v_amt NUMERIC(18,2); v_fee NUMERIC(18,2); v_vat NUMERIC(18,2); v_net NUMERIC(18,2);
@@ -2461,13 +2496,24 @@ BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
 
-  -- Idempotent on the reversal key
-  SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref FOR UPDATE;
-  IF FOUND AND v_rev.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'settlement_balance_after')::numeric,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
+  -- Idempotent on the reversal key (atomic claim — TOCTOU-safe). The claim is
+  -- taken up-front so two concurrent reversals of the same original serialize on
+  -- the unique-index row lock (xmax=0 ⇔ THIS statement inserted the row); a
+  -- validation RAISE below rolls the claim back with the rest of the TX.
+  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
+  VALUES (v_rref, p_channel, 'MERCHANT_WITHDRAW_REVERSAL',
+          jsonb_build_object('orig_reference', p_orig_reference, 'fail_code', p_fail_code, 'initiator', p_initiator)::text, 'PENDING')
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref;
+    IF v_rev.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'settlement_balance_after')::numeric,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', v_rref USING ERRCODE = '23505';
   END IF;
 
   -- Load the original posted merchant withdraw
@@ -2501,11 +2547,7 @@ BEGIN
   -- the MERCHWD leg is posted on the settlement account (v_settle.INTERNAL_KEY).
   SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST WHERE INTERNAL_KEY = v_settle.INTERNAL_KEY AND TRAN_INTERNAL_ID = v_orig_tran AND TRAN_TYPE = 'MERCHWD' LIMIT 1;
 
-  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
-  VALUES (v_rref, p_channel, 'MERCHANT_WITHDRAW_REVERSAL',
-          jsonb_build_object('orig_reference', p_orig_reference, 'fail_code', p_fail_code, 'initiator', p_initiator)::text, 'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
-
+  -- (idempotency PENDING row already claimed atomically at the top of this SP)
   v_rev_tran := nextval('seq_tran');
 
   -- Credit back settlement: principal + fee
@@ -2669,6 +2711,7 @@ DECLARE
   v_tran_key     BIGINT;
   v_event_uuid  UUID;
   v_existing    WLT_API_MESSAGE%ROWTYPE;
+  v_inserted    boolean;
 BEGIN
   -- Audit context (defensive — Go middleware should also set these)
   PERFORM set_config('audit.actor',   v_actor,   TRUE);
@@ -2680,23 +2723,30 @@ BEGIN
   END IF;
   PERFORM fn_validate_metadata(p_metadata);
 
-  -- ─── Phase 1: idempotency gate ──────────────────────────────────────
-  SELECT * INTO v_existing FROM WLT_API_MESSAGE
-   WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
-  IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY
-    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
-           'DUPLICATE'::varchar,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
-  END IF;
+  -- ─── Phase 1: idempotency gate (atomic claim — TOCTOU-safe) ─────────
+  -- Single-statement claim: ON CONFLICT DO UPDATE takes a row lock so a
+  -- concurrent same-reference caller blocks on our uncommitted unique-index
+  -- entry, then observes the committed row (xmax<>0) instead of racing past a
+  -- stale SELECT into a double post. xmax=0 ⇔ THIS statement inserted the row.
   INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT,
                                OBJECT_REQUEST_DATA, PROCESS_STATUS)
   VALUES (p_reference, p_channel, 'TOPUP',
           jsonb_build_object('acct_no', p_acct_no, 'amount', p_amount)::text,
           'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference;
+    IF v_existing.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY
+      SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
+             'DUPLICATE'::varchar,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', p_reference USING ERRCODE = '23505';
+  END IF;
 
   -- ─── Phase 2: validate ─────────────────────────────────────────────
   SELECT * INTO v_def       FROM WLT_TRAN_DEF  WHERE TRAN_TYPE = 'TOPUP';
@@ -2809,6 +2859,7 @@ DECLARE
   v_actor VARCHAR(64) := COALESCE(p_actor, session_user);
   v_orig  WLT_API_MESSAGE%ROWTYPE;
   v_rev   WLT_API_MESSAGE%ROWTYPE;
+  v_inserted boolean;
   v_rref  VARCHAR(64) := left('RVTPUP-'||p_orig_reference, 64);
   v_acct_no VARCHAR(20); v_amt NUMERIC(18,2);
   v_orig_tran BIGINT; v_orig_seq BIGINT;
@@ -2819,12 +2870,24 @@ BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
 
-  SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref FOR UPDATE;
-  IF FOUND AND v_rev.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
+  -- Idempotent on the reversal key (atomic claim — TOCTOU-safe). The claim is
+  -- taken up-front so two concurrent reversals of the same original serialize on
+  -- the unique-index row lock (xmax=0 ⇔ THIS statement inserted the row); a
+  -- validation RAISE below rolls the claim back with the rest of the TX.
+  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
+  VALUES (v_rref, p_channel, 'TOPUP_REVERSAL',
+          jsonb_build_object('orig_reference', p_orig_reference, 'reason', p_reason, 'initiator', p_initiator)::text, 'PENDING')
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref;
+    IF v_rev.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance')::numeric,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', v_rref USING ERRCODE = '23505';
   END IF;
 
   SELECT * INTO v_orig FROM WLT_API_MESSAGE
@@ -2854,11 +2917,7 @@ BEGIN
   -- the TOPUP leg is posted on the credited wallet (v_acct.INTERNAL_KEY).
   SELECT SEQ_NO INTO v_orig_seq FROM WLT_TRAN_HIST WHERE INTERNAL_KEY = v_acct.INTERNAL_KEY AND TRAN_INTERNAL_ID = v_orig_tran AND TRAN_TYPE = 'TOPUP' LIMIT 1;
 
-  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
-  VALUES (v_rref, p_channel, 'TOPUP_REVERSAL',
-          jsonb_build_object('orig_reference', p_orig_reference, 'reason', p_reason, 'initiator', p_initiator)::text, 'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
-
+  -- (idempotency PENDING row already claimed atomically at the top of this SP)
   v_rev_tran := nextval('seq_tran');
 
   -- A topup reversal is a DEBIT (removes erroneously-credited funds), so it is
@@ -2939,6 +2998,7 @@ DECLARE
   v_cur_restr   NUMERIC(18,2);
   v_event_uuid  UUID;
   v_existing    WLT_API_MESSAGE%ROWTYPE;
+  v_inserted    boolean;
 BEGIN
   PERFORM set_config('audit.actor',   v_actor,   TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
@@ -2952,25 +3012,33 @@ BEGIN
   END IF;
   PERFORM fn_validate_metadata(p_metadata);
 
-  -- ─── Phase 1: idempotency ──────────────────────────────────────────
-  SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference FOR UPDATE;
-  IF FOUND AND v_existing.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY
-    SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
-           'DUPLICATE'::varchar,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance_from')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance_to')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric,
-           (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
-  END IF;
+  -- ─── Phase 1: idempotency (atomic claim — TOCTOU-safe) ─────────────
+  -- Single-statement claim: ON CONFLICT DO UPDATE takes a row lock so a
+  -- concurrent same-reference caller blocks on our uncommitted unique-index
+  -- entry, then observes the committed row (xmax<>0) instead of racing past a
+  -- stale SELECT into a double post. xmax=0 ⇔ THIS statement inserted the row.
   INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT,
                                OBJECT_REQUEST_DATA, PROCESS_STATUS)
   VALUES (p_reference, p_channel, 'TRANSFER',
           jsonb_build_object('from', p_from_acct_no, 'to', p_to_acct_no, 'amount', p_amount)::text,
           'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_existing FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = p_reference;
+    IF v_existing.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY
+      SELECT (v_existing.OBJECT_RESPONE_DATA::jsonb->>'tran_internal_id')::bigint,
+             'DUPLICATE'::varchar,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance_from')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'new_balance_to')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'fee_gross')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'vat_amount')::numeric,
+             (v_existing.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', p_reference USING ERRCODE = '23505';
+  END IF;
 
   -- ─── Phase 2: validate ─────────────────────────────────────────────
   SELECT * INTO v_def      FROM WLT_TRAN_DEF WHERE TRAN_TYPE = p_tran_type;
@@ -3231,6 +3299,7 @@ DECLARE
   v_actor VARCHAR(64) := COALESCE(p_actor, session_user);
   v_orig  WLT_API_MESSAGE%ROWTYPE;
   v_rev   WLT_API_MESSAGE%ROWTYPE;
+  v_inserted boolean;
   v_rref  VARCHAR(64) := left('RVTRF-'||p_orig_reference, 64);
   v_from  VARCHAR(20); v_to VARCHAR(20);
   v_amt NUMERIC(18,2); v_fee NUMERIC(18,2); v_vat NUMERIC(18,2); v_net NUMERIC(18,2);
@@ -3244,14 +3313,25 @@ BEGIN
   PERFORM set_config('audit.actor', v_actor, TRUE);
   PERFORM set_config('audit.channel', p_channel, TRUE);
 
-  -- Idempotent on reversal key
-  SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref FOR UPDATE;
-  IF FOUND AND v_rev.PROCESS_STATUS = 'SUCCESS' THEN
-    RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance_from')::numeric,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance_to')::numeric,
-                        (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
-    RETURN;
+  -- Idempotent on the reversal key (atomic claim — TOCTOU-safe). The claim is
+  -- taken up-front so two concurrent reversals of the same original serialize on
+  -- the unique-index row lock (xmax=0 ⇔ THIS statement inserted the row); a
+  -- validation RAISE below rolls the claim back with the rest of the TX.
+  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
+  VALUES (v_rref, p_channel, 'TRANSFER_REVERSAL',
+          jsonb_build_object('orig_reference', p_orig_reference, 'reason', p_reason, 'initiator', p_initiator)::text, 'PENDING')
+  ON CONFLICT (OBJECT_REF_ID) DO UPDATE SET PROCESS_STATUS = WLT_API_MESSAGE.PROCESS_STATUS
+  RETURNING (xmax = 0) INTO v_inserted;
+  IF NOT v_inserted THEN
+    SELECT * INTO v_rev FROM WLT_API_MESSAGE WHERE OBJECT_REF_ID = v_rref;
+    IF v_rev.PROCESS_STATUS = 'SUCCESS' THEN
+      RETURN QUERY SELECT (v_rev.OBJECT_RESPONE_DATA::jsonb->>'reversal_tran_key')::bigint, TRUE,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance_from')::numeric,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'new_balance_to')::numeric,
+                          (v_rev.OBJECT_RESPONE_DATA::jsonb->>'event_uuid')::uuid;
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'DUPLICATE_REFERENCE: % already in progress', v_rref USING ERRCODE = '23505';
   END IF;
 
   -- Load original transfer
@@ -3308,11 +3388,7 @@ BEGIN
     RAISE EXCEPTION 'CR_RESTRAINT_ACTIVE: refund target % is credit-blocked', v_from USING ERRCODE = 'P0029';
   END IF;
 
-  INSERT INTO WLT_API_MESSAGE (OBJECT_REF_ID, OBJECT_CHANNEL, OBJECT_SUBJECT, OBJECT_REQUEST_DATA, PROCESS_STATUS)
-  VALUES (v_rref, p_channel, 'TRANSFER_REVERSAL',
-          jsonb_build_object('orig_reference', p_orig_reference, 'reason', p_reason, 'initiator', p_initiator)::text, 'PENDING')
-  ON CONFLICT (OBJECT_REF_ID) DO NOTHING;
-
+  -- (idempotency PENDING row already claimed atomically at the top of this SP)
   v_rev_tran := nextval('seq_tran');
 
   -- Claw back receiver B (− amount) with inline fund guard
