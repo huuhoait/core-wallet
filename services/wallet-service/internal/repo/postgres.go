@@ -30,7 +30,8 @@ type PgWalletRepo struct {
 	piiPool            *pgxpool.Pool // wallet_pii_ro conn for unmasked PII reads; == pool when no DB_PII_DSN
 	statementTimeoutMs int64
 	lockTimeoutMs      int64
-	txMaxRetries       int // retries of a RETRYABLE write conflict; 0 = no retry
+	txMaxRetries       int    // retries of a RETRYABLE write conflict; 0 = no retry
+	piiDEK             string // PII data-encryption key (KMS-injected); set per-TX as app.pii_dek. Never persisted DB-side.
 }
 
 // NewPgWalletRepo wires the write pool (primary), a read pool, and a PII pool.
@@ -42,7 +43,13 @@ type PgWalletRepo struct {
 // txMaxRetries bounds the server-side retry of serialization/deadlock conflicts
 // (SQLSTATE 40001 / 40P01). 0 = no retry (the conflict is returned to the
 // caller as a retryable 409). A negative value is clamped to 0.
-func NewPgWalletRepo(pool, readPool, piiPool *pgxpool.Pool, statementTimeout, lockTimeout time.Duration, txMaxRetries int) *PgWalletRepo {
+//
+// piiDEK is the KMS-injected PII data-encryption key. It is set per-TX via
+// set_config('app.pii_dek', …, is_local=true) on both write TXs (withTx) and
+// PII-decrypting read TXs (readWithDEK) so pgcrypto can en/decrypt without the
+// key ever being persisted in pg_db_role_setting. May be "" in dev where no PII
+// path is exercised; the SP guard then raises PII_DEK_NOT_SET on any PII op.
+func NewPgWalletRepo(pool, readPool, piiPool *pgxpool.Pool, statementTimeout, lockTimeout time.Duration, txMaxRetries int, piiDEK string) *PgWalletRepo {
 	if readPool == nil {
 		readPool = pool
 	}
@@ -59,6 +66,7 @@ func NewPgWalletRepo(pool, readPool, piiPool *pgxpool.Pool, statementTimeout, lo
 		statementTimeoutMs: statementTimeout.Milliseconds(),
 		lockTimeoutMs:      lockTimeout.Milliseconds(),
 		txMaxRetries:       txMaxRetries,
+		piiDEK:             piiDEK,
 	}
 }
 
@@ -138,7 +146,7 @@ func (r *PgWalletRepo) runTx(
 		r.statementTimeoutMs, r.lockTimeoutMs)); err != nil {
 		return mapPgError(err)
 	}
-	if err := setAuditGUCs(ctx, tx, audit); err != nil {
+	if err := setAuditGUCs(ctx, tx, audit, r.piiDEK); err != nil {
 		return mapPgError(err)
 	}
 	if err := fn(tx); err != nil {
@@ -158,7 +166,15 @@ func (r *PgWalletRepo) runTx(
 // SET LOCAL since PgBouncer in transaction-mode can hand the connection to
 // another client immediately after COMMIT — `is_local=true` guarantees the
 // setting is scoped to the current TX only.
-func setAuditGUCs(ctx context.Context, tx pgx.Tx, a domain.AuditContext) error {
+//
+// It ALSO sets app.pii_dek in the SAME batch (7th set_config): the write SPs
+// (onboard_client, link_client_bank, post_withdraw, …) pgp_sym_encrypt PII with
+// current_setting('app.pii_dek'). It MUST be per-TX (is_local) for the exact same
+// reason as the audit GUCs — PgBouncer transaction-mode may hand this server
+// connection to another client right after COMMIT, so a session/DB-level value is
+// unreliable. This replaces the persisted `ALTER DATABASE … SET app.pii_dek`,
+// which stored the DEK in pg_db_role_setting readable by every role.
+func setAuditGUCs(ctx context.Context, tx pgx.Tx, a domain.AuditContext, dek string) error {
 	const q = `
 		SELECT
 		  set_config('audit.actor',      $1, true),
@@ -166,7 +182,8 @@ func setAuditGUCs(ctx context.Context, tx pgx.Tx, a domain.AuditContext) error {
 		  set_config('audit.request_id', $3, true),
 		  set_config('audit.ip',         $4, true),
 		  set_config('audit.user_agent', $5, true),
-		  set_config('app.trace_id',     $6, true)
+		  set_config('app.trace_id',     $6, true),
+		  set_config('app.pii_dek',      $7, true)
 	`
 	// app.trace_id carries the FULL W3C traceparent (the posting SPs copy it into
 	// WLT_OUTBOX.HEADERS->>'traceparent'), so a downstream relay/consumer can
@@ -177,8 +194,40 @@ func setAuditGUCs(ctx context.Context, tx pgx.Tx, a domain.AuditContext) error {
 		traceparent = a.TraceID
 	}
 	_, err := tx.Exec(ctx, q,
-		a.Actor, string(a.Channel), a.RequestID, a.IPAddress, a.UserAgent, traceparent)
+		a.Actor, string(a.Channel), a.RequestID, a.IPAddress, a.UserAgent, traceparent, dek)
 	return err
+}
+
+// readWithDEK runs a PII-DECRYPTING read inside a single read-only TX with the
+// per-TX PII DEK established FIRST (set_config('app.pii_dek', …, is_local=true)),
+// so a query that calls pgp_sym_decrypt(…, current_setting('app.pii_dek')) — or a
+// masked view that does the same to show last-4 — can see the key in the SAME TX.
+//
+// Read paths bypass withTx (no audit GUCs, no business TX), but the DEK is now
+// app-held and per-TX (never persisted DB-side), so every decrypt read MUST wrap
+// itself here — a bare pool.Query would run on a connection with no app.pii_dek
+// (PgBouncer transaction-mode) and fail. Mirrors withTx's rollback discipline:
+// the deferred Rollback uses a fresh ctx so cleanup always reaches the server.
+func (r *PgWalletRepo) readWithDEK(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return mapPgError(err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = tx.Rollback(cleanupCtx)
+	}()
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.pii_dek', $1, true)", r.piiDEK); err != nil {
+		return mapPgError(err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return mapPgError(err)
+	}
+	return nil
 }
 
 // ------------ post_topup ------------------------------------------------------

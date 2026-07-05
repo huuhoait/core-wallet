@@ -16,7 +16,10 @@ type Config struct {
 	EOD       EOD
 	WDJanitor WDJanitor
 	PartRoll  PartitionRoller
+	Retention Retention
 	JWT       JWT
+	Gateway   GatewayAuth
+	PII       PII
 	Env       string `env:"APP_ENV" envDefault:"dev"` // dev | staging | prod
 }
 
@@ -101,6 +104,40 @@ type JWT struct {
 	ClockSkew    time.Duration `env:"JWT_CLOCK_SKEW"   envDefault:"30s"`
 }
 
+// GatewayAuth configures the Kong-gateway trust model. Authentication is done
+// UPSTREAM by Kong (it validates the JWT signature); this service TRUSTS Kong's
+// forwarded identity and only DECODES the (already-verified) JWT payload to
+// extract the authoritative actor claim ("JWT claim forward"). It never
+// re-verifies the signature — that is Kong's job — so these endpoints MUST only
+// be reachable behind Kong.
+//
+// Enforce defaults to TRUE (secure by default): a mutating request that arrives
+// without a decodable gateway identity is rejected 401. In local dev (APP_ENV=dev)
+// the gateway is absent, so main.go relaxes enforcement to false regardless of
+// this default (see run()); staging/prod keep it on. Boot fails fast if
+// APP_ENV=prod && !Enforce (main.go) so prod can never silently accept
+// unauthenticated writes.
+type GatewayAuth struct {
+	Enforce            bool   `env:"GATEWAY_AUTH_ENFORCE"          envDefault:"true"`
+	JWTHeader          string `env:"GATEWAY_JWT_HEADER"            envDefault:"Authorization"`
+	ActorClaim         string `env:"GATEWAY_JWT_ACTOR_CLAIM"       envDefault:"preferred_username"`
+	ActorClaimFallback string `env:"GATEWAY_JWT_ACTOR_CLAIM_FALLBACK" envDefault:"sub"`
+}
+
+// PII holds the app-side PII data-encryption key (DEK). It is delivered by the
+// on-prem KMS as an INJECTED ENV VAR (PII_DEK) — not a file, not a Vault client.
+// The repo sets it per-TX via set_config('app.pii_dek', …, is_local=true) so the
+// posting/read SPs can pgp_sym_encrypt/decrypt with it, WITHOUT persisting it in
+// pg_db_role_setting (the old `ALTER DATABASE … SET app.pii_dek` made it readable
+// by every role, colocated with the ciphertext — the vulnerability this closes).
+//
+// `,unset` scrubs PII_DEK from the process environment right after it is read so
+// it cannot be harvested from /proc/self/environ. The value is NEVER logged.
+// main.go fails fast if it is empty when APP_ENV=prod.
+type PII struct {
+	DEK string `env:"PII_DEK,unset"`
+}
+
 // EOD configures the in-process end-of-day scheduler (run_eod). Disabled by
 // default; exactly ONE service replica should enable it.
 //
@@ -155,6 +192,29 @@ type PartitionRoller struct {
 	Interval        time.Duration `env:"PARTITION_ROLLER_INTERVAL"    envDefault:"24h"` // how often to roll forward
 	LookaheadMonths int           `env:"PARTITION_LOOKAHEAD_MONTHS"   envDefault:"3"`   // months of partitions to keep ahead of the current month
 	RunTimeout      time.Duration `env:"PARTITION_ROLLER_RUN_TIMEOUT" envDefault:"60s"` // hard cap on one roll (bounds the DDL)
+}
+
+// Retention configures the in-process data-retention purge janitor: on a daily
+// tick it ages rows out of the two unbounded operational tables by CALLing the
+// SECURITY DEFINER purge functions in bounded batches:
+//
+//   - WLT_API_MESSAGE     — API idempotency ledger (RETENTION_API_MESSAGE_DAYS)
+//   - WLT_OUTBOX (SENT)   — published outbox events (RETENTION_OUTBOX_SENT_DAYS);
+//     only status='SENT' rows are ever deleted
+//
+// WLT_GL_BATCH is intentionally excluded (compliance retention). Disabled by
+// default. Like the withdraw janitor (and UNLIKE EOD) each batch is a
+// single-statement function call with no internal COMMIT, so it runs on the
+// ORDINARY app pool (PgBouncer transaction-mode safe) as wallet_app — no
+// dedicated DSN. Deletes are idempotent, so it is safe on EVERY replica (no
+// leader election); enabling it on one is enough and avoids redundant scans.
+type Retention struct {
+	Enabled    bool          `env:"RETENTION_JANITOR_ENABLED"     envDefault:"false"`
+	Interval   time.Duration `env:"RETENTION_JANITOR_INTERVAL"    envDefault:"24h"`   // how often to purge
+	APIDays    int           `env:"RETENTION_API_MESSAGE_DAYS"    envDefault:"3"`     // WLT_API_MESSAGE age cutoff (days)
+	OutboxDays int           `env:"RETENTION_OUTBOX_SENT_DAYS"    envDefault:"7"`     // WLT_OUTBOX status='SENT' age cutoff (days)
+	BatchSize  int           `env:"RETENTION_JANITOR_BATCH_SIZE"  envDefault:"10000"` // max rows deleted per batch/TX
+	RunTimeout time.Duration `env:"RETENTION_JANITOR_RUN_TIMEOUT" envDefault:"10m"`   // hard cap on one purge run (all batches)
 }
 
 // Load reads the env into Config. Required vars without defaults cause an error.

@@ -142,13 +142,36 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// ---- security fail-fast (prod) -----------------------------------------
+	// Kong authenticates upstream and forwards the identity; this service trusts
+	// it. In prod, refuse to boot if enforcement is off — that would silently
+	// accept unauthenticated writes with unattributable (SYSTEM) audit rows.
+	if cfg.Env == "prod" && !cfg.Gateway.Enforce {
+		return fmt.Errorf("refusing to boot: APP_ENV=prod requires GATEWAY_AUTH_ENFORCE=true")
+	}
+	// The PII DEK is injected by the on-prem KMS as PII_DEK. In prod it is
+	// mandatory: without it every encrypt/decrypt path raises PII_DEK_NOT_SET.
+	if cfg.Env == "prod" && cfg.PII.DEK == "" {
+		return fmt.Errorf("refusing to boot: APP_ENV=prod requires PII_DEK to be injected (on-prem KMS)")
+	}
+	// Local dev has no gateway in front, so relax enforcement (APP_ENV=dev) → a
+	// bare `make run` / `docker compose up` works without minting a JWT. Extraction
+	// still runs, so a forwarded token is honoured; staging/prod keep the config.
+	gwCfg := cfg.Gateway
+	if cfg.Env == "dev" {
+		gwCfg.Enforce = false
+	}
+
 	logger.Info("config loaded",
 		slog.String("env", cfg.Env),
 		slog.String("http.addr", cfg.HTTP.Addr),
 		slog.Bool("otel.enabled", cfg.Otel.Enabled),
 		slog.Bool("metrics.enabled", cfg.HTTP.MetricsEnabled),
 		slog.Bool("jwt.enabled", cfg.JWT.Enabled),
-		slog.String("jwt.algorithm", cfg.JWT.Algorithm))
+		slog.String("jwt.algorithm", cfg.JWT.Algorithm),
+		slog.Bool("gateway.enforce", gwCfg.Enforce),
+		slog.Bool("pii.dek_set", cfg.PII.DEK != "")) // value NEVER logged
 
 	// ---- OpenTelemetry -----------------------------------------------------
 	shutdownOtel, err := telemetry.Setup(rootCtx, cfg.Otel, cfg.HTTP.ServiceName, cfg.Env)
@@ -218,12 +241,12 @@ func run(logger *slog.Logger) error {
 	}
 
 	// ---- adapter → usecase → http -----------------------------------------
-	walletRepo := repo.NewPgWalletRepo(pool, readPool, piiPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries)
+	walletRepo := repo.NewPgWalletRepo(pool, readPool, piiPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries, cfg.PII.DEK)
 	walletSvc := usecase.NewWalletService(walletRepo, logger)
 
 	// pool (primary) doubles as the /readyz Pinger so readiness reflects the
 	// write-path DB the pod actually needs to serve traffic.
-	server, err := netHTTP.New(cfg.HTTP, cfg.JWT, walletSvc, pool, logger)
+	server, err := netHTTP.New(cfg.HTTP, cfg.JWT, gwCfg, walletSvc, pool, logger)
 	if err != nil {
 		return fmt.Errorf("http server: %w", err)
 	}
@@ -318,6 +341,28 @@ func run(logger *slog.Logger) error {
 			slog.Int("lookahead_months", cfg.PartRoll.LookaheadMonths))
 	} else {
 		logger.Info("partition janitor disabled (PARTITION_ROLLER_ENABLED=false)")
+	}
+
+	// ---- data-retention purge janitor (opt-in; safe on every replica) ------
+	// Daily purge of the two unbounded operational tables — WLT_API_MESSAGE and
+	// WLT_OUTBOX status='SENT' — via the SECURITY DEFINER fn_purge_* routines,
+	// batched. No internal COMMIT, so it runs on the ordinary app pool like the
+	// withdraw janitor; deletes are idempotent (no leader election needed).
+	if cfg.Retention.Enabled {
+		rj, err := janitor.NewRetention(pool, cfg.Retention.Interval, cfg.Retention.APIDays,
+			cfg.Retention.OutboxDays, cfg.Retention.BatchSize, cfg.Retention.RunTimeout, logger)
+		if err != nil {
+			return fmt.Errorf("retention janitor: %w", err)
+		}
+		retentionDone := make(chan struct{})
+		go func() { defer close(retentionDone); _ = rj.Start(rootCtx) }()
+		defer func() { <-retentionDone }()
+		logger.Info("retention janitor enabled",
+			slog.Duration("interval", cfg.Retention.Interval),
+			slog.Int("api_message_days", cfg.Retention.APIDays),
+			slog.Int("outbox_sent_days", cfg.Retention.OutboxDays))
+	} else {
+		logger.Info("retention janitor disabled (RETENTION_JANITOR_ENABLED unset)")
 	}
 
 	// ---- block until signal -----------------------------------------------

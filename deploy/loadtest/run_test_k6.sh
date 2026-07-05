@@ -15,4 +15,6 @@ export BASE_URL="${BASE_URL:-http://localhost:8019}"
 export REPORT="$DIR/reports/k6__$(date +%Y%m%d_%H%M%S)_${PEAK}peak_${DURATION}s.md"
 
 bash "$DIR/k6.sh" -e PEAK="$PEAK" -e DURATION="$DURATION"
-#docker exec wallet-postgres psql -U postgres -d wallet -c "ALTER DATABASE wallet SET app.pii_dek = 'dev-loadtest-pii-dek-do-not-use-in-prod';"
+# NOTE: the PII DEK is no longer set DB-side via `ALTER DATABASE ... SET app.pii_dek`.
+# The wallet-service holds it (env PII_DEK) and sets it per-TX; docker-compose.yml
+# injects a dev PII_DEK into the wallet-service container for the load-test stack.

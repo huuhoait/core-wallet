@@ -9,7 +9,6 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ewallet-pg/wallet-service/internal/domain"
 )
@@ -88,13 +87,16 @@ func (r *PgWalletRepo) getClientFullWithContacts(ctx context.Context, clientNo s
 		 WHERE c.client_no = $1
 	`
 	var c domain.ClientFullView
-	err := r.piiPool.QueryRow(ctx, q, clientNo).Scan(
-		&c.ClientNo, &c.ClientName, &c.ClientType, &c.GlobalID, &c.GlobalIDType,
-		&c.CountryLoc, &c.CountryCitizen, &c.ClientGrp, &c.AcctExec, &c.Status,
-		&c.RegisteredDate, &c.CreatedAt, &c.UpdatedAt,
-		&c.Surname, &c.GivenName, &c.BirthDate, &c.Sex, &c.ResidentStatus, &c.MaritalStatus,
-		&c.KycTier, &c.KycStatus, &c.RiskLevel, &c.VerifiedAt, &c.Phone, &c.Email,
-	)
+	// Decrypts phone/email → run inside a per-TX DEK so pgp_sym_decrypt can see it.
+	err := r.readWithDEK(ctx, r.piiPool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, q, clientNo).Scan(
+			&c.ClientNo, &c.ClientName, &c.ClientType, &c.GlobalID, &c.GlobalIDType,
+			&c.CountryLoc, &c.CountryCitizen, &c.ClientGrp, &c.AcctExec, &c.Status,
+			&c.RegisteredDate, &c.CreatedAt, &c.UpdatedAt,
+			&c.Surname, &c.GivenName, &c.BirthDate, &c.Sex, &c.ResidentStatus, &c.MaritalStatus,
+			&c.KycTier, &c.KycStatus, &c.RiskLevel, &c.VerifiedAt, &c.Phone, &c.Email,
+		)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.NotFound("client not found: "+clientNo, nil)
 	}
@@ -106,6 +108,10 @@ func (r *PgWalletRepo) getClientFullWithContacts(ctx context.Context, clientNo s
 
 // listClientBanksMasked lists a client's banks with the acct_no MASKED, read from
 // v_client_banks_masked (readPool / wallet_app). Empty slice when none.
+//
+// Even the MASKED path decrypts: the view calls pgp_sym_decrypt(…,
+// current_setting('app.pii_dek')) to derive the '****'+last-4 mask, so it too must
+// run under a per-TX DEK (readWithDEK) now that the DEK is app-held per-TX.
 func (r *PgWalletRepo) listClientBanksMasked(ctx context.Context, clientNo string) ([]domain.ClientBankView, error) {
 	const q = `
 		SELECT link_id, bank_code, bank_name, COALESCE(acct_no_masked, ''),
@@ -114,11 +120,18 @@ func (r *PgWalletRepo) listClientBanksMasked(ctx context.Context, clientNo strin
 		 WHERE client_no = $1
 		 ORDER BY is_default DESC, link_id
 	`
-	return r.scanClientBanks(ctx, r.readPool, q, clientNo)
+	var out []domain.ClientBankView
+	err := r.readWithDEK(ctx, r.readPool, func(tx pgx.Tx) error {
+		var e error
+		out, e = r.scanClientBanks(ctx, tx, q, clientNo)
+		return e
+	})
+	return out, err
 }
 
 // listClientBanksFull lists a client's banks with the acct_no DECRYPTED, read
-// from FM_CLIENT_BANKS (piiPool / wallet_pii_ro). Empty slice when none.
+// from FM_CLIENT_BANKS (piiPool / wallet_pii_ro). Empty slice when none. Runs
+// under a per-TX DEK (readWithDEK) so pgp_sym_decrypt sees app.pii_dek.
 func (r *PgWalletRepo) listClientBanksFull(ctx context.Context, clientNo string) ([]domain.ClientBankView, error) {
 	const q = `
 		SELECT link_id, bank_code, bank_name,
@@ -128,11 +141,24 @@ func (r *PgWalletRepo) listClientBanksFull(ctx context.Context, clientNo string)
 		 WHERE client_no = $1
 		 ORDER BY is_default DESC, link_id
 	`
-	return r.scanClientBanks(ctx, r.piiPool, q, clientNo)
+	var out []domain.ClientBankView
+	err := r.readWithDEK(ctx, r.piiPool, func(tx pgx.Tx) error {
+		var e error
+		out, e = r.scanClientBanks(ctx, tx, q, clientNo)
+		return e
+	})
+	return out, err
 }
 
-func (r *PgWalletRepo) scanClientBanks(ctx context.Context, pool *pgxpool.Pool, q, clientNo string) ([]domain.ClientBankView, error) {
-	rows, err := pool.Query(ctx, q, clientNo)
+// querier is the subset of *pgxpool.Pool / pgx.Tx used by the PII read scanners,
+// so a query can run either directly on a pool or inside a readWithDEK TX.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func (r *PgWalletRepo) scanClientBanks(ctx context.Context, db querier, q, clientNo string) ([]domain.ClientBankView, error) {
+	rows, err := db.Query(ctx, q, clientNo)
 	if err != nil {
 		return nil, mapErrIfPg(err)
 	}
@@ -229,27 +255,31 @@ func (r *PgWalletRepo) ListClientsFull(ctx context.Context, q domain.ClientListQ
 		 ORDER BY c.client_no ASC
 		 LIMIT $1
 	`
-	rows, err := r.piiPool.Query(ctx, sql, limit, q.AfterNo, q.Status, q.ClientType)
-	if err != nil {
-		return nil, mapErrIfPg(err)
-	}
-	defer rows.Close()
+	// Decrypts phone/email → per-TX DEK (readWithDEK) so pgp_sym_decrypt sees it.
 	out := make([]domain.ClientFullView, 0, limit)
-	for rows.Next() {
-		var c domain.ClientFullView
-		if err := rows.Scan(
-			&c.ClientNo, &c.ClientName, &c.ClientType, &c.GlobalID, &c.GlobalIDType,
-			&c.CountryLoc, &c.CountryCitizen, &c.ClientGrp, &c.AcctExec, &c.Status,
-			&c.RegisteredDate, &c.CreatedAt, &c.UpdatedAt,
-			&c.Surname, &c.GivenName, &c.BirthDate, &c.Sex, &c.ResidentStatus, &c.MaritalStatus,
-			&c.KycTier, &c.KycStatus, &c.RiskLevel, &c.VerifiedAt, &c.Phone, &c.Email,
-		); err != nil {
-			return nil, mapErrIfPg(err)
+	err := r.readWithDEK(ctx, r.piiPool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, sql, limit, q.AfterNo, q.Status, q.ClientType)
+		if err != nil {
+			return mapErrIfPg(err)
 		}
-		out = append(out, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, mapErrIfPg(err)
+		defer rows.Close()
+		for rows.Next() {
+			var c domain.ClientFullView
+			if err := rows.Scan(
+				&c.ClientNo, &c.ClientName, &c.ClientType, &c.GlobalID, &c.GlobalIDType,
+				&c.CountryLoc, &c.CountryCitizen, &c.ClientGrp, &c.AcctExec, &c.Status,
+				&c.RegisteredDate, &c.CreatedAt, &c.UpdatedAt,
+				&c.Surname, &c.GivenName, &c.BirthDate, &c.Sex, &c.ResidentStatus, &c.MaritalStatus,
+				&c.KycTier, &c.KycStatus, &c.RiskLevel, &c.VerifiedAt, &c.Phone, &c.Email,
+			); err != nil {
+				return mapErrIfPg(err)
+			}
+			out = append(out, c)
+		}
+		return mapErrIfPg(rows.Err())
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
