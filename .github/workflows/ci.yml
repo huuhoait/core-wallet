@@ -124,16 +124,16 @@ jobs:
           PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -f db/export/partitions.sql
           PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -f db/export/seed.sql
 
-      # The PII DEK is supplied at the database/role level in every environment
-      # (ALTER DATABASE ... SET app.pii_dek=...); create_client / post_withdraw
-      # encrypt PII with it. Set it as a DB default so the pgx pool inherits it.
-      - name: Configure PII DEK (db-level, test key)
-        run: PGPASSWORD=postgres_ci psql -h localhost -U postgres -d wallet -c "ALTER DATABASE wallet SET app.pii_dek = 'dev-test-pii-dek-do-not-use-in-prod';"
-
+      # PII DEK is app-held and set PER-TX by the service (the repo runs
+      # set_config('app.pii_dek', …, is_local=true) inside each TX) — it is NOT
+      # persisted with `ALTER DATABASE ... SET app.pii_dek`, which stored the key
+      # in pg_db_role_setting readable by every role. The integration harness
+      # (itRepo) reads it from the PII_DEK env, exactly like prod (KMS-injected).
       - name: go test (integration)
         working-directory: services/wallet-service
         env:
           WALLET_TEST_DSN: postgres://postgres:postgres_ci@localhost:5432/wallet?sslmode=disable
+          PII_DEK: dev-test-pii-dek-do-not-use-in-prod
         run: go test -race -count=1 -run Integration ./internal/repo/...
 
   # ──────────────────────────────────────────────────────────────────────────
