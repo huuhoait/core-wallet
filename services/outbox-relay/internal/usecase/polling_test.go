@@ -37,7 +37,9 @@ type fakeRepo struct {
 	marked []domain.SentRef
 }
 
-func (r *fakeRepo) ClaimBatch(context.Context, int) (Batch, error) { return r.batch, nil }
+func (r *fakeRepo) ClaimBatch(context.Context, int, RetryBackoff) (Batch, error) {
+	return r.batch, nil
+}
 func (r *fakeRepo) MarkSent(_ context.Context, ref domain.SentRef) error {
 	r.marked = append(r.marked, ref)
 	return nil
@@ -61,8 +63,8 @@ func (p *fakePublisher) Publish(msg domain.KafkaMessage) (int32, int64, error) {
 func (p *fakePublisher) Close() error { return nil }
 
 type fakeMetrics struct {
-	fetched, success int
-	errors           map[string]int
+	fetched, success, dead int
+	errors                 map[string]int
 }
 
 func newFakeMetrics() *fakeMetrics { return &fakeMetrics{errors: map[string]int{}} }
@@ -70,6 +72,7 @@ func newFakeMetrics() *fakeMetrics { return &fakeMetrics{errors: map[string]int{
 func (m *fakeMetrics) RecordFetch(n int)               { m.fetched += n }
 func (m *fakeMetrics) IncrementSuccess()               { m.success++ }
 func (m *fakeMetrics) IncrementErrors(kind string)     { m.errors[kind]++ }
+func (m *fakeMetrics) IncrementDead()                  { m.dead++ }
 func (m *fakeMetrics) RecordProcessTime(time.Duration) {}
 
 func nopLogger() *slog.Logger {
@@ -85,7 +88,11 @@ func events() []domain.OutboxEvent {
 }
 
 func newRelay(repo OutboxRepository, pub EventPublisher, m MetricsRecorder) *PollingRelay {
-	return NewPollingRelay(repo, pub, m, PollingSettings{BatchSize: 10, MaxRetries: 3}, nopLogger())
+	return NewPollingRelay(repo, pub, m, PollingSettings{
+		BatchSize:   10,
+		MaxAttempts: 3,
+		Backoff:     RetryBackoff{Base: time.Second, Max: time.Minute},
+	}, nopLogger())
 }
 
 // TestProcessBatch_AllPublished verifies every claimed event is published and the
@@ -186,5 +193,61 @@ func TestCDCStatusUpdater(t *testing.T) {
 	}
 	if len(repo.marked) != 1 || repo.marked[0] != ref {
 		t.Fatalf("marked = %v, want [%v]", repo.marked, ref)
+	}
+}
+
+// TestRetryBackoff_Delay verifies the exponential backoff schedule the relay logs
+// and the SQL claim predicate mirror: Base*2^(attempts-1), capped at Max, with a
+// floored/bounded exponent (no negative exponent, no int64 overflow at high n).
+func TestRetryBackoff_Delay(t *testing.T) {
+	b := RetryBackoff{Base: 5 * time.Second, Max: 5 * time.Minute}
+	cases := []struct {
+		attempts int
+		want     time.Duration
+	}{
+		{0, 5 * time.Second},   // exponent floored at 0
+		{1, 5 * time.Second},   // base * 2^0
+		{2, 10 * time.Second},  // base * 2^1
+		{3, 20 * time.Second},  // base * 2^2
+		{4, 40 * time.Second},  // base * 2^3
+		{6, 160 * time.Second}, // base * 2^5
+		{7, 5 * time.Minute},   // 320s > cap → 300s
+		{50, 5 * time.Minute},  // capped, exponent bound prevents overflow
+	}
+	for _, c := range cases {
+		if got := b.Delay(c.attempts); got != c.want {
+			t.Errorf("Delay(%d) = %s, want %s", c.attempts, got, c.want)
+		}
+	}
+}
+
+// TestProcessBatch_DeadTransition verifies that when a failing event exhausts its
+// attempt budget (Attempts+1 >= MaxAttempts) the relay increments the dedicated
+// DEAD metric AND still commits the batch (the mark-DEAD write is persisted, and
+// under-budget failures are NOT flagged DEAD) — at-least-once, nothing dropped.
+func TestProcessBatch_DeadTransition(t *testing.T) {
+	evs := []domain.OutboxEvent{
+		{EventID: 1, EventUUID: "u1", Topic: "t", PartitionKey: "k1", Payload: []byte(`{}`), Attempts: 0}, // fails, under budget
+		{EventID: 2, EventUUID: "u2", Topic: "t", PartitionKey: "k2", Payload: []byte(`{}`), Attempts: 2}, // 3rd failure → DEAD (MaxAttempts=3)
+	}
+	batch := &fakeBatch{events: evs}
+	repo := &fakeRepo{batch: batch}
+	pub := &fakePublisher{failKeys: map[string]bool{"k1": true, "k2": true}}
+	m := newFakeMetrics()
+
+	if _, err := newRelay(repo, pub, m).processBatch(context.Background()); err != nil {
+		t.Fatalf("processBatch: %v", err)
+	}
+	if m.dead != 1 {
+		t.Fatalf("dead metric = %d, want 1 (only the budget-exhausted event)", m.dead)
+	}
+	if len(batch.failedIDs) != 2 {
+		t.Fatalf("failedIDs = %v, want both events retried/marked", batch.failedIDs)
+	}
+	if !batch.committed {
+		t.Fatal("batch must commit so the DEAD mark is persisted (not dropped)")
+	}
+	if batch.maxAttempts != 3 {
+		t.Fatalf("maxAttempts passed to commit = %d, want 3", batch.maxAttempts)
 	}
 }

@@ -4,10 +4,12 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -24,11 +26,21 @@ import (
 // otelgin server span and continue the W3C trace propagated into the outbox.
 var tracer = otel.Tracer("wallet-service/http/handler")
 
-type Wallet struct {
-	svc *usecase.WalletService
+// Pinger is the minimal readiness dependency: something that can round-trip to
+// the database. *pgxpool.Pool satisfies it, so the handler layer needs no pgx
+// import to run the /readyz DB check.
+type Pinger interface {
+	Ping(ctx context.Context) error
 }
 
-func New(svc *usecase.WalletService) *Wallet { return &Wallet{svc: svc} }
+type Wallet struct {
+	svc    *usecase.WalletService
+	pinger Pinger
+}
+
+func New(svc *usecase.WalletService, pinger Pinger) *Wallet {
+	return &Wallet{svc: svc, pinger: pinger}
+}
 
 // Topup godoc
 //
@@ -417,6 +429,27 @@ func (h *Wallet) Reverse(c *gin.Context) {
 //	@Success		200	{object}	map[string]string	"status: ok"
 //	@Router			/healthz [get]
 func (h *Wallet) Healthz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// Readyz godoc
+//
+//	@Summary		Readiness check
+//	@Description	Readiness probe: pings the DB pool (short timeout). 503 when the DB is unreachable so a pod with a dead DB is pulled from the load balancer.
+//	@Tags			health
+//	@Produce		json
+//	@Success		200	{object}	map[string]string	"status: ok"
+//	@Failure		503	{object}	map[string]string	"status: unavailable"
+//	@Router			/readyz [get]
+func (h *Wallet) Readyz(c *gin.Context) {
+	// Short, self-contained deadline: /readyz has no request-timeout middleware
+	// (it lives outside the /v1 group), so bound the DB round-trip ourselves.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	if err := h.pinger.Ping(ctx); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unavailable", "reason": "database unreachable"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 

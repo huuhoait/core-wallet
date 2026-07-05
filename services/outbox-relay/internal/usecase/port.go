@@ -18,13 +18,15 @@ import (
 // OutboxRepository is the driven port for the WLT_OUTBOX store.
 // Implemented by internal/repo.PgOutboxRepo.
 type OutboxRepository interface {
-	// ClaimBatch opens a unit of work that locks up to limit un-sent rows
-	// (PENDING or FAILED, FOR UPDATE SKIP LOCKED) and returns them with a Batch
-	// handle to finalize the result. The locks are held until the Batch is
-	// committed or rolled back, so publishes happen while the rows are locked —
-	// that is what lets multiple relays poll the same table without ever
-	// publishing a row twice.
-	ClaimBatch(ctx context.Context, limit int) (Batch, error)
+	// ClaimBatch opens a unit of work that locks up to limit un-sent rows and
+	// returns them with a Batch handle to finalize the result. A row is eligible
+	// when it is PENDING, or FAILED and past its exponential-backoff window (see
+	// RetryBackoff) — so a FAILED row is not re-hammered every poll but re-tried on
+	// a widening schedule. Rows are locked FOR UPDATE SKIP LOCKED and stay locked
+	// until the Batch is committed or rolled back, so publishes happen while the
+	// rows are locked — that is what lets multiple relays poll the same table
+	// without ever publishing a row twice.
+	ClaimBatch(ctx context.Context, limit int, backoff RetryBackoff) (Batch, error)
 
 	// MarkSent flips a single row to SENT by event id, recording where it landed.
 	// Used by CDC mode (no lock/tx needed — Debezium already delivered the row).
@@ -78,5 +80,8 @@ type MetricsRecorder interface {
 	RecordFetch(count int)
 	IncrementSuccess()
 	IncrementErrors(kind string)
+	// IncrementDead counts an event parked DEAD (retry budget exhausted). It is a
+	// dedicated, alertable signal separate from the transient publish-error count.
+	IncrementDead()
 	RecordProcessTime(d time.Duration)
 }

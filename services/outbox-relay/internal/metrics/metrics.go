@@ -18,6 +18,7 @@ type Metrics struct {
 	EventsFetched   int64
 	EventsProcessed int64
 	EventsFailed    int64
+	EventsDead      int64
 	KafkaPublished  int64
 	KafkaFailed     int64
 
@@ -60,6 +61,15 @@ func (m *Metrics) IncrementErrors(errorType string) {
 	m.Errors[errorType]++
 }
 
+// IncrementDead counts an event parked DEAD (retry budget exhausted). Exposed as
+// events_dead so alerting can fire on any DEAD transition; it does not touch the
+// transient EventsFailed counter (the publish failure was already recorded).
+func (m *Metrics) IncrementDead() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.EventsDead++
+}
+
 // RecordFetch records a fetch operation.
 func (m *Metrics) RecordFetch(count int) {
 	m.mu.Lock()
@@ -87,6 +97,7 @@ func (m *Metrics) GetStats() map[string]any {
 		"events_fetched":             m.EventsFetched,
 		"events_processed":           m.EventsProcessed,
 		"events_failed":              m.EventsFailed,
+		"events_dead":                m.EventsDead,
 		"kafka_published":            m.KafkaPublished,
 		"kafka_failed":               m.KafkaFailed,
 		"errors":                     m.Errors,
@@ -113,6 +124,7 @@ func (m *Metrics) Reset() {
 	m.EventsFetched = 0
 	m.EventsProcessed = 0
 	m.EventsFailed = 0
+	m.EventsDead = 0
 	m.KafkaPublished = 0
 	m.KafkaFailed = 0
 	m.Errors = make(map[string]int64)
