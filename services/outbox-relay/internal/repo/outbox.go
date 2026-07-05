@@ -41,16 +41,16 @@ func New(ctx context.Context, dbCfg pgxdb.Config, dbName, dbHost string, logger 
 func (r *PgOutboxRepo) Close() { r.pool.Close() }
 
 // ClaimBatch opens a transaction and locks up to limit un-sent rows (PENDING or a
-// FAILED row due for retry), oldest first, with FOR UPDATE SKIP LOCKED so
-// concurrent relays skip already-claimed rows instead of blocking. The returned
-// Batch holds the transaction (and thus the locks) until Commit/Rollback.
-func (r *PgOutboxRepo) ClaimBatch(ctx context.Context, limit int) (usecase.Batch, error) {
+// FAILED row past its backoff window), oldest first, with FOR UPDATE SKIP LOCKED
+// so concurrent relays skip already-claimed rows instead of blocking. The
+// returned Batch holds the transaction (and thus the locks) until Commit/Rollback.
+func (r *PgOutboxRepo) ClaimBatch(ctx context.Context, limit int, backoff usecase.RetryBackoff) (usecase.Batch, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("repo: begin tx: %w", err)
 	}
 
-	events, err := fetchPending(ctx, tx, limit)
+	events, err := fetchPending(ctx, tx, limit, backoff)
 	if err != nil {
 		_ = tx.Rollback(context.Background())
 		return nil, err
@@ -110,15 +110,24 @@ func (b *pgBatch) Commit(ctx context.Context, sent []domain.SentRef, failedIDs [
 func (b *pgBatch) Rollback(ctx context.Context) { _ = b.tx.Rollback(ctx) }
 
 // fetchPending claims up to limit un-sent rows, locking them with FOR UPDATE
-// SKIP LOCKED.
-func fetchPending(ctx context.Context, tx pgx.Tx, limit int) ([]domain.OutboxEvent, error) {
+// SKIP LOCKED. PENDING rows are always eligible; a FAILED row is eligible only
+// once now() has passed last_attempt_at + exponential backoff. The backoff is
+// computed per-row in SQL (base*2^(attempts-1), capped at max) so the SKIP LOCKED
+// batching still works — filtering in Go would let ineligible rows consume the
+// LIMIT and starve due rows. The exponent is bounded (<=20) to avoid interval
+// overflow; the cap ($3) bounds the total wait regardless.
+func fetchPending(ctx context.Context, tx pgx.Tx, limit int, backoff usecase.RetryBackoff) ([]domain.OutboxEvent, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT event_id, event_uuid::text, event_type, topic, partition_key, payload, headers, attempts, created_at
 		  FROM public.wlt_outbox
-		 WHERE status IN ('PENDING', 'FAILED')
+		 WHERE status = 'PENDING'
+		    OR (status = 'FAILED'
+		        AND (last_attempt_at IS NULL
+		             OR now() >= last_attempt_at
+		                + make_interval(secs => LEAST($2 * POWER(2, LEAST(GREATEST(attempts - 1, 0), 20)), $3))))
 		 ORDER BY created_at
 		 FOR UPDATE SKIP LOCKED
-		 LIMIT $1`, limit)
+		 LIMIT $1`, limit, backoff.Base.Seconds(), backoff.Max.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("repo: fetch pending: %w", err)
 	}

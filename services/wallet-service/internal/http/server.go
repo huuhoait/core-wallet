@@ -31,7 +31,7 @@ type Server struct {
 }
 
 // New builds the gin engine + applies middleware + mounts routes.
-func New(cfg config.HTTP, jwtCfg config.JWT, gwCfg config.GatewayAuth, svc *usecase.WalletService, log *slog.Logger) (*Server, error) {
+func New(cfg config.HTTP, jwtCfg config.JWT, gwCfg config.GatewayAuth, svc *usecase.WalletService, pinger handler.Pinger, log *slog.Logger) (*Server, error) {
 	if cfg.Mode == "" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -84,8 +84,9 @@ func New(cfg config.HTTP, jwtCfg config.JWT, gwCfg config.GatewayAuth, svc *usec
 		r.Use(middleware.Metrics())
 	}
 
-	h := handler.New(svc)
-	r.GET("/healthz", h.Healthz) // no request timeout, no JWT — cheap probe
+	h := handler.New(svc, pinger)
+	r.GET("/healthz", h.Healthz) // liveness: no request timeout, no JWT — cheap, process-up only
+	r.GET("/readyz", h.Readyz)   // readiness: pings the DB pool → 503 when the DB is down
 
 	// Prometheus scrape endpoint (US-9.12). No JWT, no request timeout, no audit
 	// — a cheap unauthenticated pull like /healthz, scraped on the pod network.

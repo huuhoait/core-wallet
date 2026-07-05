@@ -244,7 +244,9 @@ func run(logger *slog.Logger) error {
 	walletRepo := repo.NewPgWalletRepo(pool, readPool, piiPool, cfg.DB.StatementTimeout, cfg.DB.LockTimeout, cfg.DB.TxMaxRetries, cfg.PII.DEK)
 	walletSvc := usecase.NewWalletService(walletRepo, logger)
 
-	server, err := netHTTP.New(cfg.HTTP, cfg.JWT, gwCfg, walletSvc, logger)
+	// pool (primary) doubles as the /readyz Pinger so readiness reflects the
+	// write-path DB the pod actually needs to serve traffic.
+	server, err := netHTTP.New(cfg.HTTP, cfg.JWT, gwCfg, walletSvc, pool, logger)
 	if err != nil {
 		return fmt.Errorf("http server: %w", err)
 	}
