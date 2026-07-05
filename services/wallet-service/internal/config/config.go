@@ -15,6 +15,7 @@ type Config struct {
 	Otel      Otel
 	EOD       EOD
 	WDJanitor WDJanitor
+	PartRoll  PartitionRoller
 	JWT       JWT
 	Env       string `env:"APP_ENV" envDefault:"dev"` // dev | staging | prod
 }
@@ -92,10 +93,10 @@ type JWT struct {
 	Enabled      bool          `env:"JWT_ENABLED"      envDefault:"false"`
 	Issuer       string        `env:"JWT_ISSUER"`
 	Audience     string        `env:"JWT_AUDIENCE"`
-	Algorithm    string        `env:"JWT_ALGORITHM"    envDefault:"HS256"` // HS256 | RS256
-	HMACSecret   string        `env:"JWT_HMAC_SECRET,unset"`               // unset after read so it's not in env
-	RSAPublicKey string        `env:"JWT_RSA_PUBLIC_KEY"`                  // PEM-encoded RSA public key
-	RolesClaim   string        `env:"JWT_ROLES_CLAIM"  envDefault:"roles"`   // claim path holding []string of roles
+	Algorithm    string        `env:"JWT_ALGORITHM"    envDefault:"HS256"`    // HS256 | RS256
+	HMACSecret   string        `env:"JWT_HMAC_SECRET,unset"`                  // unset after read so it's not in env
+	RSAPublicKey string        `env:"JWT_RSA_PUBLIC_KEY"`                     // PEM-encoded RSA public key
+	RolesClaim   string        `env:"JWT_ROLES_CLAIM"  envDefault:"roles"`    // claim path holding []string of roles
 	ChannelClaim string        `env:"JWT_CHANNEL_CLAIM" envDefault:"channel"` // claim path holding the source channel (MOBILE/OPSUI/TREASURY/PARTNER/API); empty/absent → X-Channel header fallback
 	ClockSkew    time.Duration `env:"JWT_CLOCK_SKEW"   envDefault:"30s"`
 }
@@ -131,6 +132,29 @@ type WDJanitor struct {
 	Interval   time.Duration `env:"WD_JANITOR_INTERVAL"    envDefault:"15m"` // how often to sweep
 	BatchSize  int           `env:"WD_JANITOR_BATCH_SIZE"  envDefault:"100"` // max rows reversed per tick
 	RunTimeout time.Duration `env:"WD_JANITOR_RUN_TIMEOUT" envDefault:"60s"` // hard cap on one sweep
+}
+
+// PartitionRoller configures the in-process partition roll-forward janitor. It
+// re-runs fn_ensure_wallet_partitions(current_month, current_month + N months)
+// on a daily interval so the monthly RANGE partitions of the 4 partitioned
+// parents (wlt_tran_hist, wlt_outbox, wlt_acct_bal, fm_client_audit_log) are
+// always created ahead — without it, once pre-created partitions run out, inserts
+// fall into the DEFAULT catch-all (bloat) and adding the missing month's
+// partition is then blocked until those rows are moved.
+//
+// Unlike EOD and WDJanitor this defaults to ENABLED: fn_ensure_wallet_partitions
+// is idempotent (CREATE … IF NOT EXISTS), so it is safe to run on EVERY replica
+// concurrently — there is no "exactly one" constraint and thus no reason to make
+// operators opt in (leaving it off is what re-arms the DEFAULT-partition cliff).
+// It runs as wallet_app on the ORDINARY app pool (a single bounded statement, no
+// internal COMMIT, PgBouncer transaction-mode safe); the function is SECURITY
+// DEFINER so wallet_app needs no DDL rights. Set PARTITION_ROLLER_ENABLED=false
+// only in throwaway/test contexts.
+type PartitionRoller struct {
+	Enabled         bool          `env:"PARTITION_ROLLER_ENABLED"     envDefault:"true"`
+	Interval        time.Duration `env:"PARTITION_ROLLER_INTERVAL"    envDefault:"24h"` // how often to roll forward
+	LookaheadMonths int           `env:"PARTITION_LOOKAHEAD_MONTHS"   envDefault:"3"`   // months of partitions to keep ahead of the current month
+	RunTimeout      time.Duration `env:"PARTITION_ROLLER_RUN_TIMEOUT" envDefault:"60s"` // hard cap on one roll (bounds the DDL)
 }
 
 // Load reads the env into Config. Required vars without defaults cause an error.

@@ -294,6 +294,32 @@ func run(logger *slog.Logger) error {
 		logger.Info("withdraw janitor disabled (WD_JANITOR_ENABLED unset)")
 	}
 
+	// ---- partition roll-forward janitor (idempotent; safe on every replica) -
+	// Re-runs fn_ensure_wallet_partitions(current_month, +N months) daily so the
+	// monthly partitions of the 4 partitioned parents (wlt_tran_hist, wlt_outbox,
+	// wlt_acct_bal, fm_client_audit_log) are always created ahead — otherwise
+	// inserts eventually fall into the DEFAULT catch-all, which bloats AND blocks
+	// adding the missing month. Runs on the ordinary app pool as wallet_app; the
+	// function is SECURITY DEFINER + idempotent, so unlike EOD/withdraw this needs
+	// no "exactly one replica" gate or leader election — every replica may run it.
+	// Enabled by default (leaving it off is what re-arms the cliff). Deferred so
+	// the roller drains (partitionDone) before main returns.
+	if cfg.PartRoll.Enabled {
+		pj, err := janitor.NewPartition(pool, cfg.PartRoll.Interval, cfg.PartRoll.LookaheadMonths,
+			cfg.PartRoll.RunTimeout, logger)
+		if err != nil {
+			return fmt.Errorf("partition janitor: %w", err)
+		}
+		partitionDone := make(chan struct{})
+		go func() { defer close(partitionDone); _ = pj.Start(rootCtx) }()
+		defer func() { <-partitionDone }()
+		logger.Info("partition janitor enabled",
+			slog.Duration("interval", cfg.PartRoll.Interval),
+			slog.Int("lookahead_months", cfg.PartRoll.LookaheadMonths))
+	} else {
+		logger.Info("partition janitor disabled (PARTITION_ROLLER_ENABLED=false)")
+	}
+
 	// ---- block until signal -----------------------------------------------
 	if err := server.Start(rootCtx); err != nil {
 		return fmt.Errorf("http: %w", err)
