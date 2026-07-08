@@ -94,15 +94,9 @@ func (r *PgWalletRepo) ListRestraints(ctx context.Context, q domain.RestraintLis
 	}
 	defer rows.Close()
 
-	capLimit := q.Limit
-	if capLimit < 0 {
-		capLimit = 0
-	}
-	if capLimit > domain.MaxRestraintPageSize {
-		capLimit = domain.MaxRestraintPageSize
-	}
-
-	out := make([]domain.RestraintView, 0, capLimit)
+	// Constant capacity hint: keep the user-influenced limit out of make()
+	// (CodeQL go/uncontrolled-allocation-size); append grows past it if needed.
+	out := make([]domain.RestraintView, 0, domain.DefaultRestraintPageSize)
 	for rows.Next() {
 		v, err := scanRestraint(rows)
 		if err != nil {

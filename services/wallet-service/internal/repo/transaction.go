@@ -114,15 +114,9 @@ func (r *PgWalletRepo) SearchAccounts(ctx context.Context, query string, limit i
 	}
 	defer rows.Close()
 
-	safeLimit := limit
-	if safeLimit < 0 {
-		safeLimit = 0
-	}
-	if safeLimit > domain.MaxAccountSearchSize {
-		safeLimit = domain.MaxAccountSearchSize
-	}
-
-	out := make([]domain.AccountSearchItem, 0, safeLimit)
+	// Constant capacity hint: keep the user-influenced limit out of make()
+	// (CodeQL go/uncontrolled-allocation-size); append grows past it if needed.
+	out := make([]domain.AccountSearchItem, 0, domain.DefaultAccountSearchSize)
 	for rows.Next() {
 		var it domain.AccountSearchItem
 		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
@@ -155,7 +149,7 @@ func (r *PgWalletRepo) SearchAccountsFull(ctx context.Context, query string, lim
 		return nil, mapErrIfPg(err)
 	}
 	defer rows.Close()
-	out := make([]domain.AccountSearchItem, 0, min(limit, domain.MaxAccountSearchSize))
+	out := make([]domain.AccountSearchItem, 0, domain.DefaultAccountSearchSize)
 	for rows.Next() {
 		var it domain.AccountSearchItem
 		if err := rows.Scan(&it.AcctNo, &it.ClientNo, &it.Name); err != nil {
@@ -203,7 +197,7 @@ func (r *PgWalletRepo) ListTransactions(ctx context.Context, q domain.TxListQuer
 	}
 	defer rows.Close()
 
-	out := make([]domain.TxEntry, 0, safeLimit)
+	out := make([]domain.TxEntry, 0, domain.DefaultTxPageSize)
 	for rows.Next() {
 		var e domain.TxEntry
 		if err := rows.Scan(

@@ -130,7 +130,9 @@ func (r *PgWalletRepo) ListManualJE(ctx context.Context, q domain.ManualJEListQu
 	}
 	defer rows.Close()
 
-	out := make([]domain.ManualJEView, 0, limit)
+	// Constant capacity hint: keep the user-influenced limit out of make()
+	// (CodeQL go/uncontrolled-allocation-size); append grows past it if needed.
+	out := make([]domain.ManualJEView, 0, domain.DefaultManualJEPageSize)
 	for rows.Next() {
 		v, err := scanManualJEHeader(rows)
 		if err != nil {

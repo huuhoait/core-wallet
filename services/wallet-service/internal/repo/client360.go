@@ -256,7 +256,9 @@ func (r *PgWalletRepo) ListClientsFull(ctx context.Context, q domain.ClientListQ
 		 LIMIT $1
 	`
 	// Decrypts phone/email → per-TX DEK (readWithDEK) so pgp_sym_decrypt sees it.
-	out := make([]domain.ClientFullView, 0, limit)
+	// Constant capacity hint: keep the user-influenced limit out of make()
+	// (CodeQL go/uncontrolled-allocation-size); append grows past it if needed.
+	out := make([]domain.ClientFullView, 0, domain.DefaultClientPageSize)
 	err := r.readWithDEK(ctx, r.piiPool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, sql, limit, q.AfterNo, q.Status, q.ClientType)
 		if err != nil {

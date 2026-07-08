@@ -242,15 +242,9 @@ func (r *PgWalletRepo) ListClients(ctx context.Context, q domain.ClientListQuery
 	}
 	defer rows.Close()
 
-	capHint := q.Limit
-	if capHint <= 0 {
-		capHint = domain.DefaultClientPageSize
-	}
-	if capHint > domain.MaxClientPageSize {
-		capHint = domain.MaxClientPageSize
-	}
-
-	out := make([]domain.ClientView, 0, capHint)
+	// Constant capacity hint: keep the user-influenced limit out of make()
+	// (CodeQL go/uncontrolled-allocation-size); append grows past it if needed.
+	out := make([]domain.ClientView, 0, domain.DefaultClientPageSize)
 	for rows.Next() {
 		var c domain.ClientView
 		if err := rows.Scan(
